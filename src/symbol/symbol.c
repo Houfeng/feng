@@ -43,6 +43,109 @@ bool feng_symbol_internal_slice_equals(FengSlice lhs, FengSlice rhs) {
            (lhs.length == 0U || memcmp(lhs.data, rhs.data, lhs.length) == 0);
 }
 
+/* Expose a nominal type's canonical name without copying its segments. */
+static char *const *type_name_segments(const FengSymbolTypeView *type, size_t *count) {
+    *count = 0U;
+    if (type->kind == FENG_SYMBOL_TYPE_KIND_NAMED) {
+        *count = type->as.named.segment_count;
+        return type->as.named.segments;
+    }
+    if (type->kind == FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC) {
+        *count = type->as.named_generic.segment_count;
+        return type->as.named_generic.segments;
+    }
+    return NULL;
+}
+
+/* Local references use identity; external references retain a qualified name. */
+static bool named_instance_matches_decl(const FengSymbolTypeView *instance,
+                                       const FengSymbolDeclView *decl,
+                                       const char *module_name) {
+    size_t count;
+    char *const *segments = type_name_segments(instance, &count);
+    size_t argument_count = instance->kind == FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC
+        ? instance->as.named_generic.type_arg_count : 0U;
+    if (segments == NULL || argument_count != decl->type_param_count) return false;
+    if (instance->target_decl != NULL) return instance->target_decl == decl;
+    if (count < 2U || decl->name == NULL || module_name == NULL ||
+        strcmp(segments[count - 1U], decl->name) != 0) return false;
+    const char *cursor = module_name;
+    for (size_t i = 0U; i + 1U < count; ++i) {
+        size_t length = strlen(segments[i]);
+        if (strncmp(cursor, segments[i], length) != 0) return false;
+        cursor += length;
+        if (i + 2U < count && *cursor++ != '.') return false;
+    }
+    return *cursor == '\0';
+}
+
+/* Match a declaration's fit target, with its already validated parameter slots.
+ * Arrays are flattened in Symbol, so a parameter may bind the remaining rank. */
+static bool type_instance_matches_pattern(const FengSymbolTypeView *instance,
+                                         const FengSymbolTypeView *pattern) {
+    if (instance == NULL || pattern == NULL) return false;
+    if (pattern->kind == FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF) return true;
+    if (instance->kind != pattern->kind) return false;
+    switch (pattern->kind) {
+        case FENG_SYMBOL_TYPE_KIND_NAMED:
+        case FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC: {
+            size_t count, pattern_count;
+            char *const *segments = type_name_segments(instance, &count);
+            char *const *pattern_segments = type_name_segments(pattern, &pattern_count);
+            if (instance->target_decl != NULL && pattern->target_decl != NULL) {
+                if (instance->target_decl != pattern->target_decl) return false;
+            } else {
+                if (count == 0U || count != pattern_count) return false;
+                for (size_t i = 0U; i < count; ++i) {
+                    if (strcmp(segments[i], pattern_segments[i]) != 0) return false;
+                }
+            }
+            if (pattern->kind == FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC) {
+                if (instance->as.named_generic.type_arg_count != pattern->as.named_generic.type_arg_count) return false;
+                for (size_t i = 0U; i < pattern->as.named_generic.type_arg_count; ++i) {
+                    if (!type_instance_matches_pattern(instance->as.named_generic.type_args[i],
+                                                       pattern->as.named_generic.type_args[i])) return false;
+                }
+            }
+            return true;
+        }
+        case FENG_SYMBOL_TYPE_KIND_ARRAY: {
+            size_t rank = pattern->as.array.rank;
+            if (rank == 0U || instance->as.array.rank < rank) return false;
+            for (size_t i = 0U; i < rank; ++i) {
+                if (instance->as.array.layer_writable[i] != pattern->as.array.layer_writable[i]) return false;
+            }
+            if (instance->as.array.rank == rank) {
+                return type_instance_matches_pattern(instance->as.array.element, pattern->as.array.element);
+            }
+            FengSymbolTypeView remaining = *instance;
+            remaining.as.array.rank -= rank;
+            remaining.as.array.layer_writable += rank;
+            return type_instance_matches_pattern(&remaining, pattern->as.array.element);
+        }
+        case FENG_SYMBOL_TYPE_KIND_POINTER:
+            return type_instance_matches_pattern(instance->as.pointer.inner, pattern->as.pointer.inner);
+        case FENG_SYMBOL_TYPE_KIND_BUILTIN:
+            return instance->as.builtin.name != NULL && pattern->as.builtin.name != NULL &&
+                strcmp(instance->as.builtin.name, pattern->as.builtin.name) == 0;
+        default:
+            return false;
+    }
+}
+
+/* Reader and importer share the same owner check after resolving the member. */
+bool feng_symbol_internal_member_owner_matches(const FengSymbolDeclView *member,
+                                               const FengSymbolTypeView *instance,
+                                               const char *module_name) {
+    if (member == NULL || member->owner == NULL || instance == NULL) return false;
+    const FengSymbolDeclView *owner = member->owner;
+    if (owner->kind == FENG_SYMBOL_DECL_KIND_TYPE || owner->kind == FENG_SYMBOL_DECL_KIND_SPEC) {
+        return named_instance_matches_decl(instance, owner, module_name);
+    }
+    return owner->kind == FENG_SYMBOL_DECL_KIND_FIT &&
+        type_instance_matches_pattern(instance, owner->fit_target);
+}
+
 void feng_symbol_error_free(FengSymbolError *error) {
     if (error == NULL) {
         return;
@@ -202,6 +305,15 @@ static void decl_dispose(FengSymbolDeclView *decl, bool free_self) {
         feng_symbol_internal_type_free(decl->declared_specs[index]);
     }
     free(decl->declared_specs);
+    for (index = 0U; index < decl->friend_type_count; ++index) {
+        feng_symbol_internal_type_free(decl->friend_types[index]);
+    }
+    free(decl->friend_types);
+    for (index = 0U; index < decl->friend_fit_access_count; ++index) {
+        free(decl->friend_fit_accesses[index].target_module_name);
+        feng_symbol_internal_type_free(decl->friend_fit_accesses[index].owner_instance_type);
+    }
+    free(decl->friend_fit_accesses);
 
     for (index = 0U; index < decl->union_member_count; ++index) {
         feng_symbol_internal_type_free(decl->union_members[index]);
@@ -510,6 +622,14 @@ static void remap_decl_type_targets(FengSymbolDeclView *decl,
     remap_type_target(decl->value_type, pairs, pair_count);
     remap_type_target(decl->return_type, pairs, pair_count);
     remap_type_target(decl->fit_target, pairs, pair_count);
+    for (index = 0U; index < decl->friend_fit_access_count; ++index) {
+        FengSymbolMemberUseView *use = &decl->friend_fit_accesses[index];
+        remap_type_target(use->owner_instance_type, pairs, pair_count);
+        if (use->local_target_decl != NULL) use->local_target_decl = find_decl_clone(pairs, pair_count, use->local_target_decl);
+    }
+    for (index = 0U; index < decl->friend_type_count; ++index) {
+        remap_type_target(decl->friend_types[index], pairs, pair_count);
+    }
     for (index = 0U; index < decl->param_count; ++index) {
         remap_type_target(decl->params[index].type, pairs, pair_count);
     }
@@ -607,6 +727,10 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
     clone->fit_target = feng_symbol_internal_type_clone(decl->fit_target, out_error);
     clone->params = NULL;
     clone->declared_specs = NULL;
+    clone->friend_types = NULL;
+    clone->friend_type_count = 0U;
+    clone->friend_fit_accesses = NULL;
+    clone->friend_fit_access_count = 0U;
     clone->union_members = NULL;
     clone->intersection_members = NULL;
     clone->members = NULL;
@@ -674,6 +798,49 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
             clone->declared_specs[index] = feng_symbol_internal_type_clone(decl->declared_specs[index],
                                                                            out_error);
             if (decl->declared_specs[index] != NULL && clone->declared_specs[index] == NULL) {
+                decl_dispose(clone, true);
+                return NULL;
+            }
+        }
+    }
+
+    if (decl->friend_fit_access_count > 0U) {
+        clone->friend_fit_accesses = calloc(decl->friend_fit_access_count, sizeof(*clone->friend_fit_accesses));
+        if (clone->friend_fit_accesses == NULL) {
+            feng_symbol_internal_set_error(out_error, decl->path, decl->token, "out of memory cloning member uses");
+            decl_dispose(clone, true);
+            return NULL;
+        }
+        clone->friend_fit_access_count = decl->friend_fit_access_count;
+        for (index = 0U; index < decl->friend_fit_access_count; ++index) {
+            const FengSymbolMemberUseView *source = &decl->friend_fit_accesses[index];
+            FengSymbolMemberUseView *target = &clone->friend_fit_accesses[index];
+            *target = *source;
+            target->target_module_name = feng_symbol_internal_dup_cstr(source->target_module_name);
+            target->owner_instance_type = feng_symbol_internal_type_clone(source->owner_instance_type, out_error);
+            if (target->target_module_name == NULL || target->owner_instance_type == NULL) {
+                decl_dispose(clone, true);
+                return NULL;
+            }
+        }
+    }
+    /* Friend declaration types own independent clones. */
+    if (decl->friend_type_count > 0U) {
+        FengSymbolTypeView *const *source = decl->friend_types;
+        size_t count = decl->friend_type_count;
+        FengSymbolTypeView ***target = &clone->friend_types;
+        size_t *target_count = &clone->friend_type_count;
+        *target = calloc(count, sizeof(**target));
+        if (*target == NULL) {
+            feng_symbol_internal_set_error(out_error, decl->path, decl->token,
+                                           "out of memory cloning compile-time type facts");
+            decl_dispose(clone, true);
+            return NULL;
+        }
+        *target_count = count;
+        for (index = 0U; index < count; ++index) {
+            (*target)[index] = feng_symbol_internal_type_clone(source[index], out_error);
+            if ((*target)[index] == NULL) {
                 decl_dispose(clone, true);
                 return NULL;
             }
@@ -1125,6 +1292,14 @@ void feng_symbol_internal_module_free(FengSymbolModuleGraph *module) {
     free(module);
 }
 
+/* Package identity is compiler metadata shared by independently owned modules. */
+void feng_symbol_internal_package_identity_release(FengSymbolPackageIdentity *identity) {
+    if (identity != NULL && --identity->reference_count == 0U) {
+        free(identity->source_key);
+        free(identity);
+    }
+}
+
 void feng_symbol_internal_imported_module_free(FengSymbolImportedModule *module) {
     if (module == NULL) {
         return;
@@ -1135,6 +1310,8 @@ void feng_symbol_internal_imported_module_free(FengSymbolImportedModule *module)
     module->fit_count = 0U;
     free(module->source_path);
     module->source_path = NULL;
+    feng_symbol_internal_package_identity_release(module->package_identity);
+    module->package_identity = NULL;
     feng_symbol_internal_module_free(module->module);
     module->module = NULL;
     module->profile = FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC;

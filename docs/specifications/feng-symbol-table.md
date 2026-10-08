@@ -66,7 +66,7 @@ build/
 
 规则:
 
-- 在一个目标平台的开发构建根内,一个公开模块恰好对应一个 `.ft` 文件；`.fb` 内仍只保留多平台校验后的一份。
+- 在一个目标平台的开发构建根内，每个公开模块及必要私有依赖所属模块各对应一个 `.ft` 文件；私有依赖的收录范围见 §5.1.1，`.fb` 内仍只保留多平台校验后的一份。
 - 项目级 `feng build` 将 `build/<platform>` 作为该平台直编的 `--out`,因此开发态路径为 `build/<platform>/mod/mylib/api.ft`；核心直编只按自身收到的 `<out>/mod/mylib/api.ft` 输出,不自行拼接平台目录。
 - `pack` 校验各目标平台 `build/<platform>/mod/**/*.ft` 的模块集合与公开语义事实等价后,从其中提取一套写入 `.fb` 的 `mod/` 目录,不重新建模、不重新序列化。
 
@@ -187,7 +187,7 @@ unknown、抛出类型、其并集及条件组成，不能用未求解的调用�
 
 1. 解析 `.ff` 源文件,完成语义分析。
 2. 编译驱动把语义结果交给 `src/symbol/`,以“模块”为单位收敛可导出声明与本地声明,生成内存中的模块符号图。
-3. `src/symbol/` 对每个公开模块输出 `build/<platform>/mod/<module>.ft`。
+3. `src/symbol/` 按 §5.1.1 的收录闭包，对公开模块及必要私有依赖所属模块输出 `build/<platform>/mod/<module>.ft`。
 4. `src/symbol/` 对当前项目内模块输出 `build/<platform>/obj/symbols/<module>.ft`。
 5. `pack` 校验各目标平台公开 `.ft` 候选的模块集合与公开语义事实等价后,提取一套与分平台库文件生成 `.fb`。
 
@@ -222,7 +222,9 @@ Provider 的第一版实现可以在注册 `.fb` 时预加载其中的公开 `.f
 - **导出决策**由技术需要驱动: 链接、对象布局、ABI 元信息等场景都可能要求非公开声明进入 `.ft`。例如非公开 `type` 字段需要为跨包泛型实例化提供布局信息,非公开 `@abi extern func` 需要为链接器提供符号事实。
 - **可见性控制**由语义属性驱动: `.ft` 中每条符号记录都携带完整的可见性标志（`SYMS.flags` 中的 `public` 位）,核心编译器在跨模块名称解析与类型检查时严格按此标志执行访问控制。
 
-一条声明进入 `.ft` 不意味着它对 consumer 可见。consumer 编译器读取 `.ft` 后,仍然只能通过可见性检查访问标记为公开的声明; 非公开声明虽然存在于 `.ft` 中,但仅供链接器、运行时布局等底层机制使用,不会在 consumer 的语义分析中变成可访问成员或可引用符号。
+一条声明进入 `.ft` 不意味着它对 consumer 公开。consumer 编译器读取 `.ft` 后，
+仍按普通可见性或主规范定义的受限授权检查访问；非公开声明保留原可见性，不能
+仅因进入导出闭包而成为普通可访问成员或可引用符号。
 
 ### 5.1 公开包表 `.ft` 必须包含的事实
 
@@ -236,6 +238,9 @@ Provider 的第一版实现可以在注册 `.fb` 时预加载其中的公开 `.f
 - 公开顶层 `func`。
 - 公开模块级 `let` / `var`。
 - 公开成员字段与成员方法。
+- 已导出 owner 上具有 friend 授权的 seal 成员，及其 friend 类型、开放检查依赖
+  和必要签名依赖；授权语义遵循[可见性规范](./feng-visibility.md)，编码见本文
+  `FT_ATTR_FRIEND_TYPE`、`FT_ATTR_FRIEND_FIT_ACCESS` 及既有 reifiable 类型／callable 依赖。
 - 已按现有公开导出规则收录的 type 或 fit 所拥有的
   `seal + static + is_mixable` 方法，以及目标生成的同类静态 wrapper；它们作为
   [Feng 语言函数规范](./feng-function.md#436-跨包声明与链接) 定义的受限 mix 能力
@@ -266,6 +271,8 @@ package-public `.ft` 在公开声明集合上计算最小私有表示依赖闭�
 
 - 已收录 `type` 的全部字段类型,不区分字段可见性、静态与否及字段类型是否泛型。
 - 已收录 `type`、函数和 `fit` 的 reifiable 依赖。
+- 已收录成员的 friend 类型表达式、签名及编译期检查依赖；具体属性编码见本文
+  `FT_ATTR_FRIEND_TYPE`、`FT_ATTR_FRIEND_FIT_ACCESS` 及既有 reifiable 类型／callable 依赖。
 
 公开共享泛型声明中的 target-typed callable value 形成也属于 reifiable callable
 依赖。`T: ObjectSpec` 或 `T: IntersectionSpec` 的实例方法值必须在既有 callable
@@ -291,7 +298,7 @@ section、记录布局、字段、枚举数值和格式版本；旧 reader 可�
 闭包按以下规则递归:
 
 - 泛型实参、数组元素和指针目标继续参与遍历。
-- 具名目标是当前模块的 `type`、`enum` 或 `spec` 时,收录其声明骨架,不区分可见性和是否泛型。
+- 具名目标是当前包的 `type`、`enum` 或 `spec` 时，收录其声明骨架，不区分模块、可见性和是否泛型。
 - `type` 骨架包含类型参数及约束、Tuple / `@value` 标记、父 `spec`、全部字段和 reifiable 依赖。
 - `enum` 骨架包含全部枚举项及其值。
 - `spec` 骨架包含类型参数及约束、父 `spec`、form 及该 form 的成员类型或 callable 签名。
@@ -299,11 +306,22 @@ section、记录布局、字段、枚举数值和格式版本；旧 reader 可�
 
 函数体和初始化器不在闭包阶段重新遍历; 仅由其引用且未形成 reifiable 依赖的私有声明不收录。内建类型、类型参数、数组和指针节点本身不生成顶层声明。无关私有声明不收录。
 
+闭包跨同包模块递归，先确定完整收录集合，再按原所属模块写入 `.ft`。必要依赖位于
+`seal module` 时，只收录该模块的声明骨架和被需要的声明，不将该模块的其他 `open`
+声明自动作为导出根。类型与模块均保留原可见性；不需要的私有模块不输出。外部依赖包
+的类型仍引用其原制品，不复制进当前包，也不改变现有 `.ft` 结构或格式版本。
+
+Provider 按注册的包制品或符号根保留模块的共同来源身份，经通用语义模块接口传递给
+可见性检查。来源类别 `LOCAL` / `IMPORTED_PACKAGE` 不代表包身份。编译器内部可按身份
+恢复必要私有依赖，普通源码导入、名称查询和 LSP 公开候选仍遵守模块及声明可见性。
+必要类型身份恢复失败必须报告制品依赖不完整，不能将其作为已经通过的检查。
+
 收录的私有声明必须保留私有标记。读取器和 imported-module cache 可以按声明身份供编译器
 内部使用，但普通用户名称查询、`use` 和无授权补全不得返回这些声明；仅
 [Feng 语言函数规范](./feng-function.md#435-mixable-seal-的直接-mix-授权) 和
 [Feng 语言类型规范](./feng-type.md#4221-mixable-seal-实例字段) 明确定义的直接 mix
-授权查询可以选择对应的 seal mix 能力；另外，已声明名义关系的
+授权查询可以选择对应的 seal mix 能力；friend 成员访问按
+[可见性规范](./feng-visibility.md) 的授权查询执行。另外，已声明名义关系的
 witness materialization 可以选择该关系声明期已选中的 seal 实现
 依赖。后者不是普通成员查询，也不得用于为外包自定义 spec/fit
 重新建立结构满足。
@@ -314,7 +332,8 @@ witness materialization 可以选择该关系声明期已选中的 seal 实现
 选中的 seal 实现方法才作为编译器 ABI 依赖收录。普通 seal
 方法、seal 实例方法和 `seal + static + !is_mixable` 方法不因 mix 能力
 或无关 spec 关系进入 package-public 方法骨架；这里的“普通
-seal 方法”只指具体 `type`/`fit` 实现方法，不包括已导出 spec
+seal 方法”只指未通过 friend 或其他明确受限接口规则收录的具体 `type`/`fit`
+实现方法，不包括已导出 spec
 必须保留的完整 requirement 骨架。私有表示依赖闭包也
 不得据此扩大它们的用户可查询范围。
 
@@ -652,6 +671,12 @@ consumer 的 `.ft`／`.fb` 与缓存，不提供旧编译器消费新约束制�
 
 #### 6.3.5 `ATRS` 扩展属性节
 
+泛型与跨包 friend 阶段继续使用 2.0，不修改 Header、section 目录和既有记录布局，
+不增加 section。注解类型及开放类型使用统一采用既有 reifiable 依赖；本节属性保存授权
+及实际 fit 访问事实。语言尚未公开发布，
+不提供旧制品兼容、迁移或桥接；更新编译器后统一重编 provider、consumer 的
+`.ft`、`.fb`、配套库与缓存，不以仅替换符号文件的方式复用旧库。
+
 为尽量避免“出现一个新注解或新修饰就改 core 记录布局”,v1 预留 `FT_SEC_ATTRS` 作为统一扩展槽。
 
 `ATRS` 的用途:
@@ -687,6 +712,8 @@ attr key 常量建议如下:
 | `FT_ATTR_ENUM_ITEM_VALUE` | `0x0004` | `enum_item` | 归一化后的枚举项底层值；`value0` = 按二补码解释的 `int32` 原始位模式 |
 | `FT_ATTR_STATIC_MEMBER` | `0x0005` | `field` / `method` | `type` 静态成员标记 |
 | `FT_ATTR_BUILTIN_CONSTRAINT` | `0x0010` | `type_param` | 独立内建约束；`value0 = 1` 表示 `throw`，`reserved0`、`value1`、`value2` 为零 |
+| `FT_ATTR_FRIEND_TYPE` | `0x0011` | `seal field` / `seal method` | 一项 friend 类型表达式；`value0 = TYPS.id`，其余字段为零 |
+| `FT_ATTR_FRIEND_FIT_ACCESS` | `0x0013` | fit 的 `method` | 一项实际 friend fit 访问事实；`value0 = owner 实例 TYPS.id`，`value1 = 被访问成员的模块内符号 id`，`value2 = 被访问成员 module 名 STRS.id` |
 
 补充规则:
 
@@ -696,6 +723,27 @@ attr key 常量建议如下:
 - `FT_ATTR_STATIC_MEMBER` 只出现在 `type` 的静态字段或静态方法符号上,表示 consumer 恢复成员时必须设置 `static` 语义。
 - 类型参数声明、类型参数引用、泛型类型实参与泛型 callable 骨架通过 `SYMS` / `TYPS` / `TSEQ` 表达。`FT_ATTR_BUILTIN_CONSTRAINT` 仅补充内建约束事实，不创建伪类型或伪 spec。
 - 内建约束属性每个 `type_param` 至多一条，且该符号的 `type_ref` 必须为 `0`；reader 必须拒绝重复属性、未知内建约束值、错误 owner、与 spec 约束并存及非零保留字段。两个 profile 都必须保存并恢复相同约束种类；语言准入及转传语义引用[泛型主规范 §4.3](./feng-generics-draft.md#43-内建-throw-约束)。无约束与既有 spec 约束的编码不变。
+- friend 属性保留声明级类型表达式及绑定，根为具体 type 引用、泛型 type 实例或
+  owner 的类型级参数引用；不能绑定成员自己的方法级泛参。多个属性构成去重集合。
+  reader 必须检查成员归属、类型引用、参数作用域及零保留字段，不能将缺失事实视为授权。
+- 注解参数、约束、声明 spec、签名及函数体中的开放类型使用统一保存为既有
+  aggregate／managed reifiable 依赖，不另存仅检查的类型列表；使用 `TYPS` / `TSEQ`
+  保存嵌套实参及 `TYPE_PARAM_REF` 绑定。调用转传沿既有 callable 依赖恢复。
+  类型依赖 reader 统一校验声明／方法 owner、有效类型引用、参数作用域及零保留字段，
+  不因合并存储而丢失原检查类型属性的校验。
+- 原本轮中间制品的 `0x0012` 仅检查类型属性退役并保留编号；新 writer 不再写出，
+  reader 遇到该属性必须拒绝并要求重建，不能静默忽略而丢失条件。
+- fit 访问事实从 Semantic 的单一 `fit_accesses` 记录导出，导入恢复到同一记录；
+  只保存实际选中成员的访问，不能扩大到未访问成员。检查上下文始终
+  是持有该条件的 fit 方法声明 module。成员按模块名与稳定符号 id 恢复；读取及
+  导入时拒绝不存在的成员、非 friend 成员、错误 owner、错误参数绑定和非零保留位。
+  owner 实例必须对应被访问成员的声明 owner，并包含完整的类型实参；fit 成员
+  按其声明的目标类型验证实例绑定。本地引用在读取时检查，外部引用在恢复 provider
+  后执行同一校验。
+- 两个 profile 均保留上述事实。package-public 对既有可导出 owner 收录 friend
+  seal 成员、签名、泛参与必要的类型和调用依赖闭包；私有依赖仅用于身份、布局、
+  检查及代码生成，不授予普通名称访问权。私有依赖的声明骨架也必须保留承载声明
+  检查条件的 friend 成员。导入恢复与缓存比较必须保留相同事实。
 
 #### 6.3.6 `UNION_PROJECTIONS` 开放投影依赖
 

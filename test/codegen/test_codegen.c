@@ -43,6 +43,13 @@ void test_valid_program_codegen(void (*compile_c)(const char *));
 void test_generic_container_static_codegen(void (*compile_c)(const char *));
 /* Shared generic bodies dispatch through the constrained sibling slot. */
 void test_generic_sibling_constraint_codegen(void (*compile_c)(const char *));
+/* Generic friend authorization is compile-time-only across package surfaces. */
+void test_friend_generic_codegen(void (*compile_c)(const char *));
+void test_friend_shared_constructor_prototypes(void (*compile_c)(const char *));
+/* Private-module dependencies use the ordinary descriptor ABI. */
+void test_friend_private_codegen(void (*compile_c)(const char *));
+/* Compile-time authorization never adds or removes actual shared-body slots. */
+void test_friend_dependency_slots(void (*compile_c)(const char *));
 /* Run the same complete static scenario for each array owner form. */
 void test_array_static_parity_codegen(void (*compile_c)(const char *));
 /* Constructed generic actuals use static records across every shared entrance. */
@@ -17497,6 +17504,10 @@ int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
     test_generic_sibling_constraint_codegen(compile_generated_c_or_die);
+    test_friend_generic_codegen(compile_generated_c_or_die);
+    test_friend_shared_constructor_prototypes(compile_generated_c_or_die);
+    test_friend_private_codegen(compile_generated_c_or_die);
+    test_friend_dependency_slots(compile_generated_c_or_die);
     test_defer_generic_context_codegen(compile_generated_c_or_die);
     test_nested_exception_codegen(compile_generated_c_or_die);
     test_native_exception_codegen(compile_generated_c_or_die);

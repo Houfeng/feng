@@ -276,6 +276,7 @@ callable 仍有类型参数没有实参、receiver 或目标类型推导来源�
 | AE0904 | 模块别名成员访问语法约束 | AE0169 | module alias '%.*s' must be accessed as '%.*s.name' |
 | AE0902 | import 声明解析约束 | AE0221 | duplicate import alias '%.*s' in the same file |
 | AE0902 | import 声明解析约束 | AE0222 | import target module '%s' was not found in current compilation input |
+| AE0902 | import 声明解析约束 | (新增) | import target module '%s' is not accessible from the current module |
 | AE0906 | 本文件 import alias 与顶层声明重名（急切检查，现用） | AE0157（历史用途：模块符号唯一性） | name '%.*s' is already defined in this file, conflicts with import alias from module '%s' |
 | AE0907 | bin 入口唯一性约束 | AE0225 | duplicate 'main' entry: target 'bin' requires exactly one 'main(args: string[])' across all programs |
 | AE0908 | bin 入口存在性约束 | AE0226 | target 'bin' requires a 'main(args: string[])' entry function but none was found |
@@ -389,9 +390,10 @@ callable 仍有类型参数没有实参、receiver 或目标类型推导来源�
 | AE1333 | @mixable 首参数 object-form spec 约束 | (新增) | @mixable static method '%.*s' first parameter must use an object-form spec |
 | AE1334 | @mixable 来源类型名义声明 spec 约束 | (新增) | type '%.*s' must nominally declare spec '%.*s' before declaring @mixable static method '%.*s' |
 | AE1335 | @mixable 目标类型名义声明 spec 约束 | (新增) | type '%.*s' must nominally declare spec '%.*s' before mixing @mixable static method '%.*s' |
-| AE1336 | @friend 参数约束 | (新增) | @friend annotation requires at least one concrete friend type / @friend argument must resolve to a concrete type |
+| AE1336 | @friend 参数约束（声明或具化点） | (新增) | @friend annotation requires at least one friend type / @friend argument must resolve to a concrete type or an owner type parameter / instantiated @friend argument '%s' must resolve to a concrete type |
 | AE1337 | @friend 适用目标约束 | (新增) | @friend can only be applied to explicitly seal fields or ordinary methods declared in a type, object-form spec, or fit block / constructors and finalizers cannot use @friend |
-| AE1338 | @friend 签名可见性约束 | (新增) | member '%.*s' exposes type '%s' that is not accessible to friend type '%s' / @friend member '%.*s' exposes type '%s' that is not accessible from fit module '%s' |
+| AE1338 | @friend 签名可见性约束 | (新增) | member '%.*s' exposes type '%s' that is not accessible to friend type '%s' / @friend member '%.*s' exposes type '%s' that is not accessible from fit module '%s' / instantiated @friend member '%.*s' exposes type '%.*s' that is not accessible in the authorized context |
+| AE1338 | @friend 必要签名依赖不完整 | (新增) | instantiated @friend signature type '%s' cannot be resolved from package metadata |
 
 ## 14 异常处理段
 

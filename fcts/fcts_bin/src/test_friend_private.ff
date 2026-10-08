@@ -1,0 +1,33 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.friend_private;
+import fcts_lib_middle.friend_private;
+
+/** A foreign fit may consume the grant through a signature visible to that fit. */
+fit StoredFriendReader<T> {
+  /** Access only the selected method's public signature. */
+  func storedFriendRead(vault: StoredFriendVault<StoredFriendReader<T>, T>): T {
+    return vault.read();
+  }
+}
+
+/** Verify private value layout, managed lifetime and lexical authorization contexts. */
+open func test_friend_private() {
+  describe("friend private package dependencies", () {
+    test("provider friend and foreign fit share the original grant", () {
+      let reader = StoredFriendReader<int>();
+      let vault = StoredFriendVault<StoredFriendReader<int>, int>(47);
+      assert(reader.read(vault) == 47, "provider consumes its private representation");
+      assert(reader.storedFriendRead(vault) == 47, "foreign fit consumes the visible method signature");
+      assert(storedFriendRelay<int>(53) == 53, "three-package generic instantiation");
+    });
+    test("private generic value layout retains managed payloads", () {
+      let reader = StoredFriendReader<string>();
+      let vault = StoredFriendVault<StoredFriendReader<string>, string>("retained");
+      assert(reader.read(vault) == "retained", "private generic value field");
+      assert(reader.storedFriendRead(vault) == "retained", "authorized foreign method call");
+      assert(storedFriendRelay<string>("forwarded") == "forwarded", "managed return through the middle package");
+    });
+  });
+}

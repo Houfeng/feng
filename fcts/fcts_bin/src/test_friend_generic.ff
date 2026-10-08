@@ -1,0 +1,80 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.friend_generic;
+import fcts_lib_middle.friend_generic;
+
+/** A third package fit consumes exactly the target type's friend identity. */
+fit PackageFriendReader<T> {
+  /** Write through the third package's target friend identity. */
+  func friendReplace(vault: GenericFriendVault<PackageFriendReader<T>, T>, value: T): T {
+    vault.value = value;
+    return vault.read();
+  }
+
+  /** Form a static callable while retaining the generic owner binding. */
+  static func friendStatic(): int {
+    let method: FriendGetter<int> = GenericFriendVault<PackageFriendReader<T>, T>.staticRead;
+    return method();
+  }
+
+  /** Observe the same static instance from a separately compiled fit. */
+  static func friendMarker(): int {
+    return GenericFriendVault<PackageFriendReader<T>, T>.marker;
+  }
+}
+
+/** A nongeneric consumer type is also a legal final friend root. */
+type LocalFriendReader {
+  /** Read storage granted to this nongeneric identity. */
+  func read(vault: GenericFriendVault<LocalFriendReader, int>): int { return vault.value; }
+
+  /** Keep the friend argument distinct when the payload type is the same. */
+  static func setMarker(value: int) { GenericFriendVault<LocalFriendReader, int>.marker = value; }
+
+  /** Read static storage under this exact owner binding. */
+  static func marker(): int { return GenericFriendVault<LocalFriendReader, int>.marker; }
+}
+
+/** Verify observable values after three-package generic specialization. */
+open func test_friend_generic() {
+  describe("generic friend across packages", () {
+    test("fields methods static storage and method values", () {
+      let reader = PackageFriendReader<int>();
+      let vault = GenericFriendVault<PackageFriendReader<int>, int>(23);
+      assert(reader.read(vault) == 23, "second package shared reader");
+      assert(reader.friendReplace(vault, 29) == 29, "third package fit identity");
+      assert(PackageFriendReader<int>.marker() == 30, "authorized static storage and method");
+      assert(PackageFriendReader<int>.friendStatic() == 17, "static method value");
+    });
+    test("managed values and spec witness", () {
+      let reader = PackageFriendReader<string>();
+      let vault = GenericFriendVault<PackageFriendReader<string>, string>("first");
+      assert(reader.read(vault) == "first", "generic managed return");
+      assert(reader.friendReplace(vault, "second") == "second", "generic managed mutation");
+      let surface: GenericFriendSurface<PackageFriendReader<string>> =
+        GenericFriendSurfaceValue<PackageFriendReader<string>>();
+      assert(reader.surface(surface) == 19, "friend does not replace witness dispatch");
+      genericFriendRelay<PackageFriendReader<string>, string>("condition");
+    });
+    test("direct final friend type", () {
+      let vault = GenericFriendVault<LocalFriendReader, int>(31);
+      assert(LocalFriendReader().read(vault) == 31, "direct consumer identity");
+    });
+    test("static state follows all generic owner arguments", () {
+      PackageFriendReader<int>.setMarker(41);
+      PackageFriendReader<string>.setMarker(73);
+      LocalFriendReader.setMarker(97);
+      assert(PackageFriendReader<int>.marker() == 58 &&
+             PackageFriendReader<int>.friendMarker() == 41,
+             "middle package and third package fit share the int instance");
+      assert(PackageFriendReader<string>.marker() == 90 &&
+             PackageFriendReader<string>.friendMarker() == 73,
+             "payload type isolates static state");
+      assert(LocalFriendReader.marker() == 97, "friend argument isolates static state");
+      PackageFriendReader<int>.setMarker(13);
+      PackageFriendReader<string>.setMarker(13);
+      LocalFriendReader.setMarker(13);
+    });
+  });
+}

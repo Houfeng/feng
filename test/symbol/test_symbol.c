@@ -950,10 +950,8 @@ static void test_imported_object_spec_seal_access_semantics(void) {
     free(tmp_dir);
 }
 
-/* @friend is compile-time package-local metadata: FT retains the underlying
- * spec seal member but neither its synthesized AST nor a consumer fit can
- * recover the friend authorization. */
-static void test_friend_metadata_is_not_exported_to_ft(void) {
+/* Restricted friend metadata survives FT and authorizes matching external fits. */
+static void test_friend_metadata_is_exported_to_ft(void) {
     static const char *kExternalSource =
         "open module vendor.friend_surface;\n"
         "open type Helper {}\n"
@@ -1013,21 +1011,20 @@ static void test_friend_metadata_is_not_exported_to_ft(void) {
     }
     ASSERT(secret_decl != NULL);
     ASSERT(secret_decl->as.spec_decl.as.object.member_count == 1U);
-    ASSERT(secret_decl->as.spec_decl.as.object.members[0]->annotation_count == 0U);
+    ASSERT(secret_decl->as.spec_decl.as.object.members[0]->annotation_count == 1U);
 
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
     options.pointer_size = feng_get_host_pointer_size();
     consumer = parse_or_die("friend_consumer.ff", kConsumerSource);
     programs[0] = consumer;
-    ASSERT(!feng_semantic_analyze_with_options(programs,
+    ASSERT(feng_semantic_analyze_with_options(programs,
                                                1U,
                                                &options,
                                                &analysis,
                                                &errors,
                                                &error_count));
-    ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].code, "AE0708") == 0);
+    ASSERT(error_count == 0U);
 
     feng_semantic_errors_free(errors, error_count);
     feng_semantic_analysis_free(analysis);
@@ -5959,6 +5956,16 @@ void test_exception_effects_ft(void);
 void test_defer_exception_effects_ft(void);
 
 int main(void) {
+    extern void test_validation_dependencies_ft(void);
+    test_validation_dependencies_ft();
+    extern void test_friend_signature_owner_ft(void);
+    test_friend_signature_owner_ft();
+    extern void test_friend_review_conditions_ft(void);
+    test_friend_review_conditions_ft();
+    extern void test_friend_generic_ft(void);
+    test_friend_generic_ft();
+    extern void test_friend_private_dependencies(void);
+    test_friend_private_dependencies();
     test_defer_exception_effects_ft();
     test_exception_effects_ft();
     (void)system("rm -rf temp");
@@ -5982,7 +5989,7 @@ int main(void) {
     test_package_selection_uses_existing_graph();
     test_selected_seal_static_fields_remain_seal_in_package_ft();
     test_imported_object_spec_seal_access_semantics();
-    test_friend_metadata_is_not_exported_to_ft();
+    test_friend_metadata_is_exported_to_ft();
     test_local_friend_fit_can_target_imported_type();
     test_imported_type_seal_members_do_not_satisfy_consumer_fit();
     test_bounded_decl_ft_roundtrip_uses_inferred_initializer();

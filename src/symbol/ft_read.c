@@ -1310,6 +1310,10 @@ static bool parse_module_segments(ReadContext *ctx,
     return true;
 }
 
+static bool view_type_parameters_belong(const FengSymbolTypeView *type,
+                                       const FengSymbolDeclView *owner);
+
+/* Restore extension facts only after their symbol owners are attached. */
 static bool parse_attrs(ReadContext *ctx,
                         const char *path,
                         FengSymbolError *out_error) {
@@ -1330,6 +1334,107 @@ static bool parse_attrs(ReadContext *ctx,
         uint32_t value1 = read_u32_le(record + 0x0C);
         FengSymbolDeclView *decl = decl_by_symbol_id(ctx, symbol_id);
         uint32_t attr_index;
+
+        if (kind == FENG_SYMBOL_ATTR_FRIEND_FIT_ACCESS) {
+            const char *module_name = string_at(ctx, read_u32_le(record + 0x10));
+            if (decl == NULL || decl->kind != FENG_SYMBOL_DECL_KIND_METHOD || decl->owner == NULL ||
+                decl->owner->kind != FENG_SYMBOL_DECL_KIND_FIT || value0 == 0U || value1 == 0U ||
+                module_name == NULL || module_name[0] == '\0' || read_u16_le(record + 0x06) != 0U) {
+                return feng_symbol_internal_set_error(out_error, path, (FengToken){0}, "invalid friend signature dependency");
+            }
+            FengSymbolTypeView *instance = parse_type_by_id(ctx, value0, path, out_error);
+            if (instance == NULL) return false;
+            if (!view_type_parameters_belong(instance, decl)) {
+                feng_symbol_internal_type_free(instance);
+                return feng_symbol_internal_set_error(out_error, path, (FengToken){0}, "invalid friend signature parameter scope");
+            }
+            FengSymbolMemberUseView *grown = realloc(decl->friend_fit_accesses,
+                (decl->friend_fit_access_count + 1U) * sizeof(*grown));
+            if (grown == NULL) {
+                feng_symbol_internal_type_free(instance);
+                return feng_symbol_internal_set_error(out_error, path, (FengToken){0}, "out of memory reading member uses");
+            }
+            decl->friend_fit_accesses = grown;
+            FengSymbolMemberUseView *use = &grown[decl->friend_fit_access_count++];
+            memset(use, 0, sizeof(*use));
+            use->target_symbol_id = value1;
+            use->target_module_name = feng_symbol_internal_dup_cstr(module_name);
+            use->owner_instance_type = instance;
+            if (use->target_module_name == NULL) return false;
+            continue;
+        }
+
+        /* Intermediate check-only artifacts lack the unified dependency graph. */
+        if (kind == FENG_SYMBOL_ATTR_RETIRED_TYPE_CHECK) {
+            return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                "obsolete type-check metadata; rebuild provider, consumer and caches");
+        }
+        if (kind == FENG_SYMBOL_ATTR_FRIEND_TYPE) {
+            bool valid_owner = decl != NULL &&
+                (decl->kind == FENG_SYMBOL_DECL_KIND_FIELD || decl->kind == FENG_SYMBOL_DECL_KIND_METHOD) &&
+                decl->visibility == FENG_VISIBILITY_PRIVATE && decl->owner != NULL &&
+                (decl->owner->kind == FENG_SYMBOL_DECL_KIND_TYPE ||
+                 decl->owner->kind == FENG_SYMBOL_DECL_KIND_SPEC || decl->owner->kind == FENG_SYMBOL_DECL_KIND_FIT);
+            if (!valid_owner || value0 == 0U || value1 != 0U ||
+                read_u16_le(record + 0x06) != 0U || read_u32_le(record + 0x10) != 0U) {
+                return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                                                       "invalid compile-time type attribute");
+            }
+            FengSymbolTypeView *type = parse_type_by_id(ctx, value0, path, out_error);
+            const FengSymbolDeclView *scope = decl->owner;
+            if (type == NULL) return false;
+            bool valid_root = type->kind == FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF ||
+                ((type->kind == FENG_SYMBOL_TYPE_KIND_NAMED || type->kind == FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC) &&
+                 (type->target_decl == NULL || type->target_decl->kind == FENG_SYMBOL_DECL_KIND_TYPE));
+            if (!valid_root || !view_type_parameters_belong(type, scope)) {
+                feng_symbol_internal_type_free(type);
+                return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                                                       "invalid compile-time type attribute scope");
+            }
+            FengSymbolTypeView **grown = realloc(decl->friend_types,
+                (decl->friend_type_count + 1U) * sizeof(*grown));
+            if (grown == NULL) {
+                feng_symbol_internal_type_free(type);
+                return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                                                       "out of memory loading compile-time type attributes");
+            }
+            decl->friend_types = grown;
+            decl->friend_types[decl->friend_type_count++] = type;
+            continue;
+        }
+
+        /* All type uses share owner/scope validation, including former check-only uses. */
+        if (kind == FENG_SYMBOL_ATTR_REIFIABLE_AGGREGATE_DEP ||
+            kind == FENG_SYMBOL_ATTR_REIFIABLE_MANAGED_DEP) {
+            bool valid_owner = decl != NULL &&
+                (decl->kind == FENG_SYMBOL_DECL_KIND_TYPE || decl->kind == FENG_SYMBOL_DECL_KIND_SPEC ||
+                 decl->kind == FENG_SYMBOL_DECL_KIND_FIT || decl->kind == FENG_SYMBOL_DECL_KIND_FUNCTION ||
+                 decl->kind == FENG_SYMBOL_DECL_KIND_METHOD);
+            if (!valid_owner || value0 == 0U || value1 != 0U ||
+                read_u16_le(record + 0x06) != 0U || read_u32_le(record + 0x10) != 0U) {
+                return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                    "invalid reifiable type dependency");
+            }
+            FengSymbolTypeView *type = parse_type_by_id(ctx, value0, path, out_error);
+            if (type == NULL) return false;
+            if (!view_type_parameters_belong(type, decl)) {
+                feng_symbol_internal_type_free(type);
+                return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                    "invalid reifiable type parameter scope");
+            }
+            bool aggregate = kind == FENG_SYMBOL_ATTR_REIFIABLE_AGGREGATE_DEP;
+            FengSymbolTypeView ***types = aggregate ? &decl->reifiable_agg_deps : &decl->reifiable_type_deps;
+            size_t *type_count = aggregate ? &decl->reifiable_agg_dep_count : &decl->reifiable_type_dep_count;
+            FengSymbolTypeView **grown = realloc(*types, (*type_count + 1U) * sizeof(*grown));
+            if (grown == NULL) {
+                feng_symbol_internal_type_free(type);
+                return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                    "out of memory loading reifiable type dependencies");
+            }
+            *types = grown;
+            (*types)[(*type_count)++] = type;
+            continue;
+        }
 
         if (kind == FENG_SYMBOL_ATTR_BUILTIN_CONSTRAINT) {
             if (decl == NULL || decl->kind != FENG_SYMBOL_DECL_KIND_TYPE_PARAM ||
@@ -1446,44 +1551,6 @@ static bool parse_attrs(ReadContext *ctx,
             decl->is_mixable = true;
             continue;
         }
-        if (kind == FENG_SYMBOL_ATTR_REIFIABLE_AGGREGATE_DEP) {
-            FengSymbolTypeView *type = parse_type_by_id(ctx, value0, path, out_error);
-            FengSymbolTypeView **grown;
-
-            if (type == NULL) {
-                return false;
-            }
-            grown = (FengSymbolTypeView **)realloc(
-                decl->reifiable_agg_deps,
-                (decl->reifiable_agg_dep_count + 1U) * sizeof(*decl->reifiable_agg_deps));
-            if (grown == NULL) {
-                feng_symbol_internal_type_free(type);
-                return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
-                                                      "out of memory loading reifiable agg dep");
-            }
-            decl->reifiable_agg_deps = grown;
-            decl->reifiable_agg_deps[decl->reifiable_agg_dep_count++] = type;
-            continue;
-        }
-        if (kind == FENG_SYMBOL_ATTR_REIFIABLE_MANAGED_DEP) {
-            FengSymbolTypeView *type = parse_type_by_id(ctx, value0, path, out_error);
-            FengSymbolTypeView **grown;
-
-            if (type == NULL) {
-                return false;
-            }
-            grown = (FengSymbolTypeView **)realloc(
-                decl->reifiable_type_deps,
-                (decl->reifiable_type_dep_count + 1U) * sizeof(*decl->reifiable_type_deps));
-            if (grown == NULL) {
-                feng_symbol_internal_type_free(type);
-                return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
-                                                      "out of memory loading reifiable type dep");
-            }
-            decl->reifiable_type_deps = grown;
-            decl->reifiable_type_deps[decl->reifiable_type_dep_count++] = type;
-            continue;
-        }
         if (kind != FENG_SYMBOL_ATTR_DECLARED_SPECS) {
             continue;
         }
@@ -1501,6 +1568,29 @@ static bool parse_attrs(ReadContext *ctx,
             }
             decl->declared_specs = grown;
             decl->declared_specs[decl->declared_spec_count++] = type;
+        }
+    }
+    return true;
+}
+
+/* Local member references can be checked only after all friend attributes exist.
+ * External references receive the same check when their provider is restored. */
+static bool validate_friend_member_references(ReadContext *ctx, const char *path, FengSymbolError *error) {
+    const char *module_name = string_at(ctx, ctx->module_full_name_str);
+    for (size_t i = 0U; i < ctx->decl_count; ++i) {
+        const FengSymbolDeclView *decl = ctx->decls[i];
+        for (size_t d = 0U; d < decl->friend_fit_access_count; ++d) {
+            const FengSymbolMemberUseView *use = &decl->friend_fit_accesses[d];
+            if (module_name == NULL || strcmp(module_name, use->target_module_name) != 0) continue;
+            const FengSymbolDeclView *target = decl_by_symbol_id(ctx, use->target_symbol_id);
+            if (target == NULL || target->friend_type_count == 0U ||
+                (target->kind != FENG_SYMBOL_DECL_KIND_FIELD && target->kind != FENG_SYMBOL_DECL_KIND_METHOD)) {
+                return feng_symbol_internal_set_error(error, path, (FengToken){0}, "invalid friend signature member reference");
+            }
+            if (!feng_symbol_internal_member_owner_matches(target, use->owner_instance_type,
+                                                           use->target_module_name)) {
+                return feng_symbol_internal_set_error(error, path, (FengToken){0}, "invalid friend signature owner instance");
+            }
         }
     }
     return true;
@@ -1681,6 +1771,9 @@ static bool view_type_parameters_belong(const FengSymbolTypeView *type,
     const FengSymbolDeclView *owner) {
     if (type == NULL) return false;
     if (type->kind == FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF) {
+        if (owner->kind == FENG_SYMBOL_DECL_KIND_FIT) {
+            return fit_target_binds_parameter(owner->fit_target, type->as.type_param_ref.name);
+        }
         if (type->target_decl == NULL && owner->kind == FENG_SYMBOL_DECL_KIND_METHOD &&
             owner->owner != NULL && owner->owner->kind == FENG_SYMBOL_DECL_KIND_FIT) {
             return fit_target_binds_parameter(owner->owner->fit_target, type->as.type_param_ref.name);
@@ -2100,6 +2193,7 @@ bool feng_symbol_ft_read_bytes_internal(const void *data,
         !attach_decl_hierarchy(&ctx, source_name, out_error) ||
         !parse_module_segments(&ctx, source_name, out_error) ||
         !parse_attrs(&ctx, source_name, out_error) ||
+        !validate_friend_member_references(&ctx, source_name, out_error) ||
         !parse_exception_effects(&ctx, source_name, out_error) ||
         !parse_union_projections(&ctx, source_name, out_error) ||
         !parse_spec_view_coercions(&ctx, source_name, out_error) ||

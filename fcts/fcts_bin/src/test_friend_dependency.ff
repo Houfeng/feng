@@ -1,0 +1,48 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.friend_dependency;
+
+/** Imported authorization uses the target identity with shared static dependencies. */
+fit FriendSlotReader<T> {
+  /** The aggregate field remains an actual dependency of this shared fit. */
+  func packed(vault: FriendSlotVault<T>): T { return vault.packed.value; }
+
+  /** Invoke the provider's restricted shared method using its existing ABI. */
+  func copy(vault: FriendSlotVault<T>, value: T): T { return vault.copy(value); }
+}
+
+/** Verify owner, method and fit behavior with unified annotation dependencies. */
+open func test_friend_dependency() {
+  describe("friend shares static type dependencies", () {
+    test("trivial values retain managed and aggregate slots", () {
+      let vault = FriendSlotVault<int>(37);
+      let reader = FriendSlotReader<int>();
+      assert(reader.read(vault) == 37, "managed field and constructor");
+      assert(reader.packed(vault) == 37, "aggregate field through imported fit");
+      assert(reader.copy(vault, 41) == 41, "restricted shared method");
+      assert(FriendSlotRetained<int>().read(vault) == 37, "actual friend field slot");
+    });
+    test("managed values retain shared ownership behavior", () {
+      let vault = FriendSlotVault<string>("stored");
+      let reader = FriendSlotReader<string>();
+      assert(reader.read(vault) == "stored", "managed payload");
+      assert(reader.packed(vault) == "stored", "aggregate managed payload");
+      assert(reader.copy(vault, "copied") == "copied", "method-local payload");
+      assert(FriendSlotRetained<string>().read(vault) == "stored", "retained reader");
+    });
+    test("nested annotation descriptors do not construct argument values", () {
+      friendAnnotationConstructions = 0;
+      assert(FriendAnnotationOnly<int>().read() == 43, "integer owner");
+      assert(FriendAnnotationOnly<string>().read() == 43, "managed owner");
+      assert(friendAnnotationConstructions == 0, "metadata does not invoke constructors");
+      let actual = FriendAnnotationReader<int>();
+      assert(friendAnnotationConstructions == 1, "explicit construction still executes");
+    });
+    test("closed annotation arguments preserve owner construction", () {
+      friendAnnotationConstructions = 0;
+      assert(FriendClosedAnnotation().read() == 47, "closed annotation owner");
+      assert(friendAnnotationConstructions == 0, "closed metadata has no constructor effect");
+    });
+  });
+}

@@ -413,10 +413,35 @@ static const FengSymbolDeclView *decl_member_at(const FengSymbolDeclView *owner,
     return owner->members[index];
 }
 
+/* Reuse a registered source's provenance, or create a new in-memory package. */
+static FengSymbolPackageIdentity *provider_acquire_package(FengSymbolProvider *provider,
+    const char *source_key, FengSymbolError *out_error) {
+    if (source_key != NULL) {
+        for (size_t i = 0U; i < provider->module_count; ++i) {
+            FengSymbolPackageIdentity *identity = provider->modules[i].package_identity;
+            if (identity != NULL && identity->source_key != NULL && strcmp(identity->source_key, source_key) == 0) {
+                ++identity->reference_count;
+                return identity;
+            }
+        }
+    }
+    FengSymbolPackageIdentity *identity = calloc(1U, sizeof(*identity));
+    if (identity != NULL) {
+        identity->reference_count = 1U;
+        identity->source_key = source_key != NULL ? feng_symbol_internal_dup_cstr(source_key) : NULL;
+        if (source_key == NULL || identity->source_key != NULL) return identity;
+        feng_symbol_internal_package_identity_release(identity);
+    }
+    feng_symbol_internal_set_error(out_error, source_key, (FengToken){0}, "out of memory recording package provenance");
+    return NULL;
+}
+
+/* Register graph modules with source-independent package provenance. */
 static bool provider_add_graph_internal(FengSymbolProvider *provider,
                                         const FengSymbolGraph *graph,
                                         ProviderDuplicatePolicy duplicate_policy,
                                         const char *source_path,
+                                        FengSymbolPackageIdentity *package_identity,
                                         FengSymbolError *out_error) {
     size_t module_index;
 
@@ -429,6 +454,8 @@ static bool provider_add_graph_internal(FengSymbolProvider *provider,
         if (imported.module == NULL) {
             return false;
         }
+        imported.package_identity = package_identity;
+        ++package_identity->reference_count;
         if (source_path != NULL) {
             imported.source_path = feng_symbol_internal_dup_cstr(source_path);
             if (imported.source_path == NULL) {
@@ -453,6 +480,7 @@ static bool provider_add_graph_internal(FengSymbolProvider *provider,
 static bool provider_load_ft_tree(FengSymbolProvider *provider,
                                   const char *root_path,
                                   FengSymbolProfile profile,
+                                  FengSymbolPackageIdentity *package_identity,
                                   FengSymbolError *out_error) {
     DIR *dir;
     struct dirent *entry;
@@ -499,7 +527,7 @@ static bool provider_load_ft_tree(FengSymbolProvider *provider,
         }
 
         if (S_ISDIR(st.st_mode)) {
-            bool ok = provider_load_ft_tree(provider, path, profile, out_error);
+            bool ok = provider_load_ft_tree(provider, path, profile, package_identity, out_error);
             free(path);
             if (!ok) {
                 closedir(dir);
@@ -516,6 +544,7 @@ static bool provider_load_ft_tree(FengSymbolProvider *provider,
                                                   graph,
                                                   PROVIDER_DUPLICATE_PREFER_PROFILE,
                                                   root_path,
+                                                  package_identity,
                                                   out_error);
             feng_symbol_graph_free(graph);
             free(path);
@@ -601,6 +630,7 @@ static bool provider_load_bundle_entry(FengSymbolProvider *staging,
                                        const FengZipReader *reader,
                                        const char *bundle_path,
                                        const char *entry_path,
+                                       FengSymbolPackageIdentity *package_identity,
                                        FengSymbolError *out_error) {
     void *data = NULL;
     size_t data_size = 0U;
@@ -643,6 +673,7 @@ static bool provider_load_bundle_entry(FengSymbolProvider *staging,
                                      graph,
                                      PROVIDER_DUPLICATE_REJECT,
                                      source_label,
+                                     package_identity,
                                      out_error)) {
         feng_symbol_graph_free(graph);
         free(source_label);
@@ -721,11 +752,16 @@ bool feng_symbol_provider_add_graph(FengSymbolProvider *provider,
     if (provider == NULL || graph == NULL) {
         return false;
     }
-    return provider_add_graph_internal(provider,
+    FengSymbolPackageIdentity *identity = provider_acquire_package(provider, NULL, out_error);
+    if (identity == NULL) return false;
+    bool ok = provider_add_graph_internal(provider,
                                        graph,
                                        PROVIDER_DUPLICATE_PREFER_PROFILE,
                                        NULL,
+                                       identity,
                                        out_error);
+    feng_symbol_internal_package_identity_release(identity);
+    return ok;
 }
 
 bool feng_symbol_provider_add_ft_root(FengSymbolProvider *provider,
@@ -735,7 +771,11 @@ bool feng_symbol_provider_add_ft_root(FengSymbolProvider *provider,
     if (provider == NULL || root_path == NULL) {
         return false;
     }
-    return provider_load_ft_tree(provider, root_path, profile, out_error);
+    FengSymbolPackageIdentity *identity = provider_acquire_package(provider, root_path, out_error);
+    if (identity == NULL) return false;
+    bool ok = provider_load_ft_tree(provider, root_path, profile, identity, out_error);
+    feng_symbol_internal_package_identity_release(identity);
+    return ok;
 }
 
 bool feng_symbol_provider_add_bundle(FengSymbolProvider *provider,
@@ -753,12 +793,15 @@ bool feng_symbol_provider_add_bundle(FengSymbolProvider *provider,
     if (!feng_zip_reader_open(bundle_path, &reader, &zip_error)) {
         return provider_set_zip_error(out_error, bundle_path, "failed to open bundle", zip_error);
     }
+    FengSymbolPackageIdentity *identity = provider_acquire_package(provider, bundle_path, out_error);
+    if (identity == NULL) { feng_zip_reader_dispose(&reader); return false; }
 
     entry_count = feng_zip_reader_entry_count(&reader);
     for (index = 0U; index < entry_count; ++index) {
         FengZipEntryInfo entry;
 
         if (!feng_zip_reader_entry_at(&reader, index, &entry, &zip_error)) {
+            feng_symbol_internal_package_identity_release(identity);
             provider_dispose_contents(&staging);
             feng_zip_reader_dispose(&reader);
             return provider_set_zip_error(out_error, bundle_path, "failed to inspect bundle entry", zip_error);
@@ -766,7 +809,8 @@ bool feng_symbol_provider_add_bundle(FengSymbolProvider *provider,
         if (!bundle_entry_is_public_ft(&entry)) {
             continue;
         }
-        if (!provider_load_bundle_entry(&staging, &reader, bundle_path, entry.path, out_error)) {
+        if (!provider_load_bundle_entry(&staging, &reader, bundle_path, entry.path, identity, out_error)) {
+            feng_symbol_internal_package_identity_release(identity);
             provider_dispose_contents(&staging);
             feng_zip_reader_dispose(&reader);
             return false;
@@ -774,6 +818,7 @@ bool feng_symbol_provider_add_bundle(FengSymbolProvider *provider,
     }
 
     feng_zip_reader_dispose(&reader);
+    feng_symbol_internal_package_identity_release(identity);
     if (!provider_merge_staged_modules(provider, &staging, out_error)) {
         provider_dispose_contents(&staging);
         return false;
@@ -922,6 +967,11 @@ FengVisibility feng_symbol_module_visibility(const FengSymbolImportedModule *mod
                ? module->module->visibility : FENG_VISIBILITY_PRIVATE;
 }
 
+/* The provider owns provenance for the complete lifetime of imported modules. */
+const void *feng_symbol_module_package_identity(const FengSymbolImportedModule *module) {
+    return module != NULL ? module->package_identity : NULL;
+}
+
 /* Import origins outlive borrowed queries and are not declaration source paths. */
 FengSlice feng_symbol_module_source_path(const FengSymbolImportedModule *module) {
     return module != NULL ? slice_from_cstr(module->source_path) : (FengSlice){0};
@@ -988,6 +1038,16 @@ bool feng_symbol_decl_is_static(const FengSymbolDeclView *decl) {
 /* Return the normalized mixable fact restored from source or `.ft`. */
 bool feng_symbol_decl_is_mixable(const FengSymbolDeclView *decl) {
     return decl != NULL && decl->is_mixable;
+}
+
+/* Friend metadata remains a restricted interface, never public visibility. */
+size_t feng_symbol_decl_friend_type_count(const FengSymbolDeclView *decl) {
+    return decl != NULL ? decl->friend_type_count : 0U;
+}
+
+/* The provider owns the returned expression and its declaration identities. */
+const FengSymbolTypeView *feng_symbol_decl_friend_type_at(const FengSymbolDeclView *decl, size_t index) {
+    return decl != NULL && index < decl->friend_type_count ? decl->friend_types[index] : NULL;
 }
 
 const FengSymbolTypeView *feng_symbol_decl_value_type(const FengSymbolDeclView *decl) {

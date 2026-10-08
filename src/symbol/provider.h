@@ -105,6 +105,9 @@ FengSlice feng_symbol_module_segment_at(const FengSymbolImportedModule *module, 
 /* Read module visibility without exposing the provider's storage layout. */
 FengVisibility feng_symbol_module_visibility(const FengSymbolImportedModule *module);
 
+/* Borrow opaque provenance shared by modules registered from one package. */
+const void *feng_symbol_module_package_identity(const FengSymbolImportedModule *module);
+
 /* Borrow the recorded import origin, including the FT entry for bundle modules. */
 FengSlice feng_symbol_module_source_path(const FengSymbolImportedModule *module);
 
@@ -126,6 +129,9 @@ bool feng_symbol_decl_has_bounded_decl(const FengSymbolDeclView *decl);
 bool feng_symbol_decl_is_static(const FengSymbolDeclView *decl);
 /* Return whether a method declaration carries the normalized mixable fact. */
 bool feng_symbol_decl_is_mixable(const FengSymbolDeclView *decl);
+/* Borrow normalized friend expressions for semantic-backed editor queries. */
+size_t feng_symbol_decl_friend_type_count(const FengSymbolDeclView *decl);
+const FengSymbolTypeView *feng_symbol_decl_friend_type_at(const FengSymbolDeclView *decl, size_t index);
 const FengSymbolTypeView *feng_symbol_decl_value_type(const FengSymbolDeclView *decl);
 const FengSymbolTypeView *feng_symbol_decl_return_type(const FengSymbolDeclView *decl);
 const FengSymbolTypeView *feng_symbol_decl_fit_target(const FengSymbolDeclView *decl);

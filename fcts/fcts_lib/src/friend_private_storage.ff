@@ -1,0 +1,13 @@
+seal module fcts_lib.friend_private_storage;
+
+/** Private-module value layout needed when an exported owner is instantiated. */
+@value
+open type StoredFriendPayload<T> {
+  let value: T;
+
+  /** Initialize the payload using the ordinary generic constructor ABI. */
+  func StoredFriendPayload(value: T) { self.value = value; }
+}
+
+/** This unrelated declaration must not enter the package dependency closure. */
+open type UnusedFriendPayload {}

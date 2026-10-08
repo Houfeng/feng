@@ -1,0 +1,24 @@
+open module fcts_lib.friend_private;
+
+import fcts_lib.friend_private_storage;
+
+/** A provider-owned friend can consume a package-private representation. */
+open type StoredFriendReader<T> {
+  /** Read the private representation in its original package context. */
+  func read(vault: StoredFriendVault<StoredFriendReader<T>, T>): T {
+    return vault.payload.value;
+  }
+}
+
+/** Export authorization and the minimum private representation dependencies. */
+open type StoredFriendVault<F, T> {
+  @friend(F)
+  seal let payload: StoredFriendPayload<T>;
+
+  /** Construct private value storage from a publicly usable argument. */
+  func StoredFriendVault(value: T) { self.payload = StoredFriendPayload<T>(value); }
+
+  /** A public signature permits a foreign fit to use the target's friend identity. */
+  @friend(F)
+  seal func read(): T { return self.payload.value; }
+}

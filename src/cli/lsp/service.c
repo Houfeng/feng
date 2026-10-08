@@ -6938,6 +6938,16 @@ static bool type_ref_module_path(const FengProgram *program,
     return true;
 }
 
+/* Ordinary cached name queries must respect module visibility even when an
+ * invalid import is still present in an incomplete editor document. */
+static bool symbol_module_is_accessible_from(const FengSymbolImportedModule *consumer,
+                                              const FengSymbolImportedModule *target) {
+    if (target == NULL) return false;
+    if (consumer == target || feng_symbol_module_visibility(target) == FENG_VISIBILITY_PUBLIC) return true;
+    const void *package = feng_symbol_module_package_identity(consumer);
+    return package != NULL && package == feng_symbol_module_package_identity(target);
+}
+
 static const FengSymbolDeclView *resolve_symbol_named_type_ref(const FengSymbolProvider *provider,
                                                                const FengSymbolImportedModule *current_module,
                                                                const FengProgram *program,
@@ -6981,7 +6991,7 @@ static const FengSymbolDeclView *resolve_symbol_named_type_ref(const FengSymbolP
             module = feng_symbol_provider_find_module(provider,
                                                       use_decl->segments,
                                                       use_decl->segment_count);
-            if (module != NULL) {
+            if (symbol_module_is_accessible_from(current_module, module)) {
                 const FengSymbolDeclView *decl = find_symbol_module_decl_by_name_and_arity(
                     module, name, arity, true);
                 if (decl != NULL) {
@@ -7011,7 +7021,7 @@ static const FengSymbolDeclView *resolve_symbol_named_type_ref(const FengSymbolP
         }
         public_only = !program_module_matches(program, segments, segment_count);
         module = feng_symbol_provider_find_module(provider, segments, segment_count);
-        if (public_only && feng_symbol_module_visibility(module) != FENG_VISIBILITY_PUBLIC) {
+        if (!symbol_module_is_accessible_from(current_module, module)) {
             return NULL;
         }
         decl = find_symbol_module_decl_by_name_and_arity(module, name, arity, public_only);
@@ -7169,7 +7179,7 @@ static const FengSymbolDeclView *resolve_symbol_value_name(const FengSymbolProvi
             continue;
         }
         module = feng_symbol_provider_find_module(provider, use_decl->segments, use_decl->segment_count);
-        if (module != NULL) {
+        if (symbol_module_is_accessible_from(current_module, module)) {
             const FengSymbolDeclView *decl = find_symbol_module_decl_by_name(module,
                                                                              name,
                                                                              true,
@@ -7220,7 +7230,7 @@ static const FengSymbolDeclView *resolve_symbol_type_name_with_arity(
             continue;
         }
         module = feng_symbol_provider_find_module(provider, use_decl->segments, use_decl->segment_count);
-        if (module != NULL) {
+        if (symbol_module_is_accessible_from(current_module, module)) {
             const FengSymbolDeclView *decl = find_symbol_module_decl_by_name_and_arity(
                 module, name, type_param_count, true);
 
@@ -7684,7 +7694,8 @@ static const FengDecl *resolve_value_name(const FengLspAnalysisSession *session,
         const FengUseDecl *use_decl = &program->uses[index];
         const FengSemanticModule *module;
 
-        if (use_decl->has_alias) {
+        if (use_decl->has_alias || !source_type_module_is_visible(session, program,
+                use_decl->segments, use_decl->segment_count)) {
             continue;
         }
         module = find_module_by_segments(session->analysis, use_decl->segments, use_decl->segment_count);
@@ -7758,7 +7769,8 @@ static const FengDecl *resolve_type_name_with_arity(const FengLspAnalysisSession
         const FengUseDecl *use_decl = &program->uses[index];
         const FengSemanticModule *module;
 
-        if (use_decl->has_alias) {
+        if (use_decl->has_alias || !source_type_module_is_visible(session, program,
+                use_decl->segments, use_decl->segment_count)) {
             continue;
         }
         module = find_module_by_segments(session->analysis, use_decl->segments, use_decl->segment_count);
@@ -8169,8 +8181,7 @@ static bool completion_type_has_mixable_seal_access(
                session, program, target_type, source_type);
 }
 
-/* Return whether a local source member carries at least one @friend
- * declaration. Imported symbols never expose this compile-time-only fact. */
+/* Source and imported ASTs retain the same compile-time friend declaration. */
 static bool completion_member_declares_friend(
     const FengTypeMember *member) {
     if (member == NULL) {
@@ -8186,7 +8197,7 @@ static bool completion_member_declares_friend(
 }
 
 /* Reuse the semantic analyzer's normalized @friend access query for
- * source-backed completion. Parsed-only recovery has no normalized friend
+ * source and imported completion. Parsed-only recovery has no normalized friend
  * metadata and therefore fails closed. */
 static bool completion_member_has_friend_access(
     const FengLspAnalysisSession *session,
@@ -13208,7 +13219,8 @@ static const FengDecl *resolve_expr_target(const FengLspAnalysisSession *session
                 const FengSemanticModule *alias_module = find_alias_module(session,
                                                                            program,
                                                                            expr->as.member.object->as.identifier);
-                if (alias_module != NULL) {
+                if (alias_module != NULL && source_type_module_is_visible(session, program,
+                        alias_module->segments, alias_module->segment_count)) {
                     target->decl = find_module_decl_by_name(alias_module,
                                                             expr->as.member.member,
                                                             false,
@@ -18985,7 +18997,7 @@ static const FengSymbolDeclView *resolve_symbol_expr_target(const FengLspCacheQu
                 const FengSymbolImportedModule *alias_module = find_symbol_alias_module(context->provider,
                                                                                         context->program,
                                                                                         expr->as.member.object->as.identifier);
-                if (alias_module != NULL) {
+                if (symbol_module_is_accessible_from(context->current_module, alias_module)) {
                     target->decl = find_symbol_module_decl_by_name(alias_module,
                                                                    expr->as.member.member,
                                                                    false,
@@ -20372,6 +20384,9 @@ static bool cache_symbol_decl_shapes_equal(const FengSymbolDeclView *lhs,
         return false;
     }
     return cache_symbol_type_lists_equal(
+               lhs, rhs, feng_symbol_decl_friend_type_count(lhs),
+               feng_symbol_decl_friend_type_count(rhs), feng_symbol_decl_friend_type_at) &&
+           cache_symbol_type_lists_equal(
                lhs,
                rhs,
                feng_symbol_decl_declared_spec_count(lhs),
@@ -22211,13 +22226,13 @@ static bool symbol_decl_declares_spec(const FengLspCacheQueryContext *context,
     return found;
 }
 
-/* Return whether a symbol module is the current module or explicitly used. */
+/* Return whether an accessible symbol module is current or explicitly used. */
 static bool symbol_module_visible_from_program(
     const FengLspCacheQueryContext *context,
     const FengSymbolImportedModule *module) {
     size_t index;
 
-    if (context == NULL || module == NULL) {
+    if (context == NULL || !symbol_module_is_accessible_from(context->current_module, module)) {
         return false;
     }
     if (module == context->current_module) {
@@ -22368,9 +22383,41 @@ static bool symbol_mixable_seal_member_visible_from_target(
     return false;
 }
 
-/* Apply module visibility or the spec implementation-domain rule. */
+/* Reacquire a symbol member in the analyzed AST and ask Semantic for access.
+ * Complete provider/member shapes and module identity exclude unrelated cached
+ * declarations; raw FT metadata alone never grants permission. */
+static bool symbol_member_has_friend_access(const FengLspAnalysisSession *session,
+    const FengLspCacheQueryContext *context, const FengProgram *program,
+    const FengSymbolDeclView *owner, const FengSymbolDeclView *member,
+    const FengTypeRef *instance, const FengDecl *enclosing_decl,
+    const FengTypeMember *enclosing_member) {
+    if (session == NULL || session->analysis == NULL || context == NULL) return false;
+    for (size_t i = 0U; i < session->analysis->imported_symbol_identity_count; ++i) {
+        const FengImportedSymbolIdentity *identity = &session->analysis->imported_symbol_identities[i];
+        if (!cache_symbol_decl_shapes_equal(identity->symbol_decl, member)) continue;
+        const FengDecl *source_owner = NULL;
+        const FengProgram *source_program = NULL;
+        const FengTypeMember *source_member = identity->source_node;
+        if (find_member_module(session, source_member, &source_owner, &source_program) == NULL || source_program == NULL) continue;
+        const FengSymbolImportedModule *module = feng_symbol_provider_find_module(context->provider,
+            source_program->module_segments, source_program->module_segment_count);
+        if (!symbol_decl_is_in_module(module, owner)) continue;
+        const FengImportedSymbolIdentity *owner_identity = feng_semantic_lookup_imported_symbol_identity(session->analysis, source_owner);
+        if (owner_identity == NULL || !cache_symbol_decl_shapes_equal(owner_identity->symbol_decl, owner)) continue;
+        const FengDecl *access_owner = instance != NULL ? instance->resolution_decl : source_owner;
+        if (access_owner == NULL && source_owner->kind != FENG_DECL_FIT) access_owner = source_owner;
+        return completion_member_has_friend_access(session, program, access_owner, instance,
+            source_member, enclosing_decl, enclosing_member);
+    }
+    return false;
+}
+
+/* Apply the same Semantic grant before ordinary module/implementation rules. */
 static bool symbol_member_visible_from_context(
     const FengLspCacheQueryContext *context,
+    const FengLspAnalysisSession *session,
+    const FengProgram *program,
+    const FengTypeRef *instance,
     const FengSymbolDeclView *owner_decl,
     const FengSymbolDeclView *member,
     const FengDecl *enclosing_decl,
@@ -22381,6 +22428,9 @@ static bool symbol_member_visible_from_context(
     if (feng_symbol_decl_visibility(member) == FENG_VISIBILITY_PUBLIC) {
         return true;
     }
+    if (feng_symbol_decl_friend_type_count(member) != 0U &&
+        symbol_member_has_friend_access(session, context, program, owner_decl, member,
+            instance, enclosing_decl, enclosing_member)) return true;
     if (owner_decl != NULL &&
         feng_symbol_decl_kind(owner_decl) == FENG_SYMBOL_DECL_KIND_SPEC) {
         return symbol_spec_seal_member_visible_from_implementation(
@@ -22396,7 +22446,8 @@ static bool symbol_member_visible_from_context(
             enclosing_member)) {
         return true;
     }
-    return symbol_decl_is_in_module(context->current_module, owner_decl);
+    return feng_symbol_decl_friend_type_count(member) == 0U &&
+        symbol_decl_is_in_module(context->current_module, owner_decl);
 }
 
 /* Build a completion label for a symbol decl.
@@ -23871,6 +23922,7 @@ static bool member_collect_fits(FengLspMemberQuery *query, FengLspCompletionType
                 for (size_t i = 0U; i < feng_symbol_decl_member_count(fit); ++i) {
                     const FengSymbolDeclView *member = feng_symbol_decl_member_at(fit, i);
                     if (!symbol_member_passes_filter(member, filter) || !symbol_member_visible_from_context(query->cache,
+                        query->session, query->program, &receiver->ref,
                         fit, member, query->enclosing_decl, query->enclosing_member)) continue;
                     candidate.symbol = member;
                     if (!member_candidate_add(query, items, &candidate)) return false;
@@ -23943,6 +23995,7 @@ static bool member_collect_surface(FengLspMemberQuery *query, FengLspCompletionT
             FengSymbolDeclKind kind = feng_symbol_decl_kind(member);
             if ((kind != FENG_SYMBOL_DECL_KIND_METHOD && kind != FENG_SYMBOL_DECL_KIND_FIELD) ||
                 !symbol_member_passes_filter(member, filter) || !symbol_member_visible_from_context(query->cache,
+                query->session, query->program, &receiver->ref,
                 receiver->symbol, member, query->enclosing_decl, query->enclosing_member)) continue;
             candidate.symbol = member;
             if (!member_candidate_add(query, items, &candidate)) return false;
@@ -24350,18 +24403,53 @@ static FengLspCompletionType *member_call_type(FengLspMemberQuery *query, const 
     return matched ? result : common_known ? common : NULL;
 }
 
+/* Resolve a nominal target while preserving its arguments and lexical scope.
+ * Value roots keep precedence over type/module spellings. */
+static FengLspCompletionType *member_named_expression_type(FengLspMemberQuery *query,
+    const FengExpr *target, FengTypeRef **arguments, size_t count, const FengLspMemberScope *scope) {
+    FengTypeRef ref = {0};
+    if (!named_type_ref_from_expr(target, count, &ref)) return NULL;
+    FengSlice root = ref.as.named.segments[0];
+    if (find_local(query->locals, root) != NULL ||
+        (ref.as.named.segment_count > 1U && member_scope_parameter(scope, root) != NULL)) {
+        free(ref.as.named.segments);
+        return NULL;
+    }
+    ref.as.named.type_args = arguments;
+    FengLspCompletionType *type = member_source_type(query, query->program, &ref, scope);
+    if (type != NULL) {
+        type->ref.as.named.segments = feng_lsp_completion_allocate(&query->types,
+            ref.as.named.segment_count, sizeof(FengSlice));
+        if (type->ref.as.named.segments != NULL) memcpy(type->ref.as.named.segments,
+            ref.as.named.segments, ref.as.named.segment_count * sizeof(FengSlice));
+    }
+    free(ref.as.named.segments);
+    return type;
+}
+
 /* Preserve full types at each original receiver transition: locals, fields,
  * calls and indices. Available semantic facts take precedence over syntax. */
 static FengLspCompletionType *resolve_completion_expr_type(FengLspMemberQuery *query,
     const FengExpr *expr, const FengLspMemberScope *scope, bool *is_static) {
     *is_static = false;
     if (expr == NULL) return NULL;
+    /* A type target remains a static receiver even when Semantic has attached
+     * its complete instantiated type as a fact. */
+    if (expr->kind == FENG_EXPR_TYPE_TARGET) {
+        *is_static = true;
+        return member_source_type(query, query->program, expr->as.type_target, scope);
+    }
+    if (expr->kind == FENG_EXPR_GENERIC_TARGET) {
+        FengLspCompletionType *nominal = member_named_expression_type(query,
+            expr->as.generic_target.target, expr->as.generic_target.type_args,
+            expr->as.generic_target.type_arg_count, scope);
+        if (nominal != NULL) { *is_static = true; return nominal; }
+    }
     FengLspCompletionType *type = member_fact_type(query, expr, query->program, scope);
     if (type != NULL) return type;
     if (expr->type != NULL) return member_source_type(query, query->program, expr->type, scope);
     const char *builtin = builtin_name_from_expr_syntax(expr);
     if (builtin != NULL) return member_builtin_type(query, slice_from_cstr(builtin));
-    if (expr->kind == FENG_EXPR_TYPE_TARGET) { *is_static = true; return member_source_type(query, query->program, expr->as.type_target, scope); }
     if (expr->kind == FENG_EXPR_LAMBDA) {
         type = member_type_new(query, FENG_TYPE_REF_NAMED);
         if (type != NULL) { type->lambda = expr; type->ref.resolution_program = query->program; }
@@ -24499,18 +24587,8 @@ static FengLspCompletionType *resolve_completion_expr_type(FengLspMemberQuery *q
     if (target != NULL && target->kind == FENG_EXPR_GENERIC_TARGET) {
         arguments = target->as.generic_target.type_args; count = target->as.generic_target.type_arg_count; target = target->as.generic_target.target;
     }
-    FengTypeRef ref = {0};
-    if (!named_type_ref_from_expr(target, count, &ref)) return NULL;
-    FengSlice root = ref.as.named.segments[0];
-    if (ref.as.named.segment_count > 1U && (find_local(query->locals, root) != NULL || member_scope_parameter(scope, root) != NULL)) { free(ref.as.named.segments); return NULL; }
-    ref.as.named.type_args = arguments;
-    type = member_source_type(query, query->program, &ref, scope);
-    if (type != NULL) {
-        type->ref.as.named.segments = feng_lsp_completion_allocate(&query->types, ref.as.named.segment_count, sizeof(FengSlice));
-        if (type->ref.as.named.segments != NULL) memcpy(type->ref.as.named.segments, ref.as.named.segments, ref.as.named.segment_count * sizeof(FengSlice));
-        *is_static = !constructor;
-    }
-    free(ref.as.named.segments);
+    type = member_named_expression_type(query, target, arguments, count, scope);
+    if (type != NULL) *is_static = !constructor;
     return type;
 }
 
@@ -24871,6 +24949,8 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
             const FengSemanticModule *module = find_module_by_segments(session->analysis,
                                                                        use_decl->segments,
                                                                        use_decl->segment_count);
+            if (!source_type_module_is_visible(session, program, use_decl->segments,
+                    use_decl->segment_count)) continue;
             if (use_decl->has_alias) {
                 if (!append_completion_item(json, &first, use_decl->alias, "module", 9)) {
                     local_list_dispose(&locals);
@@ -24983,6 +25063,7 @@ static size_t completion_json_item_count(const FengLspString *json) {
 }
 
 static bool build_cached_completion_json(const FengLspCacheQueryContext *context,
+                                         const FengLspAnalysisSession *semantic_session,
                                          size_t offset,
                                          FengLspString *json,
                                          size_t *out_item_count,
@@ -24995,6 +25076,16 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
     FengLspPosition position;
     bool first = true;
     size_t index;
+    /* Authorization must use one coherent analyzed AST. The caller supplies a
+     * session only after checking all current document revisions under lock. */
+    FengLspCacheQueryContext semantic_context = *context;
+    if (semantic_session != NULL) {
+        const FengProgram *analyzed = find_program(semantic_session, context->program->path);
+        if (analyzed != NULL) {
+            semantic_context.program = (FengProgram *)analyzed;
+            context = &semantic_context;
+        } else semantic_session = NULL;
+    }
 
     if (out_item_count == NULL || !string_append_cstr(json, "[")) {
         return false;
@@ -25066,7 +25157,7 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
     restore_completion_receiver_type(request, context->source_text, &completion_context, &locals);
     expr = enclosing_decl != NULL ? find_expr_hit_in_decl(enclosing_decl, offset) : NULL;
     if (completion_context.is_member || (expr != NULL && expr->kind == FENG_EXPR_MEMBER)) {
-        bool ok = append_receiver_member_completion(json, &first, NULL, context, context->program,
+        bool ok = append_receiver_member_completion(json, &first, semantic_session, context, context->program,
             &completion_context, expr, &locals, enclosing_decl, enclosing_member, offset, request);
         local_list_dispose(&locals);
         *out_item_count = json->completion_item_count;
@@ -25130,6 +25221,7 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
             const FengSymbolImportedModule *module = feng_symbol_provider_find_module(context->provider,
                                                                                       use_decl->segments,
                                                                                       use_decl->segment_count);
+            if (!symbol_module_visible_from_program(context, module)) continue;
 
             if (use_decl->has_alias) {
                 if (!append_completion_item(json, &first, use_decl->alias, "module", 9)) {
@@ -26188,7 +26280,14 @@ static bool handle_completion_request(FengLspService *service,
                                              &cache)) {
         size_t cache_item_count = 0U;
 
+        workspace = find_workspace_analysis_for_document(service, document);
+        last_successful = workspace != NULL ? &workspace->last_successful_analysis : NULL;
+        const FengLspAnalysisSession *cache_semantics =
+            analysis_matches_document(last_successful, document) &&
+            analysis_matches_other_open_documents(service, last_successful, document)
+                ? last_successful : NULL;
         cache_has_items = build_cached_completion_json(&cache,
+                                                       cache_semantics,
                                                        offset,
                                                        &cache_json,
                                                        &cache_item_count,
@@ -26262,6 +26361,7 @@ static bool handle_completion_request(FengLspService *service,
                                                      repaired_text,
                                                      &repair_cache) &&
                 build_cached_completion_json(&repair_cache,
+                                             NULL,
                                              offset,
                                              &json,
                                              &repair_item_count,
@@ -26962,7 +27062,8 @@ static bool signature_collect_constructors(FengLspMemberQuery *query, FengLspCom
         explicit_constructor = true;
         bool visible = source ? type_member_visible_from_program(query->session, query->program, owner,
             &type->ref, candidate.member, query->enclosing_decl, query->enclosing_member, query->cache)
-            : symbol_member_visible_from_context(query->cache, type->symbol, candidate.symbol,
+            : symbol_member_visible_from_context(query->cache, query->session, query->program, &type->ref,
+                type->symbol, candidate.symbol,
                 query->enclosing_decl, query->enclosing_member);
         if (visible && !member_candidate_add(query, items, &candidate)) return false;
     }

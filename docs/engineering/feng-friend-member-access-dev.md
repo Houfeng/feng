@@ -1,6 +1,10 @@
 # Feng `@friend` 成员访问开发草案
 
-> **状态**：已完成。
+> **状态**：初版已完成，本文保留该阶段的设计与验证记录。
+> 类型级泛参、跨包与 `.ft` 授权的后续工作见
+> [阶段一开发文档](./feng-friend-generic-cross-package-dev.md)。本文中的同包限制和
+> 不导出授权描述是初版边界，现行语义统一以
+> [可见性规范](../specifications/feng-visibility.md) 为准。
 >
 > **文档定位**：本文记录 `@friend` 的需求边界、编译器方案、实施任务与验证
 > 结果；正式语言语义以 `docs/specifications/` 中的权威规范为准。

@@ -275,6 +275,9 @@ static FengExpr *synthesize_integer_literal_annotation_arg(size_t value) {
     return expr;
 }
 
+static FengTypeRef *synthesize_type_ref(const FengSymbolTypeView *symbol_type);
+
+/* Restore annotations needed by the shared semantic member surface. */
 static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *symbol_decl,
                                                     FengAnnotation **out_annotations,
                                                     size_t *out_count) {
@@ -307,7 +310,7 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
     has_mixable_annotation = symbol_decl->is_mixable;
 
     if (!has_calling_conv && !has_abi_annotation && !has_iter_annotation &&
-        !has_mixable_annotation) {
+        !has_mixable_annotation && symbol_decl->friend_type_count == 0U) {
         return true;
     }
 
@@ -324,6 +327,7 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
     if (has_mixable_annotation) {
         total_count++;
     }
+    if (symbol_decl->friend_type_count > 0U) total_count++;
 
     annotations = (FengAnnotation *)calloc(total_count, sizeof(*annotations));
     if (annotations == NULL) {
@@ -421,6 +425,26 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
         annotations[idx].arg_count = 0U;
     }
 
+    if (symbol_decl->friend_type_count > 0U) {
+        FengAnnotation *annotation = &annotations[total_count - 1U];
+        annotation->token = symbol_decl->token;
+        annotation->name = (FengSlice){"friend", 6U};
+        annotation->builtin_kind = FENG_ANNOTATION_FRIEND;
+        annotation->argument_kind = FENG_ANNOTATION_ARGUMENT_TYPE;
+        annotation->type_args = calloc(symbol_decl->friend_type_count, sizeof(*annotation->type_args));
+        if (annotation->type_args == NULL) {
+            free_synthetic_annotations(annotations, total_count);
+            return false;
+        }
+        for (size_t i = 0U; i < symbol_decl->friend_type_count; ++i) {
+            annotation->type_args[i] = synthesize_type_ref(symbol_decl->friend_types[i]);
+            if (annotation->type_args[i] == NULL) {
+                free_synthetic_annotations(annotations, total_count);
+                return false;
+            }
+            ++annotation->arg_count;
+        }
+    }
     *out_annotations = annotations;
     *out_count = total_count;
     return true;
@@ -1417,6 +1441,11 @@ static void entry_free_partial(SynthModuleEntry *entry) {
     free(entry->segments);
 }
 
+/* Semantic owns the restoration timing; later Codegen callers reuse the facts. */
+static bool imported_populate_semantic_metadata(const void *user, FengSemanticAnalysis *analysis) {
+    return feng_symbol_imported_module_cache_populate_codegen_metadata((FengSymbolImportedModuleCache *)user, analysis);
+}
+
 static const FengSemanticModule *cache_get_module(const void *user,
                                                   const FengSlice *segments,
                                                   size_t segment_count) {
@@ -1520,8 +1549,11 @@ static const FengSemanticModule *cache_get_module(const void *user,
     entry.sem_mod.program_count = 1U;
     entry.sem_mod.program_capacity = 1U;
     entry.sem_mod.origin = FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE;
+    entry.sem_mod.package_identity = feng_symbol_module_package_identity(imp_mod);
     entry.sem_mod.exception_metadata_user = entry.prog;
     entry.sem_mod.get_exception_template = imported_exception_template;
+    entry.sem_mod.semantic_metadata_user = cache;
+    entry.sem_mod.populate_semantic_metadata = imported_populate_semantic_metadata;
 
     appended = cache_append(cache, &entry);
     if (appended == NULL) {
@@ -1933,7 +1965,9 @@ static const SynthDecl *cache_find_synth_type_for_view(
         const FengSymbolDeclView *candidate_symbol = candidate->symbol_view;
 
         if (candidate_symbol != NULL &&
-            candidate_symbol->kind == FENG_SYMBOL_DECL_KIND_TYPE &&
+            (candidate_symbol->kind == FENG_SYMBOL_DECL_KIND_TYPE ||
+             candidate_symbol->kind == FENG_SYMBOL_DECL_KIND_SPEC ||
+             candidate_symbol->kind == FENG_SYMBOL_DECL_KIND_ENUM) &&
             candidate_symbol->name != NULL &&
             strcmp(candidate_symbol->name,
                    segments[segment_count - 1U]) == 0 &&
@@ -1942,6 +1976,65 @@ static const SynthDecl *cache_find_synth_type_for_view(
         }
     }
     return NULL;
+}
+
+/* Bind provider-owned references by their symbol identity, including private
+ * representation dependencies. This never changes consumer name lookup. */
+static void bind_imported_type_identity(FengSymbolImportedModuleCache *cache,
+    FengTypeRef *ref, const FengSymbolTypeView *type) {
+    if (ref == NULL || type == NULL) return;
+    if (type->kind == FENG_SYMBOL_TYPE_KIND_NAMED || type->kind == FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC) {
+        const SynthDecl *target = cache_find_synth_type_for_view(cache, type);
+        if (target != NULL) ref->resolution_decl = &target->decl;
+        if (type->kind == FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC) {
+            for (size_t i = 0U; i < ref->as.named.type_arg_count; ++i) {
+                bind_imported_type_identity(cache, ref->as.named.type_args[i], type->as.named_generic.type_args[i]);
+            }
+        }
+    } else if (type->kind == FENG_SYMBOL_TYPE_KIND_POINTER) {
+        bind_imported_type_identity(cache, ref->as.inner, type->as.pointer.inner);
+    } else if (type->kind == FENG_SYMBOL_TYPE_KIND_ARRAY) {
+        for (size_t i = 0U; ref != NULL && i < type->as.array.rank; ++i) ref = ref->as.inner;
+        bind_imported_type_identity(cache, ref, type->as.array.element);
+    }
+}
+
+/* Restore one dependency type together with its provider declaration identity. */
+static FengTypeRef *synthesize_bound_dependency_type(
+    FengSymbolImportedModuleCache *cache, const FengSymbolTypeView *type) {
+    FengTypeRef *ref = synthesize_type_ref(type);
+    bind_imported_type_identity(cache, ref, type);
+    return ref;
+}
+
+/* Restore parameter-bound signatures in the same declaration domain as FT. */
+static void bind_imported_callable_identity(FengSymbolImportedModuleCache *cache,
+    FengCallableSignature *callable, const FengSymbolDeclView *symbol) {
+    bind_imported_type_identity(cache, callable->return_type, symbol->return_type);
+    for (size_t i = 0U; i < callable->param_count; ++i) {
+        bind_imported_type_identity(cache, callable->params[i].type, symbol->params[i].type);
+    }
+    size_t parameter = 0U;
+    for (size_t i = 0U; i < symbol->member_count; ++i) {
+        const FengSymbolDeclView *child = symbol->members[i];
+        if (child->kind == FENG_SYMBOL_DECL_KIND_TYPE_PARAM && parameter < callable->type_param_count) {
+            bind_imported_type_identity(cache, callable->type_params[parameter++].constraint, child->value_type);
+        }
+    }
+}
+
+/* Fields and methods share one provider-owned annotation/signature binding. */
+static void bind_imported_member_identity(FengSymbolImportedModuleCache *cache,
+    FengTypeMember *member, const FengSymbolDeclView *symbol) {
+    if (member->kind == FENG_TYPE_MEMBER_FIELD) bind_imported_type_identity(cache, member->as.field.type, symbol->value_type);
+    else bind_imported_callable_identity(cache, &member->as.callable, symbol);
+    for (size_t a = 0U; a < member->annotation_count; ++a) {
+        FengAnnotation *annotation = &member->annotations[a];
+        if (annotation->builtin_kind != FENG_ANNOTATION_FRIEND) continue;
+        for (size_t i = 0U; i < annotation->arg_count; ++i) {
+            bind_imported_type_identity(cache, annotation->type_args[i], symbol->friend_types[i]);
+        }
+    }
 }
 
 /* Map one top-level or immediate member symbol back to its synthesized AST
@@ -2099,9 +2192,44 @@ static void record_imported_symbol_identities(
     }
 }
 
+/* Restore selected accesses into the same member-owned Semantic records. */
+static bool restore_imported_friend_fit_accesses(
+    FengSymbolImportedModuleCache *cache,
+    FengSemanticAnalysis *analysis,
+    SynthDecl *storage_owner,
+    const FengDecl *owner_decl,
+    const FengTypeMember *owner_member,
+    const FengSymbolDeclView *symbol_view) {
+    if (analysis == NULL || storage_owner == NULL || owner_decl == NULL ||
+        symbol_view == NULL || symbol_view->friend_fit_access_count == 0U) {
+        return true;
+    }
+    size_t index;
+
+    for (index = 0U; index < symbol_view->friend_fit_access_count; ++index) {
+        const FengSymbolMemberUseView *use = &symbol_view->friend_fit_accesses[index];
+        const FengSymbolDeclView *target = cache_find_symbol_by_identity(cache, use->target_module_name, use->target_symbol_id);
+        const FengDecl *target_decl = NULL;
+        const FengTypeMember *target_member = NULL;
+        if (target == NULL || !cache_find_ast_callable_for_symbol(cache, target, &target_decl, &target_member) ||
+            target_member == NULL || target->friend_type_count == 0U ||
+            !feng_symbol_internal_member_owner_matches(target, use->owner_instance_type,
+                                                       use->target_module_name)) return false;
+        FengTypeRef *instance = synthesize_bound_dependency_type(cache, use->owner_instance_type);
+        if (instance == NULL) return false;
+        if (!append_imported_reifiable_dep_ref(storage_owner, instance)) {
+            free_synthetic_type_ref(instance);
+            return false;
+        }
+        if (!feng_semantic_record_friend_fit_access(analysis, owner_decl, owner_member,
+                target_decl, target_member, instance)) return false;
+    }
+    return true;
+}
+
 /* Restore aggregate and managed dependency views for one declaration or
  * callable member into the semantic side table. */
-static void restore_imported_reifiable_deps(
+static bool restore_imported_reifiable_deps(
     FengSymbolImportedModuleCache *cache,
     FengSemanticAnalysis *analysis,
     SynthDecl *storage_owner,
@@ -2116,7 +2244,7 @@ static void restore_imported_reifiable_deps(
         (symbol_view->reifiable_agg_dep_count == 0U &&
          symbol_view->reifiable_type_dep_count == 0U &&
          symbol_view->reifiable_callable_dep_count == 0U)) {
-        return;
+        return true;
     }
 
     dep_set = owner_member != NULL
@@ -2125,11 +2253,11 @@ static void restore_imported_reifiable_deps(
                   : feng_semantic_get_or_create_reifiable_dep_set(
                         analysis, owner_decl);
     if (dep_set == NULL) {
-        return;
+        return false;
     }
 
     for (index = 0U; index < symbol_view->reifiable_agg_dep_count; ++index) {
-        FengTypeRef *ref = synthesize_type_ref(
+        FengTypeRef *ref = synthesize_bound_dependency_type(cache,
             symbol_view->reifiable_agg_deps[index]);
 
         if (ref == NULL) {
@@ -2144,7 +2272,7 @@ static void restore_imported_reifiable_deps(
     }
 
     for (index = 0U; index < symbol_view->reifiable_type_dep_count; ++index) {
-        FengTypeRef *ref = synthesize_type_ref(
+        FengTypeRef *ref = synthesize_bound_dependency_type(cache,
             symbol_view->reifiable_type_deps[index]);
 
         if (ref == NULL) {
@@ -2244,7 +2372,7 @@ static void restore_imported_reifiable_deps(
             continue;
         }
 
-        owner_instance_ref = synthesize_type_ref(
+        owner_instance_ref = synthesize_bound_dependency_type(cache,
             dependency->owner_instance_type);
         if (dependency->owner_instance_type != NULL &&
             owner_instance_ref == NULL) {
@@ -2257,7 +2385,7 @@ static void restore_imported_reifiable_deps(
             continue;
         }
         resolved.owner_instance_type_ref = owner_instance_ref;
-        target_callable_ref = synthesize_type_ref(
+        target_callable_ref = synthesize_bound_dependency_type(cache,
             dependency->target_callable_type);
         if (dependency->target_callable_type != NULL &&
             target_callable_ref == NULL) {
@@ -2279,7 +2407,7 @@ static void restore_imported_reifiable_deps(
             for (arg_index = 0U;
                  arg_index < dependency->callable_type_arg_count;
                  ++arg_index) {
-                FengTypeRef *arg_ref = synthesize_type_ref(
+                FengTypeRef *arg_ref = synthesize_bound_dependency_type(cache,
                     dependency->callable_type_args[arg_index]);
 
                 if (dependency->callable_type_args[arg_index] != NULL &&
@@ -2313,12 +2441,14 @@ static void restore_imported_reifiable_deps(
                 dep_set, &resolved);
         }
     }
+    return true;
 }
 
 /* Synthesize and retain one projection type in the imported module lifetime. */
-static const FengTypeRef *restore_union_projection_type(SynthDecl *owner,
+static const FengTypeRef *restore_union_projection_type(FengSymbolImportedModuleCache *cache,
+                                                       SynthDecl *owner,
                                                        const FengSymbolTypeView *type) {
-    FengTypeRef *ref = synthesize_type_ref(type);
+    FengTypeRef *ref = synthesize_bound_dependency_type(cache, type);
     if (ref != NULL && !append_imported_reifiable_dep_ref(owner, ref)) {
         free_synthetic_type_ref(ref);
         return NULL;
@@ -2328,7 +2458,8 @@ static const FengTypeRef *restore_union_projection_type(SynthDecl *owner,
 
 /* Restore the wire's open slot order without close-time filtering. Missing
  * metadata is a restoration failure, never an implicitly empty runtime table. */
-static bool restore_imported_union_projections(FengSemanticAnalysis *analysis,
+static bool restore_imported_union_projections(FengSymbolImportedModuleCache *cache,
+    FengSemanticAnalysis *analysis,
                                                 SynthDecl *storage,
                                                 const FengDecl *owner,
                                                 const FengTypeMember *member,
@@ -2343,9 +2474,9 @@ static bool restore_imported_union_projections(FengSemanticAnalysis *analysis,
     for (size_t index = 0U; index < symbol->reifiable_union_projection_count; ++index) {
         const FengSymbolUnionProjectionView *view = &symbol->reifiable_union_projections[index];
         FengUnionProjectionDep projection = {0};
-        projection.subject_type_ref = restore_union_projection_type(storage, view->subject_type);
-        projection.constraint_type_ref = restore_union_projection_type(storage, view->constraint_type);
-        projection.result_type_ref = restore_union_projection_type(storage, view->result_type);
+        projection.subject_type_ref = restore_union_projection_type(cache, storage, view->subject_type);
+        projection.constraint_type_ref = restore_union_projection_type(cache, storage, view->constraint_type);
+        projection.result_type_ref = restore_union_projection_type(cache, storage, view->result_type);
         projection.binding_mutability = view->binding_mutability;
         if (projection.subject_type_ref == NULL || projection.constraint_type_ref == NULL ||
             (view->result_type != NULL && projection.result_type_ref == NULL)) {
@@ -2358,7 +2489,7 @@ static bool restore_imported_union_projections(FengSemanticAnalysis *analysis,
         projection.path_count = view->path_count;
         bool valid = true;
         for (size_t step = 0U; valid && step < view->path_count; ++step) {
-            projection.path[step] = restore_union_projection_type(storage, view->path[step]);
+            projection.path[step] = restore_union_projection_type(cache, storage, view->path[step]);
             valid = projection.path[step] != NULL;
         }
         valid = valid && feng_semantic_reifiable_dep_set_append_union_projection(set, &projection) &&
@@ -2372,7 +2503,8 @@ static bool restore_imported_union_projections(FengSemanticAnalysis *analysis,
 }
 
 /* Restore canonical open view pairs in wire order, preserving stable slots. */
-static bool restore_imported_spec_view_coercions(FengSemanticAnalysis *analysis,
+static bool restore_imported_spec_view_coercions(FengSymbolImportedModuleCache *cache,
+    FengSemanticAnalysis *analysis,
     SynthDecl *storage, const FengDecl *owner, const FengTypeMember *member,
     const FengSymbolDeclView *symbol) {
     if (symbol->reifiable_spec_view_coercion_count == 0U) return true;
@@ -2381,8 +2513,8 @@ static bool restore_imported_spec_view_coercions(FengSemanticAnalysis *analysis,
     for (size_t i = 0U; i < symbol->reifiable_spec_view_coercion_count; ++i) {
         const FengSymbolSpecViewCoercionView *view = &symbol->reifiable_spec_view_coercions[i];
         FengSpecViewCoercionDep pair = {
-            restore_union_projection_type(storage, view->source_type),
-            restore_union_projection_type(storage, view->target_type)
+            restore_union_projection_type(cache, storage, view->source_type),
+            restore_union_projection_type(cache, storage, view->target_type)
         };
         if (!feng_semantic_reifiable_dep_set_append_spec_view_coercion(set, &pair) ||
             feng_semantic_spec_view_coercion_slot(set, &pair) != i) return false;
@@ -2391,7 +2523,8 @@ static bool restore_imported_spec_view_coercions(FengSemanticAnalysis *analysis,
 }
 
 /* Restore canonical open constraint pairs in wire order, preserving stable slots. */
-static bool restore_imported_constraint_projections(FengSemanticAnalysis *analysis,
+static bool restore_imported_constraint_projections(FengSymbolImportedModuleCache *cache,
+    FengSemanticAnalysis *analysis,
     SynthDecl *storage, const FengDecl *owner, const FengTypeMember *member,
     const FengSymbolDeclView *symbol) {
     if (symbol->reifiable_constraint_projection_count == 0U) return true;
@@ -2400,13 +2533,26 @@ static bool restore_imported_constraint_projections(FengSemanticAnalysis *analys
     for (size_t i = 0U; i < symbol->reifiable_constraint_projection_count; ++i) {
         const FengSymbolConstraintProjectionView *view = &symbol->reifiable_constraint_projections[i];
         FengConstraintProjectionDep pair = {
-            restore_union_projection_type(storage, view->source_type),
-            restore_union_projection_type(storage, view->target_type)
+            restore_union_projection_type(cache, storage, view->source_type),
+            restore_union_projection_type(cache, storage, view->target_type)
         };
         if (!feng_semantic_reifiable_dep_set_append_constraint_projection(set, &pair) ||
             feng_semantic_constraint_projection_slot(set, &pair) != i) return false;
     }
     return true;
+}
+
+/* Cache entries outlive individual analyses; only the current module graph
+ * owns metadata slots in this analysis. */
+static bool imported_program_is_in_analysis(const FengSemanticAnalysis *analysis,
+                                            const FengProgram *program) {
+    for (size_t i = 0U; i < analysis->module_count; ++i) {
+        const FengSemanticModule *module = &analysis->modules[i];
+        for (size_t p = 0U; p < module->program_count; ++p) {
+            if (module->programs[p] == program) return true;
+        }
+    }
+    return false;
 }
 
 /* Restore imported codegen facts in the semantic side-table abstraction. */
@@ -2418,13 +2564,16 @@ bool feng_symbol_imported_module_cache_populate_codegen_metadata(
     if (cache == NULL || analysis == NULL) {
         return false;
     }
+    for (size_t i = 0U; i < analysis->imported_metadata_source_count; ++i) {
+        if (analysis->imported_metadata_sources[i] == cache) return true;
+    }
     for (ei = 0U; ei < cache->entry_count; ++ei) {
         SynthModuleEntry *entry = cache->entries[ei];
         SynthProgram *program = entry->prog;
         char *module_name;
         size_t di;
 
-        if (program == NULL) {
+        if (program == NULL || !imported_program_is_in_analysis(analysis, &program->program)) {
             continue;
         }
         module_name = imported_module_name_dup(entry);
@@ -2442,13 +2591,14 @@ bool feng_symbol_imported_module_cache_populate_codegen_metadata(
             if (sv == NULL) {
                 continue;
             }
+            if (sd->decl.kind == FENG_DECL_FUNCTION) bind_imported_callable_identity(cache, &sd->decl.as.function_decl, sv);
             record_imported_symbol_identities(
                 analysis, sd, module_name);
-            restore_imported_reifiable_deps(
-                cache, analysis, sd, &sd->decl, NULL, sv);
-            if (!restore_imported_union_projections(analysis, sd, &sd->decl, NULL, sv) ||
-                !restore_imported_spec_view_coercions(analysis, sd, &sd->decl, NULL, sv) ||
-                !restore_imported_constraint_projections(analysis, sd, &sd->decl, NULL, sv)) {
+            if (!restore_imported_friend_fit_accesses(cache, analysis, sd, &sd->decl, NULL, sv) ||
+                !restore_imported_reifiable_deps(cache, analysis, sd, &sd->decl, NULL, sv) ||
+                !restore_imported_union_projections(cache, analysis, sd, &sd->decl, NULL, sv) ||
+                !restore_imported_spec_view_coercions(cache, analysis, sd, &sd->decl, NULL, sv) ||
+                !restore_imported_constraint_projections(cache, analysis, sd, &sd->decl, NULL, sv)) {
                 free(module_name);
                 return false;
             }
@@ -2459,6 +2609,10 @@ bool feng_symbol_imported_module_cache_populate_codegen_metadata(
             } else if (sd->decl.kind == FENG_DECL_FIT) {
                 ast_members = sd->decl.as.fit_decl.members;
                 ast_member_count = sd->decl.as.fit_decl.member_count;
+                bind_imported_type_identity(cache, sd->decl.as.fit_decl.target, sv->fit_target);
+            } else if (sd->decl.kind == FENG_DECL_SPEC && sd->decl.as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+                ast_members = sd->decl.as.spec_decl.as.object.members;
+                ast_member_count = sd->decl.as.spec_decl.as.object.member_count;
             } else {
                 continue;
             }
@@ -2481,19 +2635,22 @@ bool feng_symbol_imported_module_cache_populate_codegen_metadata(
                 if (ast_member_index >= ast_member_count) {
                     break;
                 }
+                bind_imported_member_identity(cache, ast_members[ast_member_index], member_view);
                 if (member_view->kind == FENG_SYMBOL_DECL_KIND_METHOD) {
-                    restore_imported_reifiable_deps(
+                    if (!restore_imported_friend_fit_accesses(cache, analysis, sd, &sd->decl,
+                            ast_members[ast_member_index], member_view) ||
+                        !restore_imported_reifiable_deps(
                         cache,
                         analysis,
                         sd,
                         &sd->decl,
                         ast_members[ast_member_index],
-                        member_view);
-                    if (!restore_imported_union_projections(analysis, sd, &sd->decl,
+                        member_view) ||
+                        !restore_imported_union_projections(cache, analysis, sd, &sd->decl,
                             ast_members[ast_member_index], member_view) ||
-                        !restore_imported_spec_view_coercions(analysis, sd, &sd->decl,
+                        !restore_imported_spec_view_coercions(cache, analysis, sd, &sd->decl,
                             ast_members[ast_member_index], member_view) ||
-                !restore_imported_constraint_projections(analysis, sd, &sd->decl,
+                !restore_imported_constraint_projections(cache, analysis, sd, &sd->decl,
                             ast_members[ast_member_index], member_view)) {
                         free(module_name);
                         return false;
@@ -2505,5 +2662,10 @@ bool feng_symbol_imported_module_cache_populate_codegen_metadata(
         free(module_name);
     }
     populate_imported_intersection_infos(cache, analysis);
+    const void **sources = realloc(analysis->imported_metadata_sources,
+        (analysis->imported_metadata_source_count + 1U) * sizeof(*sources));
+    if (sources == NULL) return false;
+    analysis->imported_metadata_sources = sources;
+    sources[analysis->imported_metadata_source_count++] = cache;
     return true;
 }

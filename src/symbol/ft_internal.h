@@ -257,15 +257,28 @@ typedef struct FengSymbolFtSpanRecord {
     uint32_t end_column;
 } FengSymbolFtSpanRecord;
 
+/* Owned selection array borrowing declarations from one complete package graph. */
+typedef struct FengSymbolFtSelection {
+    const FengSymbolDeclView **decls;
+    size_t count;
+} FengSymbolFtSelection;
+
+/* Compute the shared package closure before splitting it into module files. */
+bool feng_symbol_ft_select_package(const FengSymbolGraph *graph,
+                                   FengSymbolFtSelection *selection,
+                                   FengSymbolError *out_error);
+
+/* Write one module, optionally using an already computed package selection. */
 bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
                                           FengSymbolProfile profile,
+                                          const FengSymbolFtSelection *selection,
                                           const char *path,
                                           FengSymbolError *out_error);
 
 /* Run the exact package-public writer selection and return its non-NULL
  * source identities without serializing an FT file. */
 bool feng_symbol_ft_collect_package_source_nodes(
-    const FengSymbolModuleGraph *module,
+    const FengSymbolGraph *graph,
     const void ***out_source_nodes,
     size_t *out_source_node_count,
     FengSymbolError *out_error);

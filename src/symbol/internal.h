@@ -31,7 +31,10 @@ typedef enum FengSymbolAttrKind {
     FENG_SYMBOL_ATTR_UNION_PROJECTION_COUNT = 13,
     FENG_SYMBOL_ATTR_SPEC_VIEW_COERCION_COUNT = 14,
     FENG_SYMBOL_ATTR_CONSTRAINT_PROJECTION_COUNT = 15,
-    FENG_SYMBOL_ATTR_BUILTIN_CONSTRAINT = 16
+    FENG_SYMBOL_ATTR_BUILTIN_CONSTRAINT = 16,
+    FENG_SYMBOL_ATTR_FRIEND_TYPE = 17,
+    FENG_SYMBOL_ATTR_RETIRED_TYPE_CHECK = 18,
+    FENG_SYMBOL_ATTR_FRIEND_FIT_ACCESS = 19
 } FengSymbolAttrKind;
 
 typedef struct FengSymbolParamView {
@@ -89,6 +92,15 @@ typedef struct FengSymbolConstraintProjectionView {
     FengSymbolTypeView *source_type;
     FengSymbolTypeView *target_type;
 } FengSymbolConstraintProjectionView;
+
+/* A selected member reference with an owner binding, scoped by its lexical user. */
+typedef struct FengSymbolMemberUseView {
+    char *target_module_name;
+    uint32_t target_symbol_id;
+    const void *target_source_node;
+    struct FengSymbolDeclView *local_target_decl;
+    FengSymbolTypeView *owner_instance_type;
+} FengSymbolMemberUseView;
 
 struct FengSymbolTypeView {
     FengSymbolTypeKind kind;
@@ -156,6 +168,11 @@ struct FengSymbolDeclView {
     size_t param_count;
     FengSymbolTypeView **declared_specs;
     size_t declared_spec_count;
+    /* Restricted interfaces and the serialized projection of selected accesses. */
+    FengSymbolTypeView **friend_types;
+    size_t friend_type_count;
+    FengSymbolMemberUseView *friend_fit_accesses;
+    size_t friend_fit_access_count;
     FengSymbolTypeView **union_members;
     size_t union_member_count;
     FengSymbolTypeView **intersection_members;
@@ -218,10 +235,17 @@ struct FengSymbolFitView {
     const FengSymbolDeclView *decl;
 };
 
+/* Shared compile-time provenance for modules loaded from one registered package. */
+typedef struct FengSymbolPackageIdentity {
+    size_t reference_count;
+    char *source_key;
+} FengSymbolPackageIdentity;
+
 struct FengSymbolImportedModule {
     FengSymbolModuleGraph *module;
     FengSymbolProfile profile;
     char *source_path;
+    FengSymbolPackageIdentity *package_identity;
     FengSymbolFitView *fits;
     size_t fit_count;
 };
@@ -245,6 +269,10 @@ uint64_t feng_symbol_internal_fnv1a64(const void *data, size_t length);
 uint64_t feng_symbol_internal_fnv1a64_extend(uint64_t seed, const void *data, size_t length);
 
 void feng_symbol_internal_type_free(FengSymbolTypeView *type);
+/* Validate the complete instance belonging to a selected member's owner. */
+bool feng_symbol_internal_member_owner_matches(const FengSymbolDeclView *member,
+                                               const FengSymbolTypeView *instance,
+                                               const char *module_name);
 void feng_symbol_internal_decl_free_members(FengSymbolDeclView *decl);
 FengSymbolTypeView *feng_symbol_internal_type_clone(const FengSymbolTypeView *type,
                                                     FengSymbolError *out_error);
@@ -255,6 +283,8 @@ FengSymbolModuleGraph *feng_symbol_internal_module_clone(const FengSymbolModuleG
                                                          FengSymbolError *out_error);
 void feng_symbol_internal_module_free(FengSymbolModuleGraph *module);
 void feng_symbol_internal_imported_module_free(FengSymbolImportedModule *module);
+/* Release one provider/module reference to package provenance. */
+void feng_symbol_internal_package_identity_release(FengSymbolPackageIdentity *identity);
 bool feng_symbol_internal_imported_module_init_fit_views(FengSymbolImportedModule *module,
                                                          FengSymbolError *out_error);
 

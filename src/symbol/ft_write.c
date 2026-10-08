@@ -22,8 +22,11 @@ typedef struct DeclIdMap {
     uint32_t id;
 } DeclIdMap;
 
+/* Serialization state, or a package-wide dependency selection before writing. */
 typedef struct WriterContext {
     const FengSymbolModuleGraph *module;
+    const FengSymbolGraph *graph;
+    const FengSymbolFtSelection *selection;
     FengSymbolProfile profile;
     StringEntry *strings;
     size_t string_count;
@@ -824,6 +827,7 @@ static bool writer_should_export_decl(FengSymbolProfile profile, const FengSymbo
      * constructor. Its serialized visibility still keeps it inaccessible to
      * package consumers. Ordinary methods remain public-surface only. */
     if (decl->kind == FENG_SYMBOL_DECL_KIND_CONSTRUCTOR) return true;
+    if (decl->kind == FENG_SYMBOL_DECL_KIND_METHOD && decl->friend_type_count > 0U) return true;
     if (decl->kind == FENG_SYMBOL_DECL_KIND_METHOD &&
         decl->visibility != FENG_VISIBILITY_PRIVATE) return true;
     /* A seal mixable static method is a package capability fact, not a
@@ -891,7 +895,7 @@ static bool writer_select_initial_tree(WriterContext *ctx,
     return true;
 }
 
-/* Select declaration skeleton members required by codegen. */
+/* Preserve layout and declaration checks in a private dependency skeleton. */
 static bool writer_select_skeleton_members(WriterContext *ctx,
                                            const FengSymbolDeclView *decl,
                                            const char *path,
@@ -901,7 +905,8 @@ static bool writer_select_skeleton_members(WriterContext *ctx,
     for (index = 0U; index < decl->member_count; ++index) {
         const FengSymbolDeclView *member = decl->members[index];
         bool required = member != NULL &&
-                        member->kind == FENG_SYMBOL_DECL_KIND_TYPE_PARAM;
+                        (member->kind == FENG_SYMBOL_DECL_KIND_TYPE_PARAM ||
+                         member->friend_type_count > 0U);
 
         if (decl->kind == FENG_SYMBOL_DECL_KIND_TYPE) {
             required = required ||
@@ -925,7 +930,45 @@ static bool writer_select_skeleton_members(WriterContext *ctx,
     return true;
 }
 
-/* Select local type-like declarations referenced by one type node. */
+/* Find the original module root of a selected declaration. */
+static const FengSymbolDeclView *writer_decl_root(const FengSymbolDeclView *decl) {
+    while (decl != NULL && decl->owner != NULL) decl = decl->owner;
+    return decl;
+}
+
+/* Resolve qualified dependency names only inside the current package graph. */
+static const FengSymbolDeclView *writer_package_type_target(const WriterContext *ctx,
+                                                            const FengSymbolTypeView *type) {
+    if (type->target_decl != NULL) return type->target_decl;
+    if (ctx->graph == NULL || (type->kind != FENG_SYMBOL_TYPE_KIND_NAMED &&
+        type->kind != FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC)) return NULL;
+    bool generic = type->kind == FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC;
+    char *const *segments = generic ? type->as.named_generic.segments : type->as.named.segments;
+    size_t count = generic ? type->as.named_generic.segment_count : type->as.named.segment_count;
+    size_t arity = generic ? type->as.named_generic.type_arg_count : 0U;
+    for (size_t i = 0U; i < ctx->graph->module_count; ++i) {
+        const FengSymbolModuleGraph *module = ctx->graph->modules[i];
+        if (count != module->segment_count + 1U) continue;
+        size_t segment = 0U;
+        while (segment < module->segment_count && strcmp(segments[segment], module->segments[segment]) == 0) ++segment;
+        if (segment != module->segment_count) continue;
+        for (size_t j = 0U; j < module->root_decl.member_count; ++j) {
+            const FengSymbolDeclView *decl = module->root_decl.members[j];
+            if ((decl->kind == FENG_SYMBOL_DECL_KIND_TYPE || decl->kind == FENG_SYMBOL_DECL_KIND_ENUM ||
+                 decl->kind == FENG_SYMBOL_DECL_KIND_SPEC) && decl->type_param_count == arity &&
+                strcmp(decl->name, segments[count - 1U]) == 0) return decl;
+        }
+    }
+    return NULL;
+}
+
+/* Type dependencies reuse the same owner-chain selection as callable dependencies. */
+static bool writer_select_decl_with_owners(WriterContext *ctx,
+                                           const FengSymbolDeclView *decl,
+                                           const char *path,
+                                           FengSymbolError *out_error);
+
+/* Select type identities and their representation dependencies across modules. */
 static bool writer_select_type_dependencies(WriterContext *ctx,
                                             const FengSymbolTypeView *type,
                                             const char *path,
@@ -935,12 +978,13 @@ static bool writer_select_type_dependencies(WriterContext *ctx,
     if (type == NULL) {
         return true;
     }
-    if (type->target_decl != NULL &&
-        type->target_decl->owner == &ctx->module->root_decl &&
-        (type->target_decl->kind == FENG_SYMBOL_DECL_KIND_TYPE ||
-         type->target_decl->kind == FENG_SYMBOL_DECL_KIND_ENUM ||
-         type->target_decl->kind == FENG_SYMBOL_DECL_KIND_SPEC) &&
-        !writer_select_decl(ctx, type->target_decl, path, out_error)) {
+    const FengSymbolDeclView *target = writer_package_type_target(ctx, type);
+    if (target != NULL &&
+        (ctx->graph != NULL || target->owner == &ctx->module->root_decl) &&
+        (target->kind == FENG_SYMBOL_DECL_KIND_TYPE ||
+         target->kind == FENG_SYMBOL_DECL_KIND_ENUM ||
+         target->kind == FENG_SYMBOL_DECL_KIND_SPEC) &&
+        !writer_select_decl_with_owners(ctx, target, path, out_error)) {
         return false;
     }
     switch (type->kind) {
@@ -977,10 +1021,10 @@ static bool writer_select_type_dependencies(WriterContext *ctx,
     }
 }
 
-/* Select one local callable dependency together with its owner chain so the
- * target keeps a valid declaration hierarchy even when it is non-public. */
+/* Select one dependency together with its owner chain so the target keeps a
+ * valid declaration hierarchy even when it is non-public. */
 static bool writer_select_decl_with_owners(WriterContext *ctx,
-                                           FengSymbolDeclView *decl,
+                                           const FengSymbolDeclView *decl,
                                            const char *path,
                                            FengSymbolError *out_error) {
     if (decl == NULL) {
@@ -991,6 +1035,39 @@ static bool writer_select_decl_with_owners(WriterContext *ctx,
         return false;
     }
     return writer_select_decl(ctx, decl, path, out_error);
+}
+
+/* Locate a stable symbol id inside its original module declaration tree. */
+static const FengSymbolDeclView *writer_symbol_by_id(const FengSymbolDeclView *decl, uint32_t id) {
+    if (decl->ft_symbol_id == id) return decl;
+    for (size_t i = 0U; i < decl->member_count; ++i) {
+        const FengSymbolDeclView *found = writer_symbol_by_id(decl->members[i], id);
+        if (found != NULL) return found;
+    }
+    return NULL;
+}
+
+/* Resolve cross-module callable/member dependencies without copying foreign packages. */
+static const FengSymbolDeclView *writer_package_member_target(const WriterContext *ctx,
+    const FengSymbolDeclView *local, const char *module_name, uint32_t symbol_id) {
+    if (local != NULL || ctx->graph == NULL || module_name == NULL || symbol_id == 0U) return local;
+    for (size_t i = 0U; i < ctx->graph->module_count; ++i) {
+        const FengSymbolModuleGraph *module = ctx->graph->modules[i];
+        const char *cursor = module_name;
+        size_t segment = 0U;
+        for (; segment < module->segment_count; ++segment) {
+            size_t length = strlen(module->segments[segment]);
+            if (strncmp(cursor, module->segments[segment], length) != 0) break;
+            cursor += length;
+            if (segment + 1U < module->segment_count) {
+                if (*cursor != '.') break;
+                ++cursor;
+            }
+        }
+        if (segment == module->segment_count && *cursor == '\0')
+            return writer_symbol_by_id(&module->root_decl, symbol_id);
+    }
+    return NULL;
 }
 
 /* Expand the dependency closure from every type surface of a selected declaration. */
@@ -1021,6 +1098,15 @@ static bool writer_select_decl_dependencies(WriterContext *ctx,
                                              out_error)) {
             return false;
         }
+    }
+    for (index = 0U; index < decl->friend_type_count; ++index) {
+        if (!writer_select_type_dependencies(ctx, decl->friend_types[index], path, out_error)) return false;
+    }
+    for (index = 0U; index < decl->friend_fit_access_count; ++index) {
+        const FengSymbolMemberUseView *use = &decl->friend_fit_accesses[index];
+        if (!writer_select_type_dependencies(ctx, use->owner_instance_type, path, out_error) ||
+            !writer_select_decl_with_owners(ctx, writer_package_member_target(ctx, use->local_target_decl,
+                use->target_module_name, use->target_symbol_id), path, out_error)) return false;
     }
     for (index = 0U; index < decl->union_member_count; ++index) {
         if (!writer_select_type_dependencies(ctx,
@@ -1083,9 +1169,9 @@ static bool writer_select_decl_dependencies(WriterContext *ctx,
             &decl->reifiable_callable_deps[index];
         size_t arg_index;
 
-        if (dependency->local_target_decl != NULL &&
-            !writer_select_decl_with_owners(
-                ctx, dependency->local_target_decl, path, out_error)) {
+        if (!writer_select_decl_with_owners(ctx,
+                writer_package_member_target(ctx, dependency->local_target_decl,
+                    dependency->target_module_name, dependency->target_symbol_id), path, out_error)) {
             return false;
         }
         if (!writer_select_type_dependencies(ctx,
@@ -1182,6 +1268,14 @@ static bool writer_prepare_decl_ids(WriterContext *ctx,
     size_t index;
     uint32_t next_id = 1U;
 
+    if (ctx->selection != NULL) {
+        for (index = 0U; index < ctx->selection->count; ++index) {
+            const FengSymbolDeclView *decl = ctx->selection->decls[index];
+            if (writer_decl_root(decl) == &ctx->module->root_decl &&
+                !writer_select_decl(ctx, decl, path, out_error)) return false;
+        }
+        return writer_assign_decl_ids(ctx, &ctx->module->root_decl, &next_id, path, out_error);
+    }
     if (!writer_select_initial_tree(ctx,
                                     &ctx->module->root_decl,
                                     path,
@@ -1203,49 +1297,74 @@ static bool writer_prepare_decl_ids(WriterContext *ctx,
                                   out_error);
 }
 
+/* A monotone worklist shares the writer's dependency rules across the package. */
+bool feng_symbol_ft_select_package(const FengSymbolGraph *graph,
+                                   FengSymbolFtSelection *selection,
+                                   FengSymbolError *out_error) {
+    if (graph == NULL || selection == NULL) return false;
+    memset(selection, 0, sizeof(*selection));
+    WriterContext ctx = {0};
+    ctx.graph = graph;
+    ctx.profile = FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC;
+    bool ok = true;
+    for (size_t i = 0U; i < graph->module_count && ok; ++i) {
+        ctx.module = graph->modules[i];
+        if (ctx.module->visibility == FENG_VISIBILITY_PUBLIC)
+            ok = writer_select_initial_tree(&ctx, &ctx.module->root_decl, ctx.module->primary_path, out_error);
+    }
+    for (size_t i = 0U; i < ctx.decl_id_count && ok; ++i)
+        ok = writer_select_decl_dependencies(&ctx, ctx.decl_ids[i].decl, NULL, out_error);
+    if (ok && ctx.decl_id_count > 0U) {
+        selection->decls = calloc(ctx.decl_id_count, sizeof(*selection->decls));
+        if (selection->decls == NULL)
+            ok = feng_symbol_internal_set_error(out_error, NULL, (FengToken){0},
+                "out of memory selecting package declarations");
+        else {
+            selection->count = ctx.decl_id_count;
+            for (size_t i = 0U; i < selection->count; ++i) selection->decls[i] = ctx.decl_ids[i].decl;
+        }
+    }
+    free(ctx.decl_ids);
+    return ok;
+}
+
 /* Expose the writer's exact package-public closure as source identities so
  * an outer driver can adapt it to a neutral query without duplicating the
  * initial-tree or dependency-closure logic in core Codegen. */
 bool feng_symbol_ft_collect_package_source_nodes(
-    const FengSymbolModuleGraph *module,
+    const FengSymbolGraph *graph,
     const void ***out_source_nodes,
     size_t *out_source_node_count,
     FengSymbolError *out_error) {
-    WriterContext ctx;
+    FengSymbolFtSelection selection = {0};
     const void **source_nodes = NULL;
     size_t source_node_count = 0U;
     size_t index;
     bool ok = false;
 
-    if (module == NULL || out_source_nodes == NULL ||
+    if (graph == NULL || out_source_nodes == NULL ||
         out_source_node_count == NULL) {
         return false;
     }
     *out_source_nodes = NULL;
     *out_source_node_count = 0U;
-    memset(&ctx, 0, sizeof(ctx));
-    ctx.module = module;
-    ctx.profile = FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC;
-
-    if (!writer_prepare_decl_ids(&ctx,
-                                 module->primary_path,
-                                 out_error)) {
+    if (!feng_symbol_ft_select_package(graph, &selection, out_error)) {
         goto cleanup;
     }
-    if (ctx.decl_id_count > 0U) {
-        source_nodes = (const void **)calloc(ctx.decl_id_count,
+    if (selection.count > 0U) {
+        source_nodes = (const void **)calloc(selection.count,
                                              sizeof(*source_nodes));
         if (source_nodes == NULL) {
             feng_symbol_internal_set_error(
                 out_error,
-                module->primary_path,
-                module->root_decl.token,
+                NULL,
+                (FengToken){0},
                 "out of memory collecting package-public source declarations");
             goto cleanup;
         }
     }
-    for (index = 0U; index < ctx.decl_id_count; ++index) {
-        const void *source_node = ctx.decl_ids[index].decl->source_node;
+    for (index = 0U; index < selection.count; ++index) {
+        const void *source_node = selection.decls[index]->source_node;
 
         if (source_node != NULL) {
             source_nodes[source_node_count++] = source_node;
@@ -1258,7 +1377,7 @@ bool feng_symbol_ft_collect_package_source_nodes(
 
 cleanup:
     free(source_nodes);
-    free(ctx.decl_ids);
+    free(selection.decls);
     return ok;
 }
 
@@ -1586,6 +1705,26 @@ static bool writer_emit_decl_attrs(WriterContext *ctx,
                            out_error)) {
             return false;
         }
+    }
+    /* Compile-time facts reuse ATRS and never allocate runtime slots. */
+    for (size_t i = 0U; i < decl->friend_fit_access_count; ++i) {
+        const FengSymbolMemberUseView *use = &decl->friend_fit_accesses[i];
+        FengSymbolFtAttrRecord attr = {0};
+        attr.symbol_id = symbol_id;
+        attr.kind = FENG_SYMBOL_ATTR_FRIEND_FIT_ACCESS;
+        attr.value0 = writer_serialize_type(ctx, use->owner_instance_type, path, token, out_error);
+        attr.value1 = use->local_target_decl != NULL ? writer_find_decl_id(ctx, use->local_target_decl) : use->target_symbol_id;
+        attr.value2 = writer_intern_string(ctx, use->target_module_name, path, token, out_error);
+        if (attr.value0 == 0U || attr.value1 == 0U || attr.value2 == 0U ||
+            !append_record((void **)&ctx->attrs, &ctx->attr_count, sizeof(attr), &attr, path, token, out_error)) return false;
+    }
+    for (size_t i = 0U; i < decl->friend_type_count; ++i) {
+        FengSymbolFtAttrRecord attr = {0};
+        attr.symbol_id = symbol_id;
+        attr.kind = FENG_SYMBOL_ATTR_FRIEND_TYPE;
+        attr.value0 = writer_serialize_type(ctx, decl->friend_types[i], path, token, out_error);
+        if (attr.value0 == 0U || !append_record((void **)&ctx->attrs, &ctx->attr_count,
+                sizeof(attr), &attr, path, token, out_error)) return false;
     }
     /* 具体化 aggregate 依赖。 */
     if (decl->reifiable_agg_dep_count > 0U) {
@@ -2341,6 +2480,7 @@ static bool build_exception_section(WriterContext *ctx, Buffer *buffer,
 
 bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
                                           FengSymbolProfile profile,
+                                          const FengSymbolFtSelection *selection,
                                           const char *path,
                                           FengSymbolError *out_error) {
     WriterContext ctx;
@@ -2371,6 +2511,7 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
     memset(&ctx, 0, sizeof(ctx));
     ctx.module = module;
     ctx.profile = profile;
+    ctx.selection = selection;
 
     if (!writer_prepare_decl_ids(&ctx, path, out_error) ||
         !writer_collect_decl(&ctx, &module->root_decl, 0U, path, out_error) ||

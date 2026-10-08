@@ -1,0 +1,80 @@
+open module fcts_lib.friend_dependency;
+
+/** Managed payload needed by the vault's original shared implementation. */
+open type FriendSlotStorage<T> {
+  let value: T;
+  /** Preserve the actual generic value. */
+  func FriendSlotStorage(value: T) { self.value = value; }
+}
+
+/** Aggregate payload exercises the independent aggregate dependency domain. */
+@value open type FriendSlotValue<T> {
+  let value: T;
+  /** Preserve the actual generic value. */
+  func FriendSlotValue(value: T) { self.value = value; }
+}
+
+/** Authorization participates in the vault's ordinary static dependencies. */
+open type FriendSlotReader<T> {
+  /** Read the actual managed payload through the granted field. */
+  func read(vault: FriendSlotVault<T>): T { return vault.storage.value; }
+}
+
+/** Share annotation and field dependencies while retaining constructor behavior. */
+open type FriendSlotVault<T> {
+  @friend(FriendSlotReader<T>)
+  seal let storage: FriendSlotStorage<T>;
+  @friend(FriendSlotReader<T>)
+  seal let packed: FriendSlotValue<T>;
+
+  /** Both shared constructors require their original runtime descriptors. */
+  func FriendSlotVault(value: T) {
+    self.storage = FriendSlotStorage<T>(value);
+    self.packed = FriendSlotValue<T>(value);
+  }
+
+  /** A method body retains its own dependency even when the type is a friend. */
+  @friend(FriendSlotReader<T>)
+  seal func copy(value: T): T { return FriendSlotStorage<T>(value).value; }
+}
+
+/** A type used both as friend and as a field must retain its real owner slot. */
+open type FriendSlotRetained<T> {
+  @friend(FriendSlotReader<T>)
+  seal let reader: FriendSlotReader<T>;
+
+  /** Construct the real reader field in the shared body. */
+  func FriendSlotRetained() { self.reader = FriendSlotReader<T>(); }
+
+  /** Exercise the field's descriptor and ordinary method dispatch. */
+  func read(vault: FriendSlotVault<T>): T { return self.reader.read(vault); }
+}
+
+/** Count actual construction independently of static descriptor generation. */
+open var friendAnnotationConstructions: int = 0;
+
+/** Referenced by annotations; constructing an instance has an observable effect. */
+open type FriendAnnotationReader<T> {
+  /** Increment only when a value is actually constructed. */
+  func FriendAnnotationReader() {
+    friendAnnotationConstructions = friendAnnotationConstructions + 1;
+  }
+}
+
+/** Nested annotation types enter the common dependency graph. */
+open type FriendAnnotationOnly<T> {
+  @friend(FriendAnnotationReader<FriendAnnotationReader<T[]>>)
+  seal let value: int = 43;
+
+  /** Expose the owner's value without constructing an annotation argument. */
+  func read(): int { return self.value; }
+}
+
+/** Closed arguments also participate in ordinary instance registration. */
+open type FriendClosedAnnotation {
+  @friend(FriendAnnotationReader<int>)
+  seal let value: int = 47;
+
+  /** Read through the owner while its closed annotation remains metadata. */
+  func read(): int { return self.value; }
+}

@@ -22,6 +22,5 @@ bool feng_symbol_ft_write_module(const FengSymbolModuleGraph *module,
                                  FengSymbolProfile profile,
                                  const char *path,
                                  FengSymbolError *out_error) {
-    return feng_symbol_ft_write_module_internal(module, profile, path, out_error);
+    return feng_symbol_ft_write_module_internal(module, profile, NULL, path, out_error);
 }
-

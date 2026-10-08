@@ -1,0 +1,35 @@
+open module fcts_lib_middle.friend_generic;
+
+import fcts_lib.friend_generic;
+
+/** Generic code is emitted here and closed by a third package. */
+open type PackageFriendReader<T> {
+  /** Field, method, method-generic and callable accesses share the same identity. */
+  func read(vault: GenericFriendVault<PackageFriendReader<T>, T>): T {
+    let method: FriendGetter<T> = vault.read;
+    let nested: FriendGetter<T> = () -> method();
+    return vault.identity<T>(nested());
+  }
+
+  /** Static members retain their existing storage and call ABI. */
+  static func marker(): int {
+    return GenericFriendVault<PackageFriendReader<T>, T>.marker +
+      GenericFriendVault<PackageFriendReader<T>, T>.staticRead();
+  }
+
+  /** Mutate one complete owner instance's authorized static storage. */
+  static func setMarker(value: int) {
+    GenericFriendVault<PackageFriendReader<T>, T>.marker = value;
+  }
+
+  /** Authorized spec access still uses the provider-selected witness. */
+  func surface(value: GenericFriendSurface<PackageFriendReader<T>>): int {
+    let method: FriendGetter<int> = value.read;
+    return method();
+  }
+}
+
+/** Preserve a transitive body-only condition across a second package boundary. */
+open func genericFriendRelay<F, T>(value: T) {
+  genericFriendForward<F, T>(value);
+}

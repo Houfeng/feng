@@ -1,0 +1,9 @@
+open module fcts_lib_middle.friend_private;
+
+import fcts_lib.friend_private;
+
+/** Close provider-owned authorization after one further generic package boundary. */
+open func storedFriendRelay<T>(value: T): T {
+  let vault = StoredFriendVault<StoredFriendReader<T>, T>(value);
+  return StoredFriendReader<T>().read(vault);
+}

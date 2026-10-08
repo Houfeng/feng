@@ -131,6 +131,9 @@ func main(args: string[]) {
       test_generic_mixable_reification();
       test_mixable_seal();
       test_friend();
+      test_friend_generic();
+      test_friend_private();
+      test_friend_dependency();
       test_generic_factory_target_inference();
       test_generic_fit_subject();
       test_generic_spec_implementation();

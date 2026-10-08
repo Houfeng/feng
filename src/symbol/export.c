@@ -27,10 +27,6 @@ static FengMutability normalize_mutability(FengMutability mutability) {
     return mutability == FENG_MUTABILITY_VAR ? FENG_MUTABILITY_VAR : FENG_MUTABILITY_LET;
 }
 
-static bool visibility_is_public(FengVisibility visibility) {
-    return visibility == FENG_VISIBILITY_PUBLIC;
-}
-
 static bool is_horizontal_doc_space(char c) {
     return c == ' ' || c == '\t' || c == '\v' || c == '\f';
 }
@@ -1535,6 +1531,54 @@ static bool fill_intersection_members_with_tparams(const BuildContext *ctx,
     return true;
 }
 
+/* Transient serialization context; Semantic remains the access authority. */
+typedef struct FriendAccessExportContext {
+    const BuildContext *build;
+    FengSymbolDeclView *decl;
+    const FengTypeParam *type_params;
+    size_t type_param_count;
+    const char *path;
+    FengToken token;
+    FengSymbolError *error;
+} FriendAccessExportContext;
+
+/* Project one selected access into the existing FT member-use layout. */
+static bool export_friend_fit_access(void *user, const FengDecl *target_owner,
+    const FengTypeMember *target_member, const FengTypeRef *owner_instance) {
+    FriendAccessExportContext *ctx = user;
+    FengSymbolDeclView *decl = ctx->decl;
+    FengSymbolMemberUseView *grown = realloc(decl->friend_fit_accesses,
+        (decl->friend_fit_access_count + 1U) * sizeof(*grown));
+    if (grown == NULL) return feng_symbol_internal_set_error(ctx->error, ctx->path,
+        ctx->token, "out of memory exporting friend fit access");
+    decl->friend_fit_accesses = grown;
+    FengSymbolMemberUseView *use = &grown[decl->friend_fit_access_count++];
+    memset(use, 0, sizeof(*use));
+    use->target_source_node = target_member;
+    const FengImportedSymbolIdentity *identity = feng_semantic_lookup_imported_symbol_identity(
+        ctx->build->analysis, target_member);
+    const FengSemanticModule *module = find_decl_owner_module(ctx->build->analysis, target_owner);
+    use->target_module_name = identity != NULL ? feng_symbol_internal_dup_cstr(identity->module_name) :
+        module != NULL ? join_segments(module->segments, module->segment_count) : NULL;
+    use->target_symbol_id = identity != NULL ? identity->symbol_id : 0U;
+    use->owner_instance_type = build_type_from_type_ref_with_tparams(ctx->build, owner_instance,
+        ctx->type_params, ctx->type_param_count, ctx->path, ctx->token, ctx->error);
+    return use->target_module_name != NULL && use->owner_instance_type != NULL;
+}
+
+/* Export from the same records used by source and imported friend checks. */
+static bool fill_friend_fit_accesses(const BuildContext *ctx,
+    FengSymbolDeclView *decl, const FengDecl *source_decl,
+    const FengTypeMember *source_member, const FengTypeParam *type_params,
+    size_t type_param_count, const char *path, FengToken token,
+    FengSymbolError *out_error) {
+    if (source_decl->kind != FENG_DECL_FIT || source_member == NULL) return true;
+    FriendAccessExportContext access = {ctx, decl, type_params, type_param_count,
+                                      path, token, out_error};
+    return feng_semantic_visit_friend_fit_accesses(ctx->analysis, source_decl,
+        source_member, export_friend_fit_access, &access);
+}
+
 /* 从语义阶段的 FengReifiableDepSet 读取依赖，按 kind 分类填入 DeclView 的
  * reifiable_agg_deps（AGGREGATE）和 reifiable_type_deps（MANAGED）。
  * 每个依赖的 type_ref 转换为 NAMED_GENERIC 类型视图。 */
@@ -2915,12 +2959,18 @@ static FengSymbolDeclView *build_member_decl(BuildContext *ctx,
                                         member->token,
                                         out_error) ||
                 (member->kind == FENG_TYPE_MEMBER_METHOD &&
-                 !fill_reifiable_deps(ctx, decl, owner_source_decl, member,
+                 (!fill_friend_fit_accesses(ctx, decl, owner_source_decl, member,
+                                            effective_tparams,
+                                            effective_tparam_count,
+                                            path,
+                                            member->token,
+                                            out_error) ||
+                  !fill_reifiable_deps(ctx, decl, owner_source_decl, member,
                                       effective_tparams,
                                       effective_tparam_count,
                                       path,
                                       member->token,
-                                      out_error))) {
+                                      out_error)))) {
                 free(merged_tparams);
                 feng_symbol_internal_decl_free_members(decl);
                 free(decl);
@@ -2933,6 +2983,22 @@ static FengSymbolDeclView *build_member_decl(BuildContext *ctx,
 
     decl->is_static = member->is_static;
     decl->is_mixable = member->is_mixable;
+    for (size_t i = 0U; i < member->annotation_count; ++i) {
+        const FengAnnotation *annotation = &member->annotations[i];
+        if (annotation->builtin_kind != FENG_ANNOTATION_FRIEND) continue;
+        for (size_t j = 0U; j < annotation->arg_count; ++j) {
+            FengSymbolTypeView *type = build_type_from_type_ref_with_tparams(ctx,
+                annotation->type_args[j], ctx->type_params, ctx->type_param_count,
+                path, annotation->token, out_error);
+            if (type == NULL || !append_type_pointer(&decl->friend_types,
+                    &decl->friend_type_count, type, path, annotation->token, out_error)) {
+                feng_symbol_internal_type_free(type);
+                feng_symbol_internal_decl_free_members(decl);
+                free(decl);
+                return NULL;
+            }
+        }
+    }
     decl->is_spec_implementation_dependency =
         feng_semantic_member_is_package_spec_implementation_dependency(
             ctx->analysis,
@@ -3122,6 +3188,13 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                 return NULL;
             }
             decl->spec_form = source_decl->as.spec_decl.form;
+            if (!fill_reifiable_deps(ctx, decl, source_decl, NULL,
+                    source_decl->as.spec_decl.type_params, source_decl->as.spec_decl.type_param_count,
+                    path, source_decl->token, out_error)) {
+                feng_symbol_internal_decl_free_members(decl);
+                free(decl);
+                return NULL;
+            }
             if (!apply_decl_doc_comment(decl, source_decl->doc_comment, path, source_decl->token, out_error)) {
                 feng_symbol_internal_decl_free_members(decl);
                 free(decl);
@@ -3752,6 +3825,12 @@ static void bind_decl_type_targets(FengSymbolModuleGraph *graph,
     bind_type_target(graph, decl, decl->value_type);
     bind_type_target(graph, decl, decl->return_type);
     bind_type_target(graph, decl, decl->fit_target);
+    for (index = 0U; index < decl->friend_fit_access_count; ++index) {
+        bind_type_target(graph, decl, decl->friend_fit_accesses[index].owner_instance_type);
+    }
+    for (index = 0U; index < decl->friend_type_count; ++index) {
+        bind_type_target(graph, decl->owner, decl->friend_types[index]);
+    }
     for (index = 0U; index < decl->param_count; ++index) {
         bind_type_target(graph, decl, decl->params[index].type);
     }
@@ -4030,6 +4109,21 @@ static bool resolve_graph_callable_dependencies(
     size_t dep_index;
     size_t member_index;
 
+    for (dep_index = 0U; dep_index < decl->friend_fit_access_count; ++dep_index) {
+        FengSymbolMemberUseView *use = &decl->friend_fit_accesses[dep_index];
+        for (size_t m = 0U; use->target_symbol_id == 0U && m < graph->module_count; ++m) {
+            FengSymbolModuleGraph *module = graph->modules[m];
+            FengSymbolDeclView *target = find_graph_decl_by_source(&module->root_decl, use->target_source_node);
+            if (target == NULL) continue;
+            use->target_symbol_id = target->ft_symbol_id;
+            if (module == caller_module) use->local_target_decl = target;
+        }
+        if (use->target_symbol_id == 0U || use->target_module_name == NULL || use->target_module_name[0] == '\0') {
+            return feng_symbol_internal_set_error(out_error, decl->path, decl->token,
+                                                   "cannot resolve friend signature member identity");
+        }
+    }
+
     for (dep_index = 0U;
          dep_index < decl->reifiable_callable_dep_count;
          ++dep_index) {
@@ -4161,52 +4255,35 @@ bool feng_symbol_build_graph(const FengSemanticAnalysis *analysis,
     return true;
 }
 
+/* Export the shared package closure while retaining each declaration's module. */
 bool feng_symbol_export_graph(const FengSymbolGraph *graph,
                               const FengSymbolExportOptions *options,
                               FengSymbolError *out_error) {
-    size_t module_index;
-
-    if (graph == NULL || options == NULL) {
-        return false;
-    }
-
-    for (module_index = 0U; module_index < graph->module_count; ++module_index) {
-        const FengSymbolModuleGraph *module = graph->modules[module_index];
-
-        if (options->public_root != NULL && visibility_is_public(module->visibility)) {
+    if (graph == NULL || options == NULL) return false;
+    FengSymbolFtSelection selection = {0};
+    bool ok = options->public_root == NULL || feng_symbol_ft_select_package(graph, &selection, out_error);
+    for (size_t i = 0U; i < graph->module_count && ok; ++i) {
+        const FengSymbolModuleGraph *module = graph->modules[i];
+        bool selected = false;
+        for (size_t j = 0U; j < selection.count; ++j) {
+            if (selection.decls[j] == &module->root_decl) { selected = true; break; }
+        }
+        if (options->public_root != NULL && selected) {
             char *path = module_output_path(options->public_root, module, out_error);
-            if (path == NULL) {
-                return false;
-            }
-            if (!ensure_parent_dir(path, out_error) ||
-                !feng_symbol_ft_write_module(module,
-                                             FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
-                                             path,
-                                             out_error)) {
-                free(path);
-                return false;
-            }
+            ok = path != NULL && ensure_parent_dir(path, out_error) &&
+                feng_symbol_ft_write_module_internal(module, FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                    &selection, path, out_error);
             free(path);
         }
-
-        if (options->workspace_root != NULL) {
+        if (options->workspace_root != NULL && ok) {
             char *path = module_output_path(options->workspace_root, module, out_error);
-            if (path == NULL) {
-                return false;
-            }
-            if (!ensure_parent_dir(path, out_error) ||
-                !feng_symbol_ft_write_module(module,
-                                             FENG_SYMBOL_PROFILE_WORKSPACE_CACHE,
-                                             path,
-                                             out_error)) {
-                free(path);
-                return false;
-            }
+            ok = path != NULL && ensure_parent_dir(path, out_error) &&
+                feng_symbol_ft_write_module(module, FENG_SYMBOL_PROFILE_WORKSPACE_CACHE, path, out_error);
             free(path);
         }
     }
-
-    return true;
+    free(selection.decls);
+    return ok;
 }
 
 bool feng_symbol_export_analysis(const FengSemanticAnalysis *analysis,
@@ -4265,78 +4342,12 @@ bool feng_symbol_build_package_selection(
     FengSymbolPackageSelection *selection = NULL;
     const void **source_nodes = NULL;
     size_t source_node_count = 0U;
-    size_t source_node_capacity = 0U;
-    size_t module_index;
     bool ok = false;
 
-    if (graph == NULL || out_selection == NULL) {
-        return false;
-    }
+    if (graph == NULL || out_selection == NULL) return false;
     *out_selection = NULL;
-    for (module_index = 0U;
-         module_index < graph->module_count;
-         ++module_index) {
-        const FengSymbolModuleGraph *module = graph->modules[module_index];
-        const void **module_nodes = NULL;
-        size_t module_node_count = 0U;
-        size_t needed;
-
-        if (!visibility_is_public(module->visibility)) {
-            continue;
-        }
-        if (!feng_symbol_ft_collect_package_source_nodes(module,
-                                                         &module_nodes,
-                                                         &module_node_count,
-                                                         out_error)) {
-            free(module_nodes);
-            goto cleanup;
-        }
-        if (module_node_count > SIZE_MAX - source_node_count) {
-            free(module_nodes);
-            feng_symbol_internal_set_error(
-                out_error,
-                module->primary_path,
-                module->root_decl.token,
-                "package-public source declaration count exceeds platform range");
-            goto cleanup;
-        }
-        needed = source_node_count + module_node_count;
-        if (needed > source_node_capacity) {
-            size_t new_capacity = source_node_capacity == 0U
-                ? 32U
-                : source_node_capacity;
-            const void **grown;
-
-            while (new_capacity < needed) {
-                if (new_capacity > SIZE_MAX / 2U) {
-                    new_capacity = needed;
-                    break;
-                }
-                new_capacity *= 2U;
-            }
-            grown = (const void **)realloc(
-                source_nodes,
-                new_capacity * sizeof(*grown));
-            if (grown == NULL) {
-                free(module_nodes);
-                feng_symbol_internal_set_error(
-                    out_error,
-                    module->primary_path,
-                    module->root_decl.token,
-                    "out of memory collecting package-public source declarations");
-                goto cleanup;
-            }
-            source_nodes = grown;
-            source_node_capacity = new_capacity;
-        }
-        if (module_node_count > 0U) {
-            memcpy((void *)(source_nodes + source_node_count),
-                   module_nodes,
-                   module_node_count * sizeof(*module_nodes));
-            source_node_count += module_node_count;
-        }
-        free(module_nodes);
-    }
+    if (!feng_symbol_ft_collect_package_source_nodes(graph, &source_nodes, &source_node_count, out_error))
+        goto cleanup;
 
     selection = (FengSymbolPackageSelection *)calloc(1U, sizeof(*selection));
     if (selection == NULL) {

@@ -2009,9 +2009,8 @@ typedef struct CG {
     ModuleBinding *module_bindings;
     size_t         module_binding_count;
     size_t         module_binding_capacity;
-    /* Imported open generic instances can independently expose the same
-     * exported shared method. Prototypes are compile-time declarations and
-     * are deduplicated by their final C symbol. */
+    /* Constructor calls and imported instances can name the same shared body.
+     * Deduplicate their compile-time prototypes by the final C symbol. */
     char          **imported_generic_shared_proto_names;
     size_t          imported_generic_shared_proto_count;
     size_t          imported_generic_shared_proto_capacity;
@@ -2766,6 +2765,12 @@ static bool cg_member_uses_package_static_binding_codegen(
 static char *cg_generic_type_method_shared_cname(CG *cg,
                                                  const FengDecl *decl,
                                                  const FengTypeMember *member);
+/* Declare a constructor or method using its original shared-body ABI. */
+static bool cg_emit_imported_generic_method_shared_proto(CG *cg,
+                                                         const UserType *type,
+                                                         const UserMethod *method,
+                                                         bool has_func_desc,
+                                                         const char *shared_name_override);
 static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
                                                const FengTypeMember *member,
                                                FengCompileTarget target,
@@ -5837,6 +5842,7 @@ static bool cg_member_uses_package_callable_surface(
     }
     return member->visibility != FENG_VISIBILITY_PRIVATE ||
            cg_member_is_mixable_seal_static(member) ||
+           feng_semantic_member_has_friend_declaration(cg->analysis, member) ||
            feng_semantic_member_is_package_spec_implementation_dependency(
                cg->analysis,
                member);
@@ -5859,6 +5865,10 @@ static bool cg_member_uses_package_static_binding_codegen(
         return false;
     }
     if (member->visibility != FENG_VISIBILITY_PRIVATE) {
+        return true;
+    }
+
+    if (feng_semantic_member_has_friend_declaration(cg->analysis, member)) {
         return true;
     }
 
@@ -6819,7 +6829,8 @@ static bool cg_user_spec_constraint_indices(CG *cg,
     return true;
 }
 
-/* Finds a non-generic user type from the program that owns the reference. */
+/* Resolve a non-generic type by its semantic identity when already bound.
+ * Only unbound source references need lexical name/visibility lookup. */
 static const UserType *cg_find_user_type_by_ref_from_program(
     const CG *cg,
     const FengTypeRef *ref,
@@ -6835,13 +6846,15 @@ static const UserType *cg_find_user_type_by_ref_from_program(
 
         if (ut->is_generic_instance || ut->decl == NULL ||
             ut->decl->kind != FENG_DECL_TYPE || ut->owner_program == NULL ||
-            !cg_named_type_ref_targets_owner_program_from(
-                cg,
-                reference_program,
-                ref,
-                ut->owner_program,
-                ut->decl->visibility,
-                ut->decl->as.type_decl.name)) {
+            (ref->resolution_decl != NULL
+                 ? ref->resolution_decl != ut->decl
+                 : !cg_named_type_ref_targets_owner_program_from(
+                       cg,
+                       reference_program,
+                       ref,
+                       ut->owner_program,
+                       ut->decl->visibility,
+                       ut->decl->as.type_decl.name))) {
             continue;
         }
         if (reference_program != NULL && ut->owner_program == reference_program) {
@@ -6864,7 +6877,7 @@ static const UserType *cg_find_user_type_by_ref(const CG *cg,
         cg != NULL ? cg->cur_program : NULL);
 }
 
-/* Finds a non-generic user spec from the program that owns the reference. */
+/* Resolve a non-generic spec by its semantic identity or lexical source name. */
 static const UserSpec *cg_find_user_spec_by_ref_from_program(
     const CG *cg,
     const FengTypeRef *ref,
@@ -6880,13 +6893,15 @@ static const UserSpec *cg_find_user_spec_by_ref_from_program(
 
         if (us->is_generic_instance || us->decl == NULL ||
             us->decl->kind != FENG_DECL_SPEC || us->owner_program == NULL ||
-            !cg_named_type_ref_targets_owner_program_from(
-                cg,
-                reference_program,
-                ref,
-                us->owner_program,
-                us->decl->visibility,
-                us->decl->as.spec_decl.name)) {
+            (ref->resolution_decl != NULL
+                 ? ref->resolution_decl != us->decl
+                 : !cg_named_type_ref_targets_owner_program_from(
+                       cg,
+                       reference_program,
+                       ref,
+                       us->owner_program,
+                       us->decl->visibility,
+                       us->decl->as.spec_decl.name))) {
             continue;
         }
         if (reference_program != NULL && us->owner_program == reference_program) {
@@ -10461,6 +10476,11 @@ static FengTypeRef *cg_debug_qualify_type_ref_from_program(
     FengTypeRef *result;
 
     if (ref == NULL) return NULL;
+    /* A substituted argument keeps its own lexical origin even inside a
+     * container whose declaration belongs to another module. */
+    if (ref->resolution_program != NULL) {
+        reference_program = ref->resolution_program;
+    }
 
     switch (ref->kind) {
         case FENG_TYPE_REF_NAMED: {
@@ -10593,7 +10613,7 @@ static void cg_append_type_ref_display(Buf *out, const FengTypeRef *ref) {
     }
 }
 
-/* Find a generic type using the source program that owns the reference. */
+/* Resolve a generic type by its semantic identity or lexical source name. */
 static const GenericTypeDecl *cg_find_generic_type_decl_from_program(
     const CG *cg,
     const FengTypeRef *ref,
@@ -10610,13 +10630,15 @@ static const GenericTypeDecl *cg_find_generic_type_decl_from_program(
 
         if (decl == NULL || decl->kind != FENG_DECL_TYPE ||
             entry->owner_program == NULL ||
-            !cg_named_type_ref_targets_owner_program_from(
-                cg,
-                reference_program,
-                ref,
-                entry->owner_program,
-                decl->visibility,
-                decl->as.type_decl.name)) {
+            (ref->resolution_decl != NULL
+                 ? ref->resolution_decl != decl
+                 : !cg_named_type_ref_targets_owner_program_from(
+                       cg,
+                       reference_program,
+                       ref,
+                       entry->owner_program,
+                       decl->visibility,
+                       decl->as.type_decl.name))) {
             continue;
         }
         if (decl->as.type_decl.type_param_count != ref->as.named.type_arg_count) {
@@ -10650,7 +10672,7 @@ static const GenericTypeDecl *cg_find_generic_type_decl_by_decl(CG *cg,
     return NULL;
 }
 
-/* Find a generic spec using the source program that owns the reference. */
+/* Resolve a generic spec by its semantic identity or lexical source name. */
 static const GenericSpecDecl *cg_find_generic_spec_decl_from_program(
     const CG *cg,
     const FengTypeRef *ref,
@@ -10667,13 +10689,15 @@ static const GenericSpecDecl *cg_find_generic_spec_decl_from_program(
 
         if (decl == NULL || decl->kind != FENG_DECL_SPEC ||
             entry->owner_program == NULL ||
-            !cg_named_type_ref_targets_owner_program_from(
-                cg,
-                reference_program,
-                ref,
-                entry->owner_program,
-                decl->visibility,
-                decl->as.spec_decl.name)) {
+            (ref->resolution_decl != NULL
+                 ? ref->resolution_decl != decl
+                 : !cg_named_type_ref_targets_owner_program_from(
+                       cg,
+                       reference_program,
+                       ref,
+                       entry->owner_program,
+                       decl->visibility,
+                       decl->as.spec_decl.name))) {
             continue;
         }
         /* Type/spec identity includes generic arity. The semantic model
@@ -19623,6 +19647,16 @@ static bool cg_emit_shared_static_binding_state(
     descriptor_type = cg_user_type_is_value(target)
                           ? "FengAggregateDescriptor"
                           : "FengTypeDescriptor";
+    /* An open instance skips closed static storage emission. Its direct
+     * package ensure call still needs the provider's shared ABI prototype. */
+    if (binding->exports_public_surface && cg_program_origin(cg, target->owner_program) ==
+            FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+        buf_append_fmt(&cg->fn_protos,
+            "void %s(const %s *_type_desc, FengStaticBindingState *_state%s);\n",
+            ensure_name, descriptor_type,
+            cg_generic_arguments_needed(cg, feng_semantic_lookup_reifiable_dep_set(cg->analysis, origin))
+                ? ", const FengGenericArguments *_generic_args" : "");
+    }
     buf_append_fmt(cg->cur_body,
         "    %sconst %s *%s = %s;\n"
         "    %sFengStaticBindingState *%s = &%s->static_bindings[%zu];\n"
@@ -22003,6 +22037,33 @@ static bool cg_emit_constructor_invoke(CG *cg,
     return cg_call_frame_finish(cg, &frame, NULL, ok);
 }
 
+/* Lower constructor operands against the original declaration's shared ABI.
+ * A partially open owner still uses that ABI when one actual slot is concrete. */
+static bool cg_append_constructor_argument(CG *cg, Buf *arguments, ExprResult *value,
+    const UserType *owner, const UserMethod *constructor, size_t index, bool shared) {
+    char *expression = NULL;
+    if (shared) {
+        CGType *declared = NULL;
+        const FengDecl *origin = owner->generic_origin_decl;
+        if (!cg_resolve_shared_method_declared_param_type(cg,
+                origin->as.type_decl.type_params, origin->as.type_decl.type_param_count,
+                cg_find_decl_owner_program(cg, origin), constructor->member, index, &declared)) return false;
+        expression = cg_shared_callable_argument_for_type_expr_dup(cg, value, declared,
+            cg_shared_generic_param_uses_address(declared), "_ctor_arg");
+        cgtype_free(declared);
+    } else {
+        if (cgtype_is_managed(value->type) && value->owns_ref &&
+            !cg_materialize_call_storage(cg, value, "_t")) return false;
+        expression = strdup(value->c_expr);
+    }
+    if (expression == NULL) return cg->failed ? false : cg_fail(cg, constructor->member->token,
+        "IE0001", "codegen: out of memory lowering constructor argument");
+    buf_append_cstr(arguments, ", ");
+    buf_append_cstr(arguments, expression);
+    free(expression);
+    return true;
+}
+
 /* Emit the original constructor ABI using already evaluated arguments. */
 static bool cg_emit_constructor_invoke_impl(CG *cg,
                                        FengExpr *const *args,
@@ -22016,6 +22077,8 @@ static bool cg_emit_constructor_invoke_impl(CG *cg,
     bool is_variadic;
     size_t fixed_count;
     bool ok = true;
+    bool shared = owner_type->is_generic_instance && owner_type->generic_origin_decl != NULL &&
+        owner_type->generic_context_type_param_count > 0U;
 
     buf_init(&args_buf);
     if (ctor == NULL) {
@@ -22045,12 +22108,9 @@ static bool cg_emit_constructor_invoke_impl(CG *cg,
             ok = false;
             break;
         }
-        if (cgtype_is_managed(ar.type) && ar.owns_ref) {
-            cg_materialize_call_storage(cg, &ar, "_t");
-        }
-        buf_append_cstr(&args_buf, ", ");
-        buf_append_cstr(&args_buf, ar.c_expr);
+        ok = cg_append_constructor_argument(cg, &args_buf, &ar, owner_type, ctor, i, shared);
         er_free(&ar);
+        if (!ok) break;
     }
     if (ok && is_variadic) {
         const CGType *array_type = ctor->param_types[ctor->param_count - 1U];
@@ -22066,12 +22126,8 @@ static bool cg_emit_constructor_invoke_impl(CG *cg,
                 &variadic_array)) {
             ok = false;
         } else {
-            if (cgtype_is_managed(variadic_array.type) &&
-                variadic_array.owns_ref) {
-                cg_materialize_call_storage(cg, &variadic_array, "_t");
-            }
-            buf_append_cstr(&args_buf, ", ");
-            buf_append_cstr(&args_buf, variadic_array.c_expr);
+            ok = cg_append_constructor_argument(cg, &args_buf, &variadic_array,
+                owner_type, ctor, ctor->param_count - 1U, shared);
             er_free(&variadic_array);
         }
     }
@@ -22080,19 +22136,13 @@ static bool cg_emit_constructor_invoke_impl(CG *cg,
         return false;
     }
 
-    if (owner_type->is_generic_instance &&
-        owner_type->generic_origin_decl != NULL &&
-        owner_type->generic_context_type_param_count > 0U) {
+    if (shared) {
         char *shared_name = cg_generic_type_method_shared_cname(
             cg, owner_type->generic_origin_decl, ctor->member);
         char *descriptor_expr = owner_descriptor_expr != NULL
                                     ? strdup(owner_descriptor_expr)
                                     : cg_rtd_expr_for_type(
                                           cg, owner_type, blame);
-        const char *descriptor_type = cg_user_type_is_value(owner_type)
-            ? "FengAggregateDescriptor"
-            : "FengTypeDescriptor";
-
         if (shared_name == NULL || descriptor_expr == NULL) {
             bool out_of_memory = shared_name == NULL;
 
@@ -22103,25 +22153,14 @@ static bool cg_emit_constructor_invoke_impl(CG *cg,
                 ? cg_fail(cg, blame, "IE0001", "codegen: out of memory")
                 : false;
         }
-        buf_append_fmt(&cg->fn_protos,
-                       "void %s(void *_self, const %s *_type_desc",
-                       shared_name,
-                       descriptor_type);
-        for (size_t i = 0U; i < ctor->param_count; ++i) {
-            buf_append_cstr(&cg->fn_protos, ", ");
-            if (cg_shared_generic_param_uses_address(ctor->param_types[i])) {
-                buf_append_fmt(&cg->fn_protos, "const void *_p%zu", i);
-            } else {
-                cg_emit_c_type(&cg->fn_protos, ctor->param_types[i]);
-                buf_append_fmt(&cg->fn_protos, " _p%zu", i);
-            }
+        if (!cg_emit_imported_generic_method_shared_proto(cg, owner_type, ctor, false, shared_name)) {
+            free(shared_name);
+            free(descriptor_expr);
+            buf_free(&args_buf);
+            return false;
         }
         const FengReifiableDepSet *argument_domain =
             feng_semantic_lookup_reifiable_dep_set(cg->analysis, owner_type->generic_origin_decl);
-        if (cg_generic_arguments_needed(cg, argument_domain)) {
-            buf_append_cstr(&cg->fn_protos, ", const FengGenericArguments *_generic_args");
-        }
-        buf_append_cstr(&cg->fn_protos, ");\n");
         buf_append_fmt(cg->cur_body,
                        "    %s((void *)%s, %s",
                        shared_name,
@@ -45963,11 +46002,10 @@ static void cg_emit_user_method_proto(Buf *out,
     cg_emit_user_method_proto_ex(out, t, m, needs_static, false, false);
 }
 
-/* Emit one exported shared-body ABI prototype for an imported generic-owner
- * or method-generic member. Instance/static methods use the provider's owner
- * descriptor, optional callable descriptor, method descriptors, ordinary
- * parameters and output slot ordering. A fit supplies its stable shared-name
- * override. Final C symbols are deduplicated across imported instances. */
+/* Emit the original shared-body ABI for constructor calls and imported methods.
+ * Keep owner/callable descriptors, method parameters, operands and output in
+ * declaration order. A fit supplies its shared-name override; repeated calls
+ * and imported instances share one prototype for each final C symbol. */
 static bool cg_emit_imported_generic_method_shared_proto(CG *cg,
                                                          const UserType *type,
                                                          const UserMethod *method,
@@ -58241,6 +58279,30 @@ static bool cg_collect_shared_receiver_field_instances(CG *cg,
     return ok;
 }
 
+/* Annotation arguments participate in the ordinary instance traversal, including
+ * closed types that never enter an open reifiable dependency set. */
+static bool cg_collect_generic_instances_from_annotations(CG *cg,
+    const FengAnnotation *annotations, size_t count, CGTypeParamScope scope) {
+    for (size_t a = 0U; a < count; ++a) {
+        const FengAnnotation *annotation = &annotations[a];
+        for (size_t i = 0U; i < annotation->arg_count; ++i) {
+            bool ok = true;
+            switch (annotation->argument_kind) {
+                case FENG_ANNOTATION_ARGUMENT_TYPE:
+                    ok = cg_collect_generic_instances_from_type_ref(cg, annotation->type_args[i], scope);
+                    break;
+                case FENG_ANNOTATION_ARGUMENT_EXPRESSION:
+                    ok = cg_collect_generic_instances_from_expr(cg, annotation->args[i], scope);
+                    break;
+                case FENG_ANNOTATION_ARGUMENT_NONE:
+                    break;
+            }
+            if (!ok) return false;
+        }
+    }
+    return true;
+}
+
 static bool cg_pass_collect_generic_type_instances(CG *cg, const FengProgram *prog) {
     if (!cg_emit_module_header(cg, prog)) return false;
     cg->cur_program = prog;
@@ -58249,16 +58311,31 @@ static bool cg_pass_collect_generic_type_instances(CG *cg, const FengProgram *pr
         CGTypeParamScope scope = {0};
         switch (decl->kind) {
             case FENG_DECL_GLOBAL_BINDING:
+                if (!cg_collect_generic_instances_from_annotations(cg, decl->annotations,
+                        decl->annotation_count, scope)) {
+                    cg->cur_program = NULL;
+                    return false;
+                }
                 if (!cg_collect_generic_instances_from_binding(cg, &decl->as.binding, scope)) {
                     cg->cur_program = NULL;
                     return false;
                 }
                 break;
             case FENG_DECL_ENUM:
+                if (!cg_collect_generic_instances_from_annotations(cg, decl->annotations,
+                        decl->annotation_count, scope)) {
+                    cg->cur_program = NULL;
+                    return false;
+                }
                 break;
             case FENG_DECL_TYPE:
                 scope.first = decl->as.type_decl.type_params;
                 scope.first_count = decl->as.type_decl.type_param_count;
+                if (!cg_collect_generic_instances_from_annotations(cg, decl->annotations,
+                        decl->annotation_count, scope)) {
+                    cg->cur_program = NULL;
+                    return false;
+                }
                 if (!cg_collect_generic_instances_from_type_params(cg,
                                                                    decl->as.type_decl.type_params,
                                                                    decl->as.type_decl.type_param_count,
@@ -58276,6 +58353,11 @@ static bool cg_pass_collect_generic_type_instances(CG *cg, const FengProgram *pr
                 }
                 for (size_t member_index = 0; member_index < decl->as.type_decl.member_count; ++member_index) {
                     const FengTypeMember *member = decl->as.type_decl.members[member_index];
+                    if (!cg_collect_generic_instances_from_annotations(cg, member->annotations,
+                            member->annotation_count, scope)) {
+                        cg->cur_program = NULL;
+                        return false;
+                    }
                     if (member->kind == FENG_TYPE_MEMBER_FIELD) {
                         if (!cg_collect_generic_instances_from_type_ref(cg, member->as.field.type, scope) ||
                             !cg_collect_generic_instances_from_expr(cg, member->as.field.initializer, scope)) {
@@ -58296,6 +58378,11 @@ static bool cg_pass_collect_generic_type_instances(CG *cg, const FengProgram *pr
             case FENG_DECL_SPEC:
                 scope.first = decl->as.spec_decl.type_params;
                 scope.first_count = decl->as.spec_decl.type_param_count;
+                if (!cg_collect_generic_instances_from_annotations(cg, decl->annotations,
+                        decl->annotation_count, scope)) {
+                    cg->cur_program = NULL;
+                    return false;
+                }
                 if (!cg_collect_generic_instances_from_type_params(cg,
                                                                    decl->as.spec_decl.type_params,
                                                                    decl->as.spec_decl.type_param_count,
@@ -58314,6 +58401,11 @@ static bool cg_pass_collect_generic_type_instances(CG *cg, const FengProgram *pr
                 if (decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
                     for (size_t member_index = 0; member_index < decl->as.spec_decl.as.object.member_count; ++member_index) {
                         const FengTypeMember *member = decl->as.spec_decl.as.object.members[member_index];
+                        if (!cg_collect_generic_instances_from_annotations(cg, member->annotations,
+                                member->annotation_count, scope)) {
+                            cg->cur_program = NULL;
+                            return false;
+                        }
                         if (member->kind == FENG_TYPE_MEMBER_FIELD) {
                             if (!cg_collect_generic_instances_from_type_ref(cg, member->as.field.type, scope)) {
                                 cg->cur_program = NULL;
@@ -58387,6 +58479,11 @@ static bool cg_pass_collect_generic_type_instances(CG *cg, const FengProgram *pr
                         scope.first = &local_type_param;
                         scope.first_count = 1U;
                     }
+                    if (!cg_collect_generic_instances_from_annotations(cg, decl->annotations,
+                            decl->annotation_count, scope)) {
+                        cg->cur_program = NULL;
+                        return false;
+                    }
                     /* Imported receivers are not otherwise visited as local
                      * declarations. Their constraints still form the shared
                      * fit body's parameter surface, in the receiver's scope. */
@@ -58412,6 +58509,11 @@ static bool cg_pass_collect_generic_type_instances(CG *cg, const FengProgram *pr
                     }
                     for (size_t member_index = 0; member_index < decl->as.fit_decl.member_count; ++member_index) {
                         const FengTypeMember *member = decl->as.fit_decl.members[member_index];
+                        if (!cg_collect_generic_instances_from_annotations(cg, member->annotations,
+                                member->annotation_count, scope)) {
+                            cg->cur_program = NULL;
+                            return false;
+                        }
                         if (member->kind == FENG_TYPE_MEMBER_METHOD &&
                             (!cg_collect_generic_instances_from_callable(cg, &member->as.callable, scope) ||
                              !cg_collect_shared_receiver_field_instances(cg, target_decl, member, scope))) {
@@ -58422,6 +58524,14 @@ static bool cg_pass_collect_generic_type_instances(CG *cg, const FengProgram *pr
                 }
                 break;
             case FENG_DECL_FUNCTION:
+                scope.first = decl->as.function_decl.type_params;
+                scope.first_count = decl->as.function_decl.type_param_count;
+                if (!cg_collect_generic_instances_from_annotations(cg, decl->annotations,
+                        decl->annotation_count, scope)) {
+                    cg->cur_program = NULL;
+                    return false;
+                }
+                scope = (CGTypeParamScope){0};
                 if (!cg_collect_generic_instances_from_callable(cg, &decl->as.function_decl, scope)) {
                     cg->cur_program = NULL;
                     return false;

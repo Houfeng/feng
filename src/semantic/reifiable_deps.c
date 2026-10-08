@@ -683,6 +683,20 @@ static bool rd_append_callable_value_dep(
              FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE)) {
         return true;
     }
+    /* Object/intersection spec values carry their witness at runtime. Only a
+     * direct constrained parameter needs a closed method-value descriptor;
+     * type arguments on a nominal spec do not turn its value into a parameter. */
+    if (site->callable_source == FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE &&
+        site->callable_owner_type_decl != NULL &&
+        site->callable_owner_type_decl->kind == FENG_DECL_SPEC &&
+        !site->callable_member->is_static) {
+        const FengTypeRef *receiver = site->callable_receiver_type_ref;
+        bool direct_parameter = receiver != NULL && receiver->kind == FENG_TYPE_REF_NAMED &&
+            receiver->resolution_decl == NULL && receiver->as.named.segment_count == 1U &&
+            receiver->as.named.type_arg_count == 0U &&
+            type_ref_contains_type_param(receiver, type_params, type_param_count);
+        if (!direct_parameter) return true;
+    }
     if (!type_ref_contains_type_param(site->callable_receiver_type_ref,
                                       type_params,
                                       type_param_count) &&
@@ -1294,6 +1308,28 @@ static void try_collect_type_ref(CollectContext *ctx,
     }
 }
 
+/* Annotation argument shape selects existing traversal, independently of the
+ * annotation's semantic purpose. Member arguments keep their declaration scope. */
+static void collect_annotations(CollectContext *ctx,
+                                const FengAnnotation *annotations, size_t count) {
+    if (ctx->dep_set == NULL) return;
+    for (size_t a = 0U; a < count; ++a) {
+        const FengAnnotation *annotation = &annotations[a];
+        for (size_t i = 0U; i < annotation->arg_count; ++i) {
+            switch (annotation->argument_kind) {
+                case FENG_ANNOTATION_ARGUMENT_TYPE:
+                    try_collect_type_ref(ctx, annotation->type_args[i]);
+                    break;
+                case FENG_ANNOTATION_ARGUMENT_EXPRESSION:
+                    collect_from_expr(ctx, annotation->args[i]);
+                    break;
+                case FENG_ANNOTATION_ARGUMENT_NONE:
+                    break;
+            }
+        }
+    }
+}
+
 /* ---- binding 收集 ------------------------------------------------------ */
 
 static void collect_from_binding(CollectContext *ctx,
@@ -1752,6 +1788,11 @@ static void collect_from_expr(CollectContext *ctx, const FengExpr *expr) {
     if (expr == NULL) {
         return;
     }
+    /* Inferred types share the same collection as explicitly written types. */
+    const FengSemanticTypeFact *fact = feng_semantic_lookup_type_fact(ctx->analysis, expr);
+    if (fact != NULL && fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+        try_collect_type_ref(ctx, fact->type_ref);
+    }
 
     callable_value_site = feng_semantic_lookup_spec_coercion_site(
         ctx->analysis, expr);
@@ -2103,6 +2144,9 @@ static void collect_from_callable(CollectContext *ctx,
         }
     }
 
+    for (i = 0U; i < callable->type_param_count; ++i) {
+        try_collect_type_ref(ctx, callable->type_params[i].constraint);
+    }
     /* 参数类型。 */
     for (i = 0U; i < callable->param_count; ++i) {
         try_collect_type_ref(ctx, callable->params[i].type);
@@ -2147,6 +2191,13 @@ static bool collect_for_type(FengSemanticAnalysis *analysis,
      * initializers, constructors, and the finalizer. */
     if (dep_set != NULL) {
         ctx.dep_set = dep_set;
+        collect_annotations(&ctx, decl->annotations, decl->annotation_count);
+        for (i = 0U; i < decl->as.type_decl.type_param_count; ++i) {
+            try_collect_type_ref(&ctx, decl->as.type_decl.type_params[i].constraint);
+        }
+        for (i = 0U; i < decl->as.type_decl.declared_spec_count; ++i) {
+            try_collect_type_ref(&ctx, decl->as.type_decl.declared_specs[i]);
+        }
         for (i = 0U; i < decl->as.type_decl.mixin_count; ++i) {
             collect_from_expr(
                 &ctx,
@@ -2164,6 +2215,8 @@ static bool collect_for_type(FengSemanticAnalysis *analysis,
             dep_set = feng_semantic_get_or_create_reifiable_dep_set(analysis, decl);
             if (dep_set == NULL) return false;
         }
+        ctx.dep_set = dep_set;
+        collect_annotations(&ctx, member->annotations, member->annotation_count);
 
         if (member->kind == FENG_TYPE_MEMBER_FIELD) {
             if (dep_set == NULL) {
@@ -2237,6 +2290,7 @@ static bool collect_for_generic_function(FengSemanticAnalysis *analysis,
     ctx.type_params = decl->as.function_decl.type_params;
     ctx.type_param_count = decl->as.function_decl.type_param_count;
 
+    collect_annotations(&ctx, decl->annotations, decl->annotation_count);
     collect_from_callable(&ctx, &decl->as.function_decl);
     return !ctx.failed;
 }
@@ -2419,6 +2473,21 @@ static bool collect_for_fit(FengSemanticAnalysis *analysis,
     ctx.analysis = analysis;
     ctx.type_params = type_level_params;
     ctx.type_param_count = type_level_param_count;
+
+    /* Fit declaration obligations belong to the target use, independently of
+     * method calls. Keep them separate from each method's runtime slots. */
+    if (type_level_param_count > 0U) {
+        ctx.dep_set = feng_semantic_get_or_create_reifiable_dep_set(analysis, decl);
+        if (ctx.dep_set == NULL) return false;
+        collect_annotations(&ctx, decl->annotations, decl->annotation_count);
+        for (i = 0U; i < decl->as.fit_decl.spec_count; ++i) {
+            try_collect_type_ref(&ctx, decl->as.fit_decl.specs[i]);
+        }
+        for (i = 0U; i < decl->as.fit_decl.member_count; ++i) {
+            const FengTypeMember *member = decl->as.fit_decl.members[i];
+            collect_annotations(&ctx, member->annotations, member->annotation_count);
+        }
+    }
 
     /* 每个 fit 方法都有独立的 FengFunctionDescriptor，因此依赖必须按成员
      * 收集，不能合并到 fit 声明级集合中。collect_from_callable 内部会在
@@ -2617,6 +2686,41 @@ static void rd_sort_reified_uses(const FengSemanticAnalysis *analysis,
     }
 }
 
+/* Spec declarations own the same dependency graph as other generic owners. */
+static bool collect_for_spec(FengSemanticAnalysis *analysis, const FengDecl *decl) {
+    if (decl->as.spec_decl.type_param_count == 0U) return true;
+    CollectContext ctx = {0};
+    ctx.analysis = analysis;
+    ctx.dep_set = feng_semantic_get_or_create_reifiable_dep_set(analysis, decl);
+    if (ctx.dep_set == NULL) return false;
+    ctx.type_params = decl->as.spec_decl.type_params;
+    ctx.type_param_count = decl->as.spec_decl.type_param_count;
+    collect_annotations(&ctx, decl->annotations, decl->annotation_count);
+    for (size_t i = 0U; i < ctx.type_param_count; ++i) try_collect_type_ref(&ctx, ctx.type_params[i].constraint);
+    for (size_t i = 0U; i < decl->as.spec_decl.parent_spec_count; ++i) try_collect_type_ref(&ctx, decl->as.spec_decl.parent_specs[i]);
+    if (decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+        for (size_t i = 0U; i < decl->as.spec_decl.as.object.member_count; ++i) {
+            const FengTypeMember *member = decl->as.spec_decl.as.object.members[i];
+            if (member->kind == FENG_TYPE_MEMBER_FIELD) try_collect_type_ref(&ctx, member->as.field.type);
+            else if (member->kind == FENG_TYPE_MEMBER_METHOD) {
+                for (size_t p = 0U; p < member->as.callable.param_count; ++p) try_collect_type_ref(&ctx, member->as.callable.params[p].type);
+                try_collect_type_ref(&ctx, member->as.callable.return_type);
+            }
+            collect_annotations(&ctx, member->annotations, member->annotation_count);
+        }
+    } else if (decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
+        for (size_t i = 0U; i < decl->as.spec_decl.as.callable.param_count; ++i) try_collect_type_ref(&ctx, decl->as.spec_decl.as.callable.params[i].type);
+        try_collect_type_ref(&ctx, decl->as.spec_decl.as.callable.return_type);
+    } else {
+        FengTypeRef *const *members = decl->as.spec_decl.form == FENG_SPEC_FORM_UNION
+            ? decl->as.spec_decl.as.union_form.members : decl->as.spec_decl.as.intersection_form.members;
+        size_t count = decl->as.spec_decl.form == FENG_SPEC_FORM_UNION
+            ? decl->as.spec_decl.as.union_form.member_count : decl->as.spec_decl.as.intersection_form.member_count;
+        for (size_t i = 0U; i < count; ++i) try_collect_type_ref(&ctx, members[i]);
+    }
+    return !ctx.failed;
+}
+
 /* ---- 主入口 ------------------------------------------------------------ */
 
 bool feng_semantic_collect_reifiable_deps(FengSemanticAnalysis *analysis) {
@@ -2641,6 +2745,9 @@ bool feng_semantic_collect_reifiable_deps(FengSemanticAnalysis *analysis) {
                 const FengDecl *decl = prog->declarations[di];
 
                 switch (decl->kind) {
+                    case FENG_DECL_SPEC:
+                        if (!collect_for_spec(analysis, decl)) return false;
+                        break;
                     case FENG_DECL_TYPE:
                         if (!collect_for_type(analysis, decl)) {
                             return false;

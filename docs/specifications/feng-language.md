@@ -146,7 +146,7 @@ Feng 是一门**强类型、静态类型、支持 `spec` 契约与 `fit` 显式�
 | `@iterable` | `type` 方法声明前 | 标记该方法返回可迭代的迭代器对象，供 `for/in` 循环使用 |
 | `@iterator` | `type` 方法声明前 | 标记该方法为迭代器推进方法，返回 `(bool, Element)` 元组 |
 | `@mixable` | `type` 的 seal 实例字段，或 `type` / `fit` 静态方法声明前 | 字段标记可由 `...` 受限展开和直接访问的 seal 状态；静态方法标记可传播并统一派生实例入口的 open 或 seal 行为 |
-| `@friend(Type, ...)` | `type`、object-form `spec` 或 `fit` 中显式 `seal` 的字段或普通方法声明前 | 将该成员自身的 `seal` 访问定向放行给列出的具体 type 及本包 `fit Type`，不穿透上层可见性且不导出到 `.ft` |
+| `@friend(Type, ...)` | `type`、object-form `spec` 或 `fit` 中显式 `seal` 的字段或普通方法声明前 | 定向成员授权；类型级泛参、跨包 fit 和签名检查统一见[可见性规范](./feng-visibility.md#103-friend-seal-成员) |
 
 > **`@runtime` 为非公开 API**：其接口随编译器版本变更，不做稳定性保证。除随编译器一起分发的标准库（`std`）外，任何其他包或业务代码均不建议使用。
 

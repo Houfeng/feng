@@ -15856,6 +15856,177 @@ static void test_lsp_spec_seal_member_completion_respects_implementation_domain(
 /* Source tooling reuses the compiler's normalized @friend authorization for
  * type, spec, fit-owned and generic member surfaces, while unrelated types
  * do not receive completion entries. */
+/* Two source-invisible bundles retain grants, deferred checks and editor facts. */
+static void test_friend_generic_packages_and_lsp(void) {
+    char directory[] = "temp/friend-packages-XXXXXX";
+    ASSERT(mkdtemp(directory) != NULL);
+    char *provider = effects_lsp_pack(directory, "friend_provider",
+        "open module friend.api;open spec Getter<T>():T;"
+        "open type Vault<F,T>{@friend(F) seal var value:T;func Vault(x:T){self.value=x;}"
+        "@friend(F) seal func read():T{return self.value;}"
+        "@friend(F) seal static var shared:int=3;@friend(F) seal static func count():int{return 5;}"
+        "func visible():int{return 1;}static func visibleShared():int{return 1;}}"
+        "open type Target<F>{}open fit Target<F>{@friend(F) seal func extra():int{return 13;}}"
+        "open spec Surface<F>{@friend(F) seal func secret():int;func visible():int;}"
+        "open type SurfaceValue<F>:Surface<F>{func secret():int{return 17;}func visible():int{return 1;}}"
+        "open func forward<T>(){let v=Vault<T,int>(1);}", NULL);
+    char *middle = effects_lsp_pack(directory, "friend_middle",
+        "open module friend.middle;import friend.api;open type Reader<T>{"
+        "func read(v:Vault<Reader<T>,T>):T{let method:Getter<T> =v.read;return method();}"
+        "func surface(v:Surface<Reader<T>>):int{let method:Getter<int> =v.secret;return method();}}"
+        "open func relay<T>(){forward<T>();}", provider);
+    char *consumer = path_join(directory, "consumer"), *src = path_join(consumer, "src");
+    char *path = path_join(src, "main.ff"), *manifest = path_join(consumer, "feng.fm");
+    mkdir_p(src);
+    char *config = dup_printf("[package]\nname: \"friend_consumer\"\nversion: \"0.1.0\"\ntarget: \"bin\"\nsrc: \"src/\"\nout: \"build/\"\n[dependencies]\nfriend_provider: \"%s\"\nfriend_middle: \"%s\"\n", provider, middle);
+    write_text_file(manifest, config);
+    const char *source = "module friend.consumer;import friend.api;import friend.middle;\n"
+        "fit Reader<T>{func replace(v:Vault<Reader<T>,T>,x:T):T{v.value=x;return v.read();}\n"
+        "static func count():int{return Vault<Reader<T>,T>.shared+Vault<Reader<T>,T>.count();}\n"
+        "func extra(v:Target<Reader<T>>):int{return v.extra();}}\n"
+        "type Local{func read(v:Vault<Local,int>):int{return v.value;}}\n"
+        "func outside(v:Vault<Local,int>):int{return v.visible();}\n"
+        "func main(args:string[]){let r=Reader<int>();let v=Vault<Reader<int>,int>(7);"
+        "if r.read(v)!=7||r.replace(v,11)!=11||Reader<int>.count()!=8||r.extra(Target<Reader<int>>())!=13"
+        "||r.surface(SurfaceValue<Reader<int>>())!=17{throw \"friend bundle behavior\";}relay<Local>();}\n";
+    write_text_file(path, source);
+    char *argv[] = {consumer};
+    ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
+    char *binary = project_host_build_path(consumer, "bin/friend_consumer");
+    char *output = run_binary_capture_stdout_or_die(binary);
+    ASSERT(output[0] == '\0'); free(output);
+    const char *initialize = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}";
+    const struct { const char *method, *needle; size_t offset; const char *expected, *absent; } cases[] = {
+        {"textDocument/completion", "return v.value;", 9U, "\"label\":\"value\"", NULL},
+        {"textDocument/completion", "return v.read();", 9U, "\"label\":\"read\"", NULL},
+        {"textDocument/completion", "return v.extra();", 9U, "\"label\":\"extra\"", NULL},
+        {"textDocument/completion", "return Vault<Reader<T>,T>.shared", sizeof("return Vault<Reader<T>,T>.") - 1U, "\"label\":\"shared\"", NULL},
+        {"textDocument/completion", "return v.visible();", 9U, "\"label\":\"visible\"", "\"label\":\"value\""},
+        {"textDocument/hover", "return v.value;", 10U, "var value: T", NULL},
+        {"textDocument/hover", "return v.read();", 10U, "func read(): T", NULL},
+        {"textDocument/definition", "return v.value;", 10U, ".ft", NULL}
+    };
+    for (size_t i = 0U; i < sizeof cases / sizeof *cases; ++i) {
+        output = capture_lsp_position_response_at_path(path, source, initialize, cases[i].method,
+            cases[i].needle, cases[i].offset, cases[i].expected);
+        if (strstr(output, cases[i].expected) == NULL) fprintf(stderr, "%s\n", output);
+        ASSERT(strstr(output, cases[i].expected) != NULL);
+        ASSERT(cases[i].absent == NULL || strstr(output, cases[i].absent) == NULL);
+        free(output);
+    }
+    write_text_file(path, "module friend.consumer;import friend.middle;func main(args:string[]){relay<int>();}");
+    int check_rc = 0;
+    output = run_project_check_capture_stderr(1, argv, &check_rc);
+    ASSERT(check_rc != 0);
+    ASSERT(strstr(output, "AE1336:") != NULL);
+    free(output);
+    free(binary); free(config); free(manifest); free(path); free(src); free(consumer); free(middle); free(provider);
+    char *error = NULL;
+    ASSERT(feng_cli_project_remove_tree(directory, &error)); free(error);
+    puts("friend generic source-invisible bundles and 8 LSP queries passed");
+}
+
+/* Private FT dependencies remain usable internally and invisible to ordinary LSP lookup. */
+static void test_friend_private_bundle_and_lsp(void) {
+    char directory[] = "temp/friend-private-cli-XXXXXX";
+    ASSERT(mkdtemp(directory) != NULL);
+    char *api = path_join(directory, "api.ff"), *hidden = path_join(directory, "hidden.ff");
+    write_text_file(hidden, "seal module privatefriend.hidden;@value open type Payload<T>{let value:T;"
+        "func Payload(value:T){self.value=value;}}open type Unused{}");
+    write_text_file(api, "open module privatefriend.api;import privatefriend.hidden;"
+        "open type Reader<T>{func read(v:Vault<Reader<T>,T>):T{return v.payload.value;}}"
+        "open type Vault<F,T>{@friend(F) seal let payload:Payload<T>;"
+        "func Vault(value:T){self.payload=Payload<T>(value);}"
+        "@friend(F) seal func read():T{return self.payload.value;}}");
+    char *out = path_join(directory, "provider"), *out_option = make_out_option(out);
+    char *compile[] = {api, hidden, "--target=lib", out_option, "--name=privatefriend"};
+    ASSERT(run_direct_for_host(5, compile) == 0);
+    char *library = host_static_library_output_path(out, "privatefriend"), *mod = path_join(out, "mod");
+    char *bundle_path = path_join(directory, "privatefriend-0.1.0.fb");
+    write_library_bundle_or_die(bundle_path, "privatefriend", "0.1.0", library, mod);
+    char *bundle = realpath(bundle_path, NULL);
+    ASSERT(bundle != NULL && unlink(api) == 0 && unlink(hidden) == 0);
+    char *consumer = path_join(directory, "consumer"), *src = path_join(consumer, "src");
+    char *path = path_join(src, "main.ff"), *manifest = path_join(consumer, "feng.fm");
+    mkdir_p(src);
+    char *config = dup_printf("[package]\nname: \"privatefriend_consumer\"\nversion: \"0.1.0\"\ntarget: \"bin\"\nsrc: \"src/\"\nout: \"build/\"\n[dependencies]\nprivatefriend: \"%s\"\n", bundle);
+    write_text_file(manifest, config);
+    const char *source = "module consumer;import privatefriend.api;\n"
+        "fit Reader<T>{func through(v:Vault<Reader<T>,T>):T{return v.read();}}\n"
+        "func main(args:string[]){let r=Reader<string>();let v=Vault<Reader<string>,string>(\"retained\");"
+        "if r.read(v)!=\"retained\"||r.through(v)!=\"retained\"{throw \"private friend layout\";}}\n";
+    write_text_file(path, source);
+    char *argv[] = {consumer};
+    ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
+    char *binary = project_host_build_path(consumer, "bin/privatefriend_consumer");
+    char *output = run_binary_capture_stdout_or_die(binary);
+    ASSERT(output[0] == '\0'); free(output);
+    const char *initialize = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}";
+    const struct { const char *method, *needle; size_t offset; const char *expected, *absent; } queries[] = {
+        {"textDocument/completion", "return v.read();", 9U, "\"label\":\"read\"", "\"label\":\"payload\""},
+        {"textDocument/hover", "return v.read();", 10U, "func read(): T", NULL},
+        {"textDocument/definition", "return v.read();", 10U, ".ft", NULL}
+    };
+    for (size_t i = 0U; i < sizeof queries / sizeof *queries; ++i) {
+        output = capture_lsp_position_response_at_path(path, source, initialize, queries[i].method,
+            queries[i].needle, queries[i].offset, queries[i].expected);
+        if (strstr(output, queries[i].expected) == NULL ||
+            (queries[i].absent != NULL && strstr(output, queries[i].absent) != NULL)) fprintf(stderr, "%s\n", output);
+        ASSERT(strstr(output, queries[i].expected) != NULL);
+        ASSERT(queries[i].absent == NULL || strstr(output, queries[i].absent) == NULL);
+        free(output);
+    }
+    const char *invalid[] = {
+        "module consumer;import privatefriend.api;import privatefriend.hidden;\n"
+        "func main(args:string[]){let r=Reader<int>();let x=Payload<int>();}\n",
+        "module consumer;import privatefriend.api;import privatefriend.hidden as h;\n"
+        "func main(args:string[]){let r=Reader<int>();let x=h.Payload<int>();}\n",
+        "module consumer;import privatefriend.api;\n"
+        "func main(args:string[]){let r=Reader<int>();let x=privatefriend.hidden.Payload<int>();}\n"
+    };
+    const char *expected_codes[] = {"AE0902:", "AE0902:", "AE0001:"};
+    for (size_t i = 0U; i < sizeof invalid / sizeof *invalid; ++i) {
+        write_text_file(path, invalid[i]);
+        int check_rc = 0;
+        output = run_project_check_capture_stderr(1, argv, &check_rc);
+        ASSERT(check_rc != 0);
+        ASSERT(strstr(output, expected_codes[i]) != NULL);
+        free(output);
+        output = capture_lsp_position_response_at_path(path, invalid[i], initialize, "textDocument/completion",
+            "let r=Reader<int>();", 6U, "\"label\":\"Reader<T>\"");
+        ASSERT(strstr(output, "\"label\":\"Payload<T>\"") == NULL); free(output);
+    }
+    /* Wait on a visible API symbol before probing an inaccessible namespace. */
+    const char *needles[] = {"Payload<int>()", "h.Payload<int>()", "privatefriend.hidden.Payload<int>()"};
+    const size_t offsets[] = {0U, 2U, sizeof("privatefriend.hidden.") - 1U};
+    const char *methods[] = {"textDocument/completion", "textDocument/hover", "textDocument/definition"};
+    for (size_t i = 0U; i < sizeof invalid / sizeof *invalid; ++i) {
+        write_text_file(path, invalid[i]);
+        char *uri = file_uri_from_path(path), *escaped = json_escape_text(invalid[i]);
+        char *did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}", uri, escaped);
+        unsigned int line, character;
+        find_line_character(invalid[i], "let r=Reader<int>();", 6U, &line, &character);
+        for (size_t m = 0U; m < sizeof methods / sizeof *methods; ++m) {
+            char *request = build_lsp_test_position_request(methods[m], 2U, uri,
+                invalid[i], needles[i], offsets[i] + (m == 0U ? 0U : 2U));
+            output = run_lsp_single_position_response_after_ready(initialize, did_open,
+                "textDocument/completion", uri, line, character, "\"label\":\"Reader<T>\"", request,
+                "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+            if (m != 0U && strstr(output, "\"id\":2,\"result\":null") == NULL)
+                fprintf(stderr, "private namespace case %zu, %s:\n%s\n", i, methods[m], output);
+            ASSERT(strstr(output, "\"label\":\"Payload<T>\"") == NULL);
+            ASSERT(m == 0U || strstr(output, "\"id\":2,\"result\":null") != NULL);
+            free(output); free(request);
+        }
+        free(did_open); free(escaped); free(uri);
+    }
+    free(binary); free(config); free(manifest); free(path); free(src); free(consumer);
+    free(bundle); free(bundle_path); free(library); free(mod); free(out_option); free(out); free(hidden); free(api);
+    char *error = NULL;
+    ASSERT(feng_cli_project_remove_tree(directory, &error)); free(error);
+    puts("friend private source-invisible bundle behavior and LSP visibility passed");
+}
+
 static void test_lsp_friend_member_completion_hover_and_definition(void) {
     static const char *kSource =
         "module test.lsp.friend_members;\n"
@@ -30988,6 +31159,8 @@ int main(void) {
     test_lsp_member_completion_repairs_enclosing_expressions();
     test_lsp_identifier_completion_uses_last_successful_scope();
     test_lsp_spec_seal_member_completion_respects_implementation_domain();
+    test_friend_generic_packages_and_lsp();
+    test_friend_private_bundle_and_lsp();
     test_lsp_friend_member_completion_hover_and_definition();
     test_lsp_friend_completion_parsed_only_fails_closed();
     test_lsp_fit_extension_member_completion_on_builtin_string();

@@ -29239,7 +29239,7 @@ static void test_friend_declaration_and_access_diagnostics(void) {
             "AE0308"
         },
         {
-            "module demo.friend.bad8; type F {} type V<T> { @friend(T) seal let x: int = 1; }",
+            "module demo.friend.bad8; type F {} type V<T> { @friend(T) seal let x: int = 1; } func use(v: V<int>) {}",
             "AE1336"
         },
         {
@@ -35430,6 +35430,10 @@ void test_exception_effects_semantics(void);
 void test_defer_exception_effects_semantics(void);
 
 int main(void) {
+    extern void test_friend_generic_semantics(void);
+    test_friend_generic_semantics();
+    extern void test_friend_signature_surfaces(void);
+    test_friend_signature_surfaces();
     test_generic_sibling_constraint_semantics();
     test_defer_exception_effects_semantics();
     test_exception_effects_semantics();

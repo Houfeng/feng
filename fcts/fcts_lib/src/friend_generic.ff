@@ -1,0 +1,48 @@
+open module fcts_lib.friend_generic;
+
+/** Shared callable shape for authorized method values. */
+open spec FriendGetter<T>(): T;
+
+/** The consumer chooses the exact friend instance. */
+open type GenericFriendVault<F, T> {
+  @friend(F)
+  seal var value: T;
+
+  /** Initialize storage without granting constructor friend authority. */
+  func GenericFriendVault(value: T) {
+    self.value = value;
+  }
+
+  /** Read an authorized instance field through a method. */
+  @friend(F)
+  seal func read(): T { return self.value; }
+
+  /** Keep callable parameters separate from the owner's friend parameter. */
+  @friend(F)
+  seal func identity<U>(value: U): U { return value; }
+
+  @friend(F)
+  seal static var marker: int = 13;
+
+  /** Supply a static friend callable independent of mutable state. */
+  @friend(F)
+  seal static func staticRead(): int { return 17; }
+}
+
+/** A spec keeps the same friend identity while dispatching through a witness. */
+open spec GenericFriendSurface<F> {
+  /** Preserve requirement dispatch after checking friend access. */
+  @friend(F)
+  seal func read(): int;
+}
+
+/** Public implementation used to form a restricted spec view. */
+open type GenericFriendSurfaceValue<F>: GenericFriendSurface<F> {
+  /** Return the value selected by the spec witness. */
+  func read(): int { return 19; }
+}
+
+/** The body-only owner use must retain its validation dependency in FT. */
+open func genericFriendForward<F, T>(value: T) {
+  let vault = GenericFriendVault<F, T>(value);
+}

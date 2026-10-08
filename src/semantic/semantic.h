@@ -61,6 +61,8 @@ typedef enum FengSemanticModuleOrigin {
     FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE
 } FengSemanticModuleOrigin;
 
+struct FengSemanticAnalysis;
+
 typedef struct FengSemanticModule {
     const FengSlice *segments;
     size_t segment_count;
@@ -73,10 +75,15 @@ typedef struct FengSemanticModule {
      * body; codegen skips local body emission and semantic conflict passes
      * treat them as pre-resolved package output. */
     FengSemanticModuleOrigin origin;
+    /* Opaque shared package provenance; NULL for local or legacy host modules. */
+    const void *package_identity;
     /* Provider-owned compile-time facts attached to this imported module. */
     const void *exception_metadata_user;
     const struct FengExceptionTemplate *(*get_exception_template)(
         const void *user, const void *source_node);
+    /* Restore provider-owned compile-time facts before semantic validation. */
+    const void *semantic_metadata_user;
+    bool (*populate_semantic_metadata)(const void *user, struct FengSemanticAnalysis *analysis);
 } FengSemanticModule;
 
 /* Per-`type` marker computed from the static managed-reference graph.
@@ -560,12 +567,19 @@ typedef struct FengSemanticAnalysis {
     FengImportedSymbolIdentity *imported_symbol_identities;
     size_t imported_symbol_identity_count;
     size_t imported_symbol_identity_capacity;
-    /* Compile-time-only normalized @friend metadata. The concrete structure
-     * is private to analyzer.c: no entry is exported to FT or consumed by
-     * codegen/runtime. */
+    /* Provider restoration is idempotent across Semantic and later consumers. */
+    const void **imported_metadata_sources;
+    size_t imported_metadata_source_count;
+    /* Compile-time-only normalized @friend metadata. FT stores declaration
+     * expressions; imported and source members share the normalized identity. */
     struct FengFriendMemberInfo *friend_member_infos;
     size_t friend_member_info_count;
     size_t friend_member_info_capacity;
+    /* Source instantiation sites retained until the final validation pass. */
+    struct FengGenericValidationUse *generic_validation_uses;
+    size_t generic_validation_use_count;
+    size_t generic_validation_use_capacity;
+    bool generic_validation_record_failed;
     /* 由语义分析器合成或深拷贝、并被跨阶段元数据借用的完整 FengTypeRef 树。
      * analysis 拥有根节点及其递归 type_args / inner / segments。 */
     FengTypeRef **synthesized_type_refs;
@@ -654,7 +668,7 @@ bool feng_semantic_type_has_mixable_seal_access(
 /* Return whether one source-backed member is visible through its normalized
  * @friend authorization from the enclosing type implementation context or fit
  * method. This query is read-only and compile-time-only; it exists so tooling
- * can reuse the same generic substitution and fit/package checks as semantic
+ * can reuse the same generic substitution and lexical visibility as semantic
  * member lookup. */
 bool feng_semantic_member_has_friend_access(
     const FengSemanticAnalysis *analysis,
@@ -664,6 +678,26 @@ bool feng_semantic_member_has_friend_access(
     const FengTypeMember *member,
     const FengDecl *enclosing_decl,
     const FengTypeMember *enclosing_member);
+
+/* Whether a seal member carries a validated restricted package interface. */
+bool feng_semantic_member_has_friend_declaration(
+    const FengSemanticAnalysis *analysis, const FengTypeMember *member);
+
+/* Visit borrowed selected accesses owned by one lexical fit method. */
+typedef bool (*FengFriendFitAccessVisitor)(void *user,
+    const FengDecl *target_owner, const FengTypeMember *target_member,
+    const FengTypeRef *owner_instance_type_ref);
+
+/* Export the authoritative access records without constructing a second set. */
+bool feng_semantic_visit_friend_fit_accesses(const FengSemanticAnalysis *analysis,
+    const FengDecl *fit_decl, const FengTypeMember *fit_member,
+    FengFriendFitAccessVisitor visitor, void *user);
+
+/* Record one resolved local/imported access. Type refs must outlive analysis. */
+bool feng_semantic_record_friend_fit_access(FengSemanticAnalysis *analysis,
+    const FengDecl *fit_decl, const FengTypeMember *fit_member,
+    const FengDecl *target_owner, const FengTypeMember *target_member,
+    const FengTypeRef *owner_instance_type_ref);
 
 /* Returns true if `name` is a builtin type name (standard name such as
  * i8..i64, u8..u64, f32, f64, bool, string, void).  After AST alias
@@ -1362,8 +1396,8 @@ feng_semantic_lookup_imported_symbol_identity(
     const FengSemanticAnalysis *analysis,
     const void *source_node);
 
-/* Post-pass：遍历所有本地模块中的泛型声明与 callable，收集待具体化
- * 依赖到 analysis->reifiable_dep_sets 侧表。
+/* Post-pass：一次遍历本地声明与 callable，将具化依赖统一收集到
+ * reifiable_dep_sets，编译期检查复用同一组类型和调用事实。
  * 在 fixpoint 循环完成后、type cyclicity 计算前调用。 */
 bool feng_semantic_collect_reifiable_deps(FengSemanticAnalysis *analysis);
 
