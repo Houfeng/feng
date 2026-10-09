@@ -255,7 +255,7 @@ test: check-clang check-cc
 
 test-normal: check-clang check-cc
 	$(MAKE) clean
-	$(MAKE) $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_cli_paths $(BIN_DIR)/test_lsp_analysis_lifetime $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests perf-constraints incremental-build-test release-scripts-test release-finalize-macos-test bundled-packages-test toolchain-prebuilt-fetch-test llvm-c-eh-test llvm-native-symbols-test
+	$(MAKE) $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_cli_paths $(BIN_DIR)/test_lsp_analysis_lifetime $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests perf-constraints incremental-build-test release-scripts-test release-finalize-macos-test bundled-packages-test toolchain-prebuilt-fetch-test llvm-c-eh-test llvm-native-symbols-test release-sections-test
 	$(BIN_DIR)/test_archive
 	$(BIN_DIR)/test_lexer
 	$(BIN_DIR)/test_parser
@@ -309,6 +309,11 @@ llvm-c-eh-test: cli $(BIN_DIR)/test_llvm_c_eh_driver
 llvm-native-symbols-test: cli $(BIN_DIR)/test_llvm_c_eh_driver
 	bash test/cli/native_symbols.sh
 	bash test/cli/native_symbols_release.sh
+
+# Exercise release archive reachability independently of symbol stripping.
+.PHONY: release-sections-test
+release-sections-test: cli $(BIN_DIR)/test_llvm_c_eh_driver
+	bash test/cli/release_sections.sh
 
 # Validate audited runtime attributes independently of generated-program timing.
 .PHONY: native-exception-contract-test

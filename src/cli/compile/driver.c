@@ -1951,7 +1951,9 @@ static char *locate_macos_target_sdk(char **out_error_message) {
 }
 #endif
 
-static bool argv_push_mode_flags(ArgVec *av, bool release) {
+/* Apply optimization and target section granularity to both bin and lib C. */
+static bool argv_push_mode_flags(ArgVec *av, bool release,
+                                 const char *target_platform) {
     if (!argv_push(av, release ? "-O2" : "-O0")) {
         return false;
     }
@@ -1959,6 +1961,12 @@ static bool argv_push_mode_flags(ArgVec *av, bool release) {
         return false;
     }
     if (release && !argv_push(av, "-DNDEBUG")) {
+        return false;
+    }
+    /* ELF GC works at section granularity; Mach-O already has symbol subsections. */
+    if (release && feng_platform_is_linux(target_platform) &&
+        (!argv_push(av, "-ffunction-sections") ||
+         !argv_push(av, "-fdata-sections"))) {
         return false;
     }
     return true;
@@ -2343,18 +2351,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                                                    target_clang,
                                                    target_sysroot,
                                                    true)) { ok = false; }
-        if (ok && !argv_push_mode_flags(&av, opts->release)) { ok = false; }
-        /* Per-function/data sections let --gc-sections discard unused
-         * runtime symbols at Linux link time. macOS Clang already uses
-         * subsections-via-symbols by default. */
-        if (ok && opts->release && feng_platform_is_linux(target_platform) &&
-            !argv_push(&av, "-ffunction-sections")) {
-            ok = false;
-        }
-        if (ok && opts->release && feng_platform_is_linux(target_platform) &&
-            !argv_push(&av, "-fdata-sections")) {
-            ok = false;
-        }
+        if (ok && !argv_push_mode_flags(&av, opts->release, target_platform)) { ok = false; }
         if (ok && !argv_push(&av, "-Wall")) { ok = false; }
         if (ok && !argv_push(&av, "-Wextra")) { ok = false; }
         /* Generated C may emit fit-helper functions that are not exercised
@@ -2438,7 +2435,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                                                        target_clang,
                                                        target_sysroot,
                                                        false)) { ok = false; }
-            if (ok && !argv_push_mode_flags(&av, opts->release)) { ok = false; }
+            if (ok && !argv_push_mode_flags(&av, opts->release, target_platform)) { ok = false; }
             if (ok && !argv_push(&av, "-Wall")) { ok = false; }
             if (ok && !argv_push(&av, "-Wextra")) { ok = false; }
             /* See bin path above: silence unused-function noise from
