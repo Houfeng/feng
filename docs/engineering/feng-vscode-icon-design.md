@@ -8,8 +8,8 @@
 
 ## 插件展示图标
 
-- 使用 [白隼黑底水墨 Logo](../../designs/feng-logo-ink-dark-draft.png)，保留已确认的飞行姿态、纹理和背景。
-- 将原始 PNG 等比缩小为 256 × 256 PNG，输出至 `editors/feng-vscode/icons/feng-logo.png`。
+- 使用已确认的 [圆角安全留白版白隼黑底水墨 Logo](../../designs/feng-logo-ink-dark-draft-v2.png)，保留飞行姿态、纹理和安全留白。
+- 单独制作带圆角和白色轮廓的插件展示图片，1024 × 1024 设计资源保存为 `designs/feng-vscode-icon-rounded.png`，以 256 × 256 PNG 输出至 `editors/feng-vscode/icons/feng-logo.png`。最终插件图片采用 32 px 圆角、2 px 白色描边，圆角外部透明。圆角和描边按固定几何参数导出，设计资源中的对应尺寸为 128 px、8 px；隼图层直接使用已确认原图，不增加其他内容，不改变隼形、纹理、比例和位置。
 - `package.json` 顶层 `icon` 保持为 `icons/feng-logo.png`。此字段只引用一张图片，扩展列表与 Marketplace 共用该资源，不区分 light / dark；固定黑底用于保持白色主体的对比度。
 - 展示图标使用 PNG；当前打包入口要求 `icon` 路径不带 `./` 前缀。
 
@@ -41,6 +41,13 @@
 - 在沙箱外执行全量 `make test`。
 
 ## 验证结果
+
+圆角安全留白版接入验证（2026-10-09）：
+
+- 插件 PNG 为 256 × 256，带透明外角、32 px 圆角和 2 px 白色描边；设计资源内部像素与已确认原图的缩放结果一致，仅边缘增加圆角和轮廓。
+- 八个文件图标与 `package.json` 均与接入前逐字节一致；未修改现有测试。
+- 插件八组 JavaScript 测试及 `0.1.20` VSIX 打包通过，包内九个图标与工作区逐字节一致。
+- 沙箱外 `make test` 通过；ASan/UBSan 与普通构建两个阶段均为标准库 607/607、FCTS 1676/1676。
 
 2026-10-09 验证结果：
 
