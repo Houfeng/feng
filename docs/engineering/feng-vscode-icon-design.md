@@ -1,59 +1,52 @@
 # VS Code 插件图标设计
 
-状态：设计已采用并接入，外部透明边距调整及验证完成。
+状态：隼形方案已采用并接入，验证完成。
 
 ## 文档与资产位置
 
-按 [工程文档职责](README.md)，本文集中记录插件图标的设计、资产来源、接入方式和验证结果。本方案的 PNG、SVG 与视觉预览等设计资产已归档至仓库根目录的 `designs/legacy/`；插件当前实际打包使用的图标仍保存在 `editors/feng-vscode/icons/`。新的隼形文件图标处于 Review 阶段，见 [隼形文件图标草稿](../../designs/feng-file-icons-falcon-draft.md)。
+按 [工程文档职责](README.md)，本文集中定义插件图标的资产来源、接入方式和验证要求。设计源文件保存在 `designs/`，插件实际打包的图标保存在 `editors/feng-vscode/icons/`，旧方案归档至 `designs/legacy/`。
 
-## 设计目标
+## 插件展示图标
 
-为 Feng 的 VS Code 插件设计新版展示图标，延续现有 F 字标与暖金色识别元素，重点检查深浅背景下的清晰度以及缩小后的字形辨识度。
+- 使用 [白隼黑底水墨 Logo](../../designs/feng-logo-ink-dark-draft.png)，保留已确认的飞行姿态、纹理和背景。
+- 将原始 PNG 等比缩小为 256 × 256 PNG，输出至 `editors/feng-vscode/icons/feng-logo.png`。
+- `package.json` 顶层 `icon` 保持为 `icons/feng-logo.png`。此字段只引用一张图片，扩展列表与 Marketplace 共用该资源，不区分 light / dark；固定黑底用于保持白色主体的对比度。
+- 展示图标使用 PNG；当前打包入口要求 `icon` 路径不带 `./` 前缀。
 
-## 已采用方案
+## 文件图标
 
-- 使用石墨色圆角方形底板，搭配琥珀金色 F 字标。
-- 字形采用粗笔画、清晰的负空间和统一的斜切端部，保持完整的 F 轮廓。
-- 四周透明外边距收紧至约 2% 以内，让底板至少占据约 96% 的画布宽度；字形与底板内部的比例保持一致。
-- 避免细描边、纹理、文字标注或依赖阴影的细节。
-- 圆角外部透明；交付高分辨率 PNG 与 256 × 256 PNG。
-- 预览页提供深浅背景，以及 16、24、32、48、64、128 像素尺寸。
+采用 [隼形文件图标设计](../../designs/feng-file-icons-falcon-draft.md) 中的八个 SVG；轮廓、角标、主题颜色与透明背景统一按该文档维护。插件资源名去掉设计源文件的 `falcon`、`draft` 标记，SVG 标题去掉“草稿”，图形保持一致。
 
-## 生成方式与提示词
+| 语言 ID | 文件后缀 | light 资源 | dark 资源 |
+| --- | --- | --- | --- |
+| `feng` | `.feng` / `.ff` | `icons/feng-ff-light.svg` | `icons/feng-ff-dark.svg` |
+| `feng-manifest` | `.fm` | `icons/feng-fm-light.svg` | `icons/feng-fm-dark.svg` |
+| `feng-bundle` | `.fb` | `icons/feng-fb-light.svg` | `icons/feng-fb-dark.svg` |
+| `feng-symbol-table` | `.ft` | `icons/feng-ft-light.svg` | `icons/feng-ft-dark.svg` |
 
-使用内置 image_gen 工具。生成时以原插件 PNG 为品牌参考；原图保留为 `editors/feng-vscode/icons/feng-logo-v1.png`。
+在 `contributes.languages[].icon` 中分别配置 `light` 与 `dark` 路径。两套资源独立打包，由 VS Code 按主题选择；当文件图标主题未提供对应文件或语言图标时，使用这些语言默认图标。
 
-初版生成提示词：
+## 旧资源与设计源文件
 
-> 用途：品牌标志设计。为 Feng 编程语言的 VS Code 插件创作一个新的专业图标。参考图仅用于理解现有的暖金色 F 品牌识别，不是编辑目标。设计一个正视、严格居中的二维图标：石墨色圆角方形底板，上方是一个醒目、独立设计的琥珀金色大写 F 字标。字形必须一眼读成 F，采用粗实的竖笔画与长短分明的两条横笔画；横笔画右端做一致而克制的斜切，形成简洁、利落的几何轮廓。使用接近现有 #E4C57D、#A78549 的暖金色家族，提高字形与背景的明暗反差。底板接近 #202124，金色主体可带非常轻微的平面色调变化，但在单色中仍应成立。字标占底板高度约 62%，整体光学居中，留白均衡。底板占正方形画布约 90%，圆角半径约为底板宽度的 18%，圆角外为真实透明背景。输出 1024 × 1024 的单个图标。适合缩小到 24 像素浏览，避免窄缝和细小结构。不要出现其他文字、图案、代码括号、动物、闪电、边框、立体挤出、金属反射、投影、发光、噪点、水印、展示样机或额外的背景画布。只输出最终图标。
+- 保留 `designs/` 中已 Review 的 Logo、八个 SVG 和预览文件，继续作为设计来源。
+- 旧插件 PNG、SVG 与四类纸张文件图标保存在 [legacy 目录](../../designs/legacy/)。插件曾使用且与现有归档不同的 `feng-logo-v1.png`、`feng-logo.svg` 分别归档为 `feng-vscode-icon-v1.png`、`feng-vscode-logo-v1.svg`。
+- 插件 `icons/` 目录只保留当前引用的展示图标和八个文件图标，旧图标不再进入 VSIX。
 
-外边距调整使用内置 image_gen 编辑现有图标，提示词如下：
+## 验证要求
 
-> 编辑目标：附图中的 Feng 插件图标。仅裁去石墨色圆角底板外接矩形之外的透明行列，再将包含金色 F 的整块底板等比缩放到正方形画布。底板上下左右四条直边应接近画布边缘，每侧只允许 0–1% 的透明条带，底板必须占画布宽度和高度的 98% 以上。保持原有金色 F 字形、斜切横笔画、色彩、底板圆角和内部留白；底板与 F 必须作为同一个整体缩放。圆角外部保持真实透明。输出 1024 × 1024 的单个 PNG 图标。只调整外部透明留白，不新增任何元素或样式。
+- 检查展示 PNG 尺寸、八个 SVG 的有效性，以及与设计源文件的图形一致性；核对旧资源归档内容。
+- 在浅色和深色背景检查展示图标，以及文件图标的 16 / 20 / 24 / 32 px 显示效果。
+- 图标元数据测试校验四类文件的后缀、各自的 light / dark 路径及资源存在性。
+- 按 [VS Code 插件构建](feng-vscode-build.md) 执行插件测试和 VSIX 打包，并检查包内配置与九个图标资源。
+- 在沙箱外执行全量 `make test`。
 
-## 插件接入
+## 验证结果
 
-- 将 `designs/legacy/feng-vscode-icon-v2-256.png` 复制到 `editors/feng-vscode/icons/feng-logo.png`，作为插件展示图标。
-- `editors/feng-vscode/package.json` 的 `icon` 使用 `icons/feng-logo.png`，保持现有可打包的图标入口；当前 VSCE 无法匹配带 `./` 前缀的图标路径。
-- 图标元数据测试严格校验上述路径；插件测试与打包顺序见 [VS Code 插件构建](feng-vscode-build.md)。
-- 原插件 PNG 保留为 `editors/feng-vscode/icons/feng-logo-v1.png`；原 `feng-logo.svg` 与归档后的 `designs/legacy/feng-logo.svg` 继续保留。
-- `.feng`/`.ff`、`.fm`、`.fb`、`.ft` 文件类型图标继续使用现有资产。
+2026-10-09 验证结果：
 
-## 交付文件与检查
-
-- [1024 × 1024 PNG](../../designs/legacy/feng-vscode-icon-v2.png)：标准大图。
-- [256 × 256 PNG](../../designs/legacy/feng-vscode-icon-v2-256.png)：已采用的插件展示图标。
-- [1254 × 1254 原始 PNG](../../designs/legacy/feng-vscode-icon-v2-source.png)：保留内置工具的生成原图。
-- [收紧边距后的原始 PNG](../../designs/legacy/feng-vscode-icon-v2-tight-source.png)：本次编辑的原始输出。
-- [深浅背景与尺寸预览](../../designs/legacy/feng-vscode-icon-v2-preview.html)：本地静态预览页。
-
-PNG 尺寸、RGBA 通道和透明角落已检查；已直接查看 16、24、32、48、64、128 像素缩略图，F 轮廓可辨，16 像素下斜切细节较弱。预览页的浏览器打开操作受到本地文件 URL 安全策略限制，未完成浏览器渲染验证。
-
-外边距调整后，在 256 × 256 PNG 中按 alpha ≥ 128 测量，底板外接矩形为 `(3, 3)–(253, 253)`，四边留白均约 3 像素；调整前为 24–26 像素。底板宽度从 207 像素增至 250 像素，在相同显示尺寸下增大约 21%。
-
-插件接入验证结果：
-
-- 新图标与 256 × 256 设计资产逐字节一致；原 PNG 备份与 Git 中原图逐字节一致，原 SVG 保留。
-- 检查生成的 VSIX 内容，插件实际引用的 PNG 与已采用设计一致，旧 PNG 和 SVG 均已保留。
-- `test/icon.test.js` 的图标路径断言已修正，测试通过。
-- 本次边距调整后，8 组插件 JavaScript 测试、VSIX 打包及沙箱外 `make test` 均通过；构建流程见 [插件构建验证](feng-vscode-build.md#验证)。
+- 展示 PNG 为 256 × 256；八个 SVG 的 XML 检查通过，逐像素渲染结果与对应设计稿一致，每对 light / dark 仅颜色不同。十个设计源文件保持不变，七个旧插件图标均有内容一致的归档。
+- 浏览器使用插件实际资源完成明暗背景预览，成功加载九个独立资源、共 52 个图标实例；检查了展示图标的 48 / 128 px 和文件图标的 16 / 20 / 24 / 32 px 显示效果。
+- 经人工批准更新 `test/icon.test.js`，分别校验 light / dark 路径与八个 SVG；插件全部八组 JavaScript 测试通过，包括真实调试冒烟测试。
+- `npm run pack -- --out <产物路径>` 成功生成 `feng-language-0.1.19.vsix`。包内配置与工作区一致，九个图标逐字节一致，不含旧图标。
+- 沙箱外 `make test` 通过，退出码为 0；ASan/UBSan 与普通构建两个阶段的标准库测试均为 607/607，FCTS 均为 1676/1676。
+- `git diff --check` 及相关文档链接检查通过。

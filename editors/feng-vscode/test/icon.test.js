@@ -4,6 +4,7 @@ const path = require('path');
 
 const packageJson = require('../package.json');
 
+/** Find the language contribution whose file icon metadata is under test. */
 function findLanguage(id) {
     const languages = packageJson.contributes && Array.isArray(packageJson.contributes.languages)
         ? packageJson.contributes.languages
@@ -12,14 +13,15 @@ function findLanguage(id) {
     return languages.find(language => language.id === id);
 }
 
-function assertLanguageIcon(id, expectedExtensions, expectedIconPath) {
+/** Check file extensions and the independent light and dark icon paths. */
+function assertLanguageIcon(id, expectedExtensions, expectedIconPaths) {
     const language = findLanguage(id);
 
     assert(language, `expected language contribution for ${id}`);
     assert.deepStrictEqual(language.extensions, expectedExtensions, `unexpected extensions for ${id}`);
     assert(language.icon, `expected icon contribution for ${id}`);
-    assert.strictEqual(language.icon.light, expectedIconPath, `unexpected light icon for ${id}`);
-    assert.strictEqual(language.icon.dark, expectedIconPath, `unexpected dark icon for ${id}`);
+    assert.strictEqual(language.icon.light, expectedIconPaths.light, `unexpected light icon for ${id}`);
+    assert.strictEqual(language.icon.dark, expectedIconPaths.dark, `unexpected dark icon for ${id}`);
 }
 
 const extensionRoot = path.join(__dirname, '..');
@@ -32,19 +34,34 @@ const fengDefaults = packageJson.contributes && packageJson.contributes.configur
     ? packageJson.contributes.configurationDefaults['[feng]']
     : null;
 
-assertLanguageIcon('feng', ['.feng', '.ff'], './icons/feng-ff.svg');
-assertLanguageIcon('feng-manifest', ['.fm'], './icons/feng-fm.svg');
-assertLanguageIcon('feng-bundle', ['.fb'], './icons/feng-fb.svg');
-assertLanguageIcon('feng-symbol-table', ['.ft'], './icons/feng-ft.svg');
+assertLanguageIcon('feng', ['.feng', '.ff'], {
+    light: './icons/feng-ff-light.svg',
+    dark: './icons/feng-ff-dark.svg'
+});
+assertLanguageIcon('feng-manifest', ['.fm'], {
+    light: './icons/feng-fm-light.svg',
+    dark: './icons/feng-fm-dark.svg'
+});
+assertLanguageIcon('feng-bundle', ['.fb'], {
+    light: './icons/feng-fb-light.svg',
+    dark: './icons/feng-fb-dark.svg'
+});
+assertLanguageIcon('feng-symbol-table', ['.ft'], {
+    light: './icons/feng-ft-light.svg',
+    dark: './icons/feng-ft-dark.svg'
+});
 assert.strictEqual(extensionIconPath, 'icons/feng-logo.png');
 
 for (const iconPath of [
     'icons/feng-logo.png',
-    'icons/feng-logo.svg',
-    'icons/feng-ff.svg',
-    'icons/feng-fm.svg',
-    'icons/feng-fb.svg',
-    'icons/feng-ft.svg'
+    'icons/feng-ff-light.svg',
+    'icons/feng-ff-dark.svg',
+    'icons/feng-fm-light.svg',
+    'icons/feng-fm-dark.svg',
+    'icons/feng-fb-light.svg',
+    'icons/feng-fb-dark.svg',
+    'icons/feng-ft-light.svg',
+    'icons/feng-ft-dark.svg'
 ]) {
     assert(fs.existsSync(path.join(extensionRoot, iconPath)), `expected icon asset ${iconPath}`);
 }

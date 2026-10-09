@@ -23,5 +23,5 @@
 
 - 在隔离测试目录复用实际 `prepack` / `pack` 配置，令 JavaScript 测试返回退出码 23：`npm run pack` 同样返回 23，VSCE 未执行。
 - 沙箱外执行真实构建入口 `bash ./scripts/build_editor_extentions.sh`，并将 `TMPDIR` 指向工程 `temp/`：8 组 JavaScript 测试全部通过，包括真实调试冒烟测试；日志确认所有通过结果均出现在 VSCE 打包之前。
-- 已生成 `editors/feng-vscode/feng-language-0.1.18.vsix`，核对包内配置、新图标及原图备份均与工作区一致。
+- 隼形图标接入后的插件测试、VSIX 打包与包内资源检查结果见 [插件图标设计](feng-vscode-icon-design.md#验证结果)。
 - 沙箱外执行 `make test`：通过，退出码为 0，覆盖 UBSan 与普通构建两个阶段。

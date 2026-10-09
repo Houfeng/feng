@@ -135,8 +135,8 @@
           ".ff"
         ],
         "icon": {
-          "light": "./icons/feng-ff.svg",
-          "dark": "./icons/feng-ff.svg"
+          "light": "./icons/feng-ff-light.svg",
+          "dark": "./icons/feng-ff-dark.svg"
         },
         "configuration": "./language-configuration.json"
       },
@@ -150,8 +150,8 @@
           ".fm"
         ],
         "icon": {
-          "light": "./icons/feng-fm.svg",
-          "dark": "./icons/feng-fm.svg"
+          "light": "./icons/feng-fm-light.svg",
+          "dark": "./icons/feng-fm-dark.svg"
         },
         "configuration": "./manifest-language-configuration.json"
       },
@@ -165,8 +165,8 @@
           ".fb"
         ],
         "icon": {
-          "light": "./icons/feng-fb.svg",
-          "dark": "./icons/feng-fb.svg"
+          "light": "./icons/feng-fb-light.svg",
+          "dark": "./icons/feng-fb-dark.svg"
         }
       },
       {
@@ -179,8 +179,8 @@
           ".ft"
         ],
         "icon": {
-          "light": "./icons/feng-ft.svg",
-          "dark": "./icons/feng-ft.svg"
+          "light": "./icons/feng-ft-light.svg",
+          "dark": "./icons/feng-ft-dark.svg"
         }
       }
     ],
