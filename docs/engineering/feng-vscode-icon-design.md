@@ -4,7 +4,7 @@
 
 ## 文档与资产位置
 
-按 [工程文档职责](README.md)，本文集中记录插件图标的设计、资产来源、接入方式和验证结果。PNG、SVG 与视觉预览等设计资产保存在仓库根目录的 `designs/`；插件实际打包使用的图标保存在 `editors/feng-vscode/icons/`。
+按 [工程文档职责](README.md)，本文集中记录插件图标的设计、资产来源、接入方式和验证结果。本方案的 PNG、SVG 与视觉预览等设计资产已归档至仓库根目录的 `designs/legacy/`；插件当前实际打包使用的图标仍保存在 `editors/feng-vscode/icons/`。新的隼形文件图标处于 Review 阶段，见 [隼形文件图标草稿](../../designs/feng-file-icons-falcon-draft.md)。
 
 ## 设计目标
 
@@ -33,19 +33,19 @@
 
 ## 插件接入
 
-- 将 `designs/feng-vscode-icon-v2-256.png` 复制到 `editors/feng-vscode/icons/feng-logo.png`，作为插件展示图标。
+- 将 `designs/legacy/feng-vscode-icon-v2-256.png` 复制到 `editors/feng-vscode/icons/feng-logo.png`，作为插件展示图标。
 - `editors/feng-vscode/package.json` 的 `icon` 使用 `icons/feng-logo.png`，保持现有可打包的图标入口；当前 VSCE 无法匹配带 `./` 前缀的图标路径。
 - 图标元数据测试严格校验上述路径；插件测试与打包顺序见 [VS Code 插件构建](feng-vscode-build.md)。
-- 原插件 PNG 保留为 `editors/feng-vscode/icons/feng-logo-v1.png`；原 `feng-logo.svg` 与 `designs/feng-logo.svg` 继续保留。
+- 原插件 PNG 保留为 `editors/feng-vscode/icons/feng-logo-v1.png`；原 `feng-logo.svg` 与归档后的 `designs/legacy/feng-logo.svg` 继续保留。
 - `.feng`/`.ff`、`.fm`、`.fb`、`.ft` 文件类型图标继续使用现有资产。
 
 ## 交付文件与检查
 
-- [1024 × 1024 PNG](../../designs/feng-vscode-icon-v2.png)：标准大图。
-- [256 × 256 PNG](../../designs/feng-vscode-icon-v2-256.png)：已采用的插件展示图标。
-- [1254 × 1254 原始 PNG](../../designs/feng-vscode-icon-v2-source.png)：保留内置工具的生成原图。
-- [收紧边距后的原始 PNG](../../designs/feng-vscode-icon-v2-tight-source.png)：本次编辑的原始输出。
-- [深浅背景与尺寸预览](../../designs/feng-vscode-icon-v2-preview.html)：本地静态预览页。
+- [1024 × 1024 PNG](../../designs/legacy/feng-vscode-icon-v2.png)：标准大图。
+- [256 × 256 PNG](../../designs/legacy/feng-vscode-icon-v2-256.png)：已采用的插件展示图标。
+- [1254 × 1254 原始 PNG](../../designs/legacy/feng-vscode-icon-v2-source.png)：保留内置工具的生成原图。
+- [收紧边距后的原始 PNG](../../designs/legacy/feng-vscode-icon-v2-tight-source.png)：本次编辑的原始输出。
+- [深浅背景与尺寸预览](../../designs/legacy/feng-vscode-icon-v2-preview.html)：本地静态预览页。
 
 PNG 尺寸、RGBA 通道和透明角落已检查；已直接查看 16、24、32、48、64、128 像素缩略图，F 轮廓可辨，16 像素下斜切细节较弱。预览页的浏览器打开操作受到本地文件 URL 安全策略限制，未完成浏览器渲染验证。
 
