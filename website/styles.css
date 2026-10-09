@@ -16,6 +16,8 @@
   --trait-text: #565c56;
   --contrast-bg: #171917;
   --contrast-text: #ffffff;
+  --brand-mark-image: url("assets/feng-logo-ink-dark.png");
+  --brand-mark-bg: #000000;
   --popover-shadow: 0 18px 46px rgba(23, 26, 24, 0.16);
   --terminal: #171a18;
   --terminal-raised: #202421;
@@ -51,6 +53,8 @@
   --trait-text: #b7beb6;
   --contrast-bg: #f1f4ef;
   --contrast-text: #171917;
+  --brand-mark-image: url("assets/feng-logo-ink-light.png");
+  --brand-mark-bg: #ffffff;
   --popover-shadow: 0 20px 54px rgba(0, 0, 0, 0.34);
   --theme-switch-track: #242724;
   --theme-switch-track-border: #323732;
@@ -79,6 +83,8 @@
     --trait-text: #b7beb6;
     --contrast-bg: #f1f4ef;
     --contrast-text: #171917;
+    --brand-mark-image: url("assets/feng-logo-ink-light.png");
+    --brand-mark-bg: #ffffff;
     --popover-shadow: 0 20px 54px rgba(0, 0, 0, 0.34);
     --theme-switch-track: #242724;
     --theme-switch-track-border: #323732;
@@ -207,7 +213,7 @@ svg {
   place-items: center;
   border-radius: 9px;
   color: var(--contrast-text);
-  background: var(--contrast-bg);
+  background: var(--brand-mark-bg) var(--brand-mark-image) center / contain no-repeat;
   font-size: 1rem;
   font-weight: 720;
   letter-spacing: -0.03em;

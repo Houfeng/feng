@@ -116,6 +116,7 @@
 - 页面必须使用语义化 HTML，具备清晰的标题层级，支持键盘操作并满足无障碍要求。
 - `website/` 不维护专用自动校验脚本，页面内容、链接、跨设备可用性与交互质量由人工 Review 验收。
 - 官网静态资源命名应清晰稳定，便于后续继续扩展多页结构。
+- 顶部品牌入口的图标由各语言首页与用户手册模板共用站内资源；资源来源与设计约定见 [官网品牌图标](../../designs/feng-website-icon.md)。
 - 网站构建工具及其依赖配置统一放在 `website/`；`website/package.json` 与锁文件需要提交，`website/node_modules/` 不得提交。
 - 用户手册使用 Eleventy 生成。生成内容写入 `website/docs/`，该目录不得提交；每次正式构建前必须清理旧的生成内容，避免已删除页面残留。
 - 用户手册的围栏代码块由 Shiki 在 Eleventy 构建阶段生成静态高亮 HTML，生成页面不得依赖客户端 JavaScript 执行语法高亮。Feng 代码高亮必须复用 `editors/feng-vscode/syntaxes/feng.tmLanguage.json`，不得在网站构建配置中另行维护 Feng 语法定义。
