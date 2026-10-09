@@ -1,5 +1,7 @@
 # Feng VS Code Extension
 
+[Website](https://feng-lang.com/) · [User Manual](https://feng-lang.com/docs/en/) · [GitHub](https://github.com/Houfeng/feng)
+
 Feng Language provides an out-of-the-box editing experience for Feng in VS Code. After installing the extension, you get syntax highlighting, document formatting, Feng Language Server client integration for source files, Feng debugger integration through `feng dap`, dedicated Feng manifest support for `.fm`, and distinct Feng file icons for source, manifest, bundle, and symbol-table files.
 
 ## Features

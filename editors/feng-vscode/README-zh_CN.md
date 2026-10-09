@@ -1,5 +1,7 @@
 # Feng VS Code Extension
 
+[官网](https://feng-lang.com/index-zh.html) · [用户手册](https://feng-lang.com/docs/zh-CN/) · [GitHub](https://github.com/Houfeng/feng)
+
 Feng Language 为 Feng 提供开箱即用的 VS Code 编辑体验。安装扩展后，你可以直接获得语法高亮、文档格式化、面向源文件的 Feng Language Server 客户端接入、`.fm` 清单文件支持，以及面向源码、清单、包和符号表文件的 Feng 专用图标支持。
 
 ## 功能一览
