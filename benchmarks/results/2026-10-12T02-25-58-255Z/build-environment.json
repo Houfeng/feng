@@ -1,0 +1,52 @@
+{
+  "sdk": "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+  "reason": "Homebrew Clang config selects CLT macOS 27 SDK; active Xcode linker rejects arm64e.x1 in its TAPI stubs. Temporary CC/CXX/cc wrappers select the active Xcode SDK. Optimization options are unchanged.",
+  "build_environment": {
+    "CC": "temp/benchmark-rerun-20261012/tool-wrappers/clang",
+    "CXX": "temp/benchmark-rerun-20261012/tool-wrappers/clang++",
+    "PATH_prefix": "temp/benchmark-rerun-20261012/tool-wrappers"
+  },
+  "files": [
+    {
+      "path": "/opt/homebrew/bin/clang",
+      "real_path": "/opt/homebrew/Cellar/llvm@22/22.1.8/bin/clang-22",
+      "sha256": "012b35304481c5d5db6b57f20e144fb78f198ca9db14aa0b8db72cd2e493e12d"
+    },
+    {
+      "path": "/opt/homebrew/bin/clang++",
+      "real_path": "/opt/homebrew/Cellar/llvm@22/22.1.8/bin/clang-22",
+      "sha256": "012b35304481c5d5db6b57f20e144fb78f198ca9db14aa0b8db72cd2e493e12d"
+    },
+    {
+      "path": "toolchain/llvm/macos-arm64/bin/clang",
+      "real_path": "/Users/houfeng/Repositories/feng-language/toolchain/llvm/macos-arm64/bin/clang",
+      "sha256": "9a690e9e11d4774d63e95ed2ab90abd82889f949b0bb9db8208f7e18f278ea50"
+    },
+    {
+      "path": "toolchain/llvm-native-symbols/macos-arm64/lib/llvm_native_symbols.dylib",
+      "real_path": "/Users/houfeng/Repositories/feng-language/toolchain/llvm-native-symbols/macos-arm64/lib/llvm_native_symbols.dylib",
+      "sha256": "866ed420dd21aeb26e6990c6642a594da7760a78172dd10569c9a89a938ecb0a"
+    },
+    {
+      "path": "temp/benchmark-rerun-20261012/tool-wrappers/clang",
+      "real_path": "/Users/houfeng/Repositories/feng-language/temp/benchmark-rerun-20261012/tool-wrappers/clang",
+      "sha256": "67563ae8e99cedf06fe3cd5e6ea9571c80bddabfc948ad265f7f8233d4aade8e"
+    },
+    {
+      "path": "temp/benchmark-rerun-20261012/tool-wrappers/clang++",
+      "real_path": "/Users/houfeng/Repositories/feng-language/temp/benchmark-rerun-20261012/tool-wrappers/clang++",
+      "sha256": "bbda6364ee76c53f45c3216c8d7bbe4d35e53978e593a36c4c470e95244e43d1"
+    }
+  ],
+  "wrappers": [
+    {
+      "path": "temp/benchmark-rerun-20261012/tool-wrappers/clang",
+      "source": "#!/bin/sh\n# Keep Clang 22 and use the SDK selected by the active Xcode toolchain.\nexec /opt/homebrew/bin/clang -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk \"$@\"\n"
+    },
+    {
+      "path": "temp/benchmark-rerun-20261012/tool-wrappers/clang++",
+      "source": "#!/bin/sh\n# Keep Clang 22 and use the SDK selected by the active Xcode toolchain.\nexec /opt/homebrew/bin/clang++ -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk \"$@\"\n"
+    }
+  ],
+  "git": "62aa1f338423ada2fa9bb056746fa97307d4e902"
+}
