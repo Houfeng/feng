@@ -2,6 +2,7 @@ module fs_bulk_read_faults;
 
 import std.fs;
 import std.test;
+import std.collections;
 
 /** Configure a deterministic POSIX input and fault schedule. */
 @cdecl("feng_fs_bulk_read_fixture", "fs_fixture_prepare")

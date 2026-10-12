@@ -333,8 +333,20 @@ runtime 实现边界调整。** 当前 internal 头文件明确禁止生成 C �
 原生夹具仅作用于其创建的 inode，不修改生产代码，也不链接到 `std_test`。
 按人工要求，不增加 `run.sh` 或新的测试入口；Makefile 的 `std-tests` 恢复
 原有规则。`z_main.ff` 中已获批准的新增注册仅运行纯 Feng 用例，既有用例和
-断言不变。此次目录调整后的全量回归待逐文件 Review 通过、工具链重新生成后
-执行；下述通过记录属于调整前的版本。
+断言不变。
+
+2026-10-12 本机回归发现，独立 Feng 夹具遗漏 `std.collections` 导入，
+导致数组 `length()` 不可见。修复仅补齐该导入，保留全部场景和断言；
+导入作用域遵循[模块规范](../specifications/feng-module.md#4-模块导入规则)。
+修复后，Linux ARM64 Apple container 使用 LLVM 23.1.3 完整执行 `make test`，
+退出码为 0。ASan/UBSan 与普通两阶段均通过原生文件读取用例、std 610 项及
+FCTS 1676 项。日志为 `temp/fs-bulk-read-import-fix-20261012/container-make-test.log`，
+容器原始日志保存在 `/workspace/fs-bulk-read-import-20261012/logs/make-test.log`。
+macOS 前几次回归曾遇新程序 `SIGKILL (9)` 及 DAP 断言失败；
+2026-10-12 开发者确认，本机手动再次执行完整 `make test` 已通过。
+该通过结果不构成此前偶发失败根因的确认。
+
+以下保留目录调整前的验证历史。
 
 runtime 内联的构建与分发验证归入现有 CLI 测试框架：O0、O2、`-fno-inline`，两个 C 静态库的函数地址
 与符号唯一性，搬移后的头文件／静态库，两个独立 `.fb` 包及 debug/release
