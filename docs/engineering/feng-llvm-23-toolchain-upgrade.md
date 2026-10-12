@@ -1,8 +1,8 @@
 # LLVM 23 工具链升级
 
-状态：2026-10-12 人工批准升级；不必要的额外改动已撤回，进入逐文件 Review。
-按人工要求，`toolchain/` 暂时恢复升级前版本；Review 通过后再执行维护脚本
-重新生成制品并全量回归。下文已完成的实测属于清理前记录，不代表当前验收完成。
+状态：2026-10-12 已基于源码提交 `beca8113`，按现有维护脚本重新生成全部
+LLVM 23.1.3 制品，维护脚本内置测试通过。人工要求暂不执行 `make test` 和
+项目性能评测，待制品 Review 后另行验证。清理前的实测不代替本轮完整回归。
 
 ## 原因与范围
 
@@ -91,17 +91,56 @@ Shell 语法和 `git diff --check` 通过。未执行维护重建或新的 `make
 - [x] 三个 host 官方包完成校验、裁剪和工具启动检查。
 - [x] 与升级前文件及动态依赖清单逐项比较；内建头文件按人工确认保持完整组件。
 - [x] macOS SDK 27 的最小 C 链接与新增架构名 `.tbd` 检查通过。
-- [ ] 测试专用 LLD 按原工具来源完成新版本维护构建及全部既有验收。
-- [ ] 两个 LLVM 插件在三个 host 按原工具来源完成维护构建及加载、行为、搬移验证；macOS 待重做。
+- [x] 测试专用 LLD 按原工具来源完成新版本维护构建及全部既有验收。
+- [x] 两个 LLVM 插件在三个 host 按原工具来源完成维护构建及加载、行为、搬移验证。
 - [x] 当前版本检查与 CI 配置保持一致，不混用 LLVM 主版本。
-- [ ] Linux ARM64 与 macOS ARM64 按原工具来源完整执行 `make test`；Linux 已通过，macOS 待重做。
+- [ ] Linux ARM64 与 macOS ARM64 按原工具来源完整执行 `make test`；本轮制品重生成后尚未执行。
 - [x] Linux x64 维护验证结果区分转译运行与原生运行。
 - [x] 性能结果使用新制品记录；历史证据不冒充本轮验证。
 
 维护构建记录沿用现有 `build/` 位置，下载缓存位于 `local/llvm/`，
 临时诊断和回归日志位于 `temp/`。不自动提交或发布工具链预构建 Release。
 
-## 当前核实结果
+## 本轮制品重生成
+
+2026-10-12 按人工要求，仅重生成制品并执行维护脚本内置检查，不执行仓库
+`make test` 或五语言性能评测。维护脚本、工具选择逻辑及生产源码没有新增修改。
+
+| 制品 | 本轮输入与执行环境 | 结果 |
+| --- | --- | --- |
+| 三个 host 的 `toolchain/llvm/` | `fetch_llvm.sh` 复用官方 23.1.3 缓存，`trim_llvm.sh` 重新裁剪 | 完成；工具集合不变，Linux Python 私有运行库与 encodings 为 3.14 |
+| `llvm-c-eh` 的三个 host 制品 | macOS 使用 Homebrew SDK；Linux 使用既有 ARM64／x64 容器的 `/usr/lib/llvm-23` | 普通／sanitizer 消费、IR／CFG、搬移及脚本其他内置检查通过，三个制品安装完成 |
+| `llvm-native-symbols` 的三个 host 制品 | 同上，执行 `build_llvm_native_symbols.sh --platform=...` | IR、C 声明、行为、strict FP、sanitizer 及搬移检查通过，三个制品安装完成 |
+| macOS 测试专用 LLD | Homebrew LLVM 23.1.3 SDK；固定 Debian orig 归档与既有 FDE 补丁 | 376 项上游 Mach-O 用例通过、3 项不适用；10 项 FDE 与 18 组原生异常检查在原位置及搬移后通过 |
+
+Linux x64 容器没有裁剪脚本所需的 `file` 等工具，因此使用已具备依赖的
+ARM64 容器执行 x64 静态裁剪，再在既有 x64 容器核对工具启动并执行插件维护。
+未安装新依赖。x64 消费程序通过 Apple Container 转译执行，不能标为原生 x64
+机器上的验收。仓库根 `local/` 仅被下载和裁剪入口用作缓存。
+
+macOS 裁剪首次在 `lldb-dap --version` 处收到 SIGKILL，脚本未安装该次暂存
+结果；人工配合安全软件授权后，完整重跑成功。测试 LLD 的默认下载较慢，
+通过相同 Debian URL 的公开 CDN 地址分段获取，完整归档 SHA-256 与
+`source.env` 一致，随后由原维护脚本重新校验、解压和构建。
+
+最终核对确认：六个插件的制品散列、源码提交和维护脚本散列与本轮构建记录
+一致，测试 LLD 的安装文件与签名后的暂存文件一致。三个 LLVM 包均未增加
+可执行工具；Clang 内建头文件按既有完整组件策略升级，每个 host 新增 23 个、
+移除 1 个文件。没有新增 Z3 分发文件，测试 LLD 和 macOS 插件仅保留系统
+动态库依赖。
+
+macOS 两个插件的调用者构建环境沿用 `MACOSX_DEPLOYMENT_TARGET=26.0`，
+测试 LLD 由现有 CMake 参数指定相同基线；三个产物的 `LC_BUILD_VERSION`
+均为最低 26.0、SDK 27.0。LLD 链接时，Homebrew 部分静态库对象的最低版本
+标记为 27.0，产生高于目标 26.0 的警告。此轮在 macOS 27 上通过维护检查，
+不等同于 macOS 26 实机兼容性验收；该项仍须在后续验证中确认。
+
+本轮执行日志与制品身份核对保存在 `temp/llvm23-regenerate-20261012/`，维护
+构建记录位于 `build/llvm-c-eh/maintainer-<host>/`、
+`build/llvm-native-symbols/maintainer-<host>/` 和 `build/test-lld/macos-arm64/`。
+这些是本地可清理记录，不进入工具链分发目录。源码与制品均未自动提交。
+
+## 清理前核实记录
 
 以下制品和回归记录均先于本次范围清理。按人工要求，已生成的 LLVM 23 制品
 备份至 `temp/llvm23-scope-cleanup-20261012/toolchain-backup/`，`toolchain/`
