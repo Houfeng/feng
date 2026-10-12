@@ -57,6 +57,7 @@ jobs:
 
       - name: Install macOS build environment
         run: |
+          brew update
           brew install coreutils gh llvm@23
           llvm_bin="$(brew --prefix llvm@23)/bin"
           ln -sf "${llvm_bin}/clang" "${llvm_bin}/cc"
@@ -431,6 +432,7 @@ jobs:
 
       - name: Install macOS build environment
         run: |
+          brew update
           brew install coreutils llvm@23
           llvm_bin="$(brew --prefix llvm@23)/bin"
           ln -sf "${llvm_bin}/clang" "${llvm_bin}/cc"
