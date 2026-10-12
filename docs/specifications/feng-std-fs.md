@@ -57,6 +57,7 @@
 | `File` | `open type File` | 文件读写对象，封装文件描述符与读写操作 |
 | `File.open` | `open static func open(path: string, mode: FileMode): File` | 打开或创建文件，返回 `File` 实例 |
 | `File.read` | `open func read(buffer: byte[!]): long` | 从文件读取至多 `buffer.length()` 个字节，返回实际读取字节数，EOF 返回 `0` |
+| `File.readBytes` | `open func readBytes(): byte[]` | 从当前偏移读取至 EOF，返回准确长度的字节数组，保持 File 打开 |
 | `File.write` | `open func write(bytes: byte[]): long` | 将 `bytes` 写到文件，返回实际写入字节数 |
 | `File.writeText` | `open func writeText(text: string): long` | 将 `text` 的 UTF-8 字节写到文件 |
 | `File.readText` | `open func readText(): string` | 从当前偏移读取全部剩余字节并返回 UTF-8 `string` |
@@ -180,10 +181,21 @@
 - `File.read` 与 `File.write` 都不得自动追加换行、NUL 终止符或其他额外字节。
 - `File.read` 与 `File.write` 在文件已关闭时必须抛出异常。
 
+### 3.2.1 读取全部剩余字节
+
+- `File.readBytes()` 从当前文件偏移开始持续读取，直到一次非零请求的底层读取返回 EOF；正数短读不表示 EOF。
+- 返回数组长度等于实际读取字节数，逐字节保持原内容，不追加 NUL、换行或未使用缓冲区的零值。空输入返回有效的空数组。
+- 文件大小仅可作为分配提示，不能据此提前结束读取。无法查询大小或当前偏移的输入仍须支持；大小查询不得改变当前偏移。
+- 读取期间的文件增长或截断按实际读取结果处理，不承诺并发修改下的文件快照。
+- File 已关闭时抛出 `"fs/file-closed"`；底层读取失败时抛出 `"fs/read-failed"`，不返回部分结果，也不自动重试失败的读取。
+- `File.readBytes()` 成功或异常时都不关闭 File；调用方继续负责关闭。顶层 `readBytes(path)` 则负责打开，并在成功或异常时关闭其创建的 File。
+- 缓冲扩容必须迁移到新的固定长度数组，不修改普通数组的长度或容量；临时缓冲按正常托管生命周期清理。
+- 结果长度使用平台 `int`；不能表示的大小提示不得直接用于预分配。实际读取达到 `int` 最大长度后若仍有数据，抛出 `"fs/read-failed"`，不得溢出、截断或返回部分结果。
+
 ### 3.3 文件文本便利
 
 - `File.writeText(text)` 的语义固定等价于把 `text` 当前的 UTF-8 字节序列传给 `File.write`。
-- `File.readText()` 从当前文件偏移读取全部剩余字节并解码为 UTF-8 `string`。
+- `File.readText()` 按 §3.2.1 读取全部剩余字节，再按原 UTF-8 规则解码为 `string`。
 - `File.readLines()` 以换行符 `"\n"` 作为行分隔符，忽略行内回车字节 `"\r"` 以兼容 `CRLF`；返回内容不包含行尾分隔符。
 - `File.readText` 与 `File.readLines` 在文件已关闭时必须抛出异常。
 

@@ -1,10 +1,10 @@
 # UBSan 测试专用 LLD
 
-固定 LLVM/LLD 22.1.8，维护 Mach-O FDE 重定位修复，不提交完整上游源码。
+固定 LLVM/LLD 23.1.3，维护 Mach-O FDE 重定位修复，不提交完整上游源码。
 规则与验收边界见[插件开发方案 §7.2](../../docs/engineering/c-ir-llvm-exception-plugin-dev.md#72-ubsan-专用预构建-lld)。
 
 `source.env` 固定源码地址、SHA256 和补丁修订号。源码是 Debian 发布的上游 orig
-归档，散列来自同目录的 `llvm-toolchain-22_22.1.8-1.dsc`；不应用 Debian 修改。
+归档，散列来自同目录的 `llvm-toolchain-23_23.1.3-1.dsc`；不应用 Debian 修改。
 `LICENSE.TXT` 为 LLVM 的 Apache-2.0 WITH LLVM-exception 许可证。
 
 `patches/0001-fix-macho-fde-relocation.patch` 保留 Mach-O 配对重定位的完整
@@ -15,11 +15,11 @@
 
 ```sh
 bash scripts/build_test_lld.sh
-bash scripts/build_test_lld.sh --llvm-root=/path/to/llvm-22.1.8
-bash scripts/build_test_lld.sh --source-archive=/path/to/llvm-toolchain-22_22.1.8.orig.tar.xz
+bash scripts/build_test_lld.sh --llvm-root=/path/to/llvm-23.1.3
+bash scripts/build_test_lld.sh --source-archive=/path/to/llvm-toolchain-23_23.1.3.orig.tar.xz
 ```
 
-省略 SDK 时自动查找已安装的完整 LLVM 22.1.8 SDK；不自动安装依赖。
+省略 SDK 时自动查找已安装的完整 LLVM 23.1.3 SDK；不自动安装依赖。
 构建需要 macOS ARM64、CMake、Ninja、完整 SDK、macOS SDK，以及运行上游 lit
 所需的 Python 解释器。本目录不引入自行编写的 Python 脚本。
 

@@ -25,4 +25,6 @@ src/
 └── time/         # 时钟、日期与时间
 ```
 
-标准库行为测试统一放在 `std/std_test/src/`，由仓库根目录的 `make std-tests` 执行。
+纯 Feng 的标准库行为测试放在 `std/std_test/src/`，由仓库根目录的 `make std-tests` 执行。
+需要 C 支持的测试整体放在 `test/`，不与 `std_test` 拆分同一用例；文件读取测试的
+具体归属见 [text-scan 优化方案](../docs/engineering/feng-text-scan-performance-optimize.md#9-实施验证)。

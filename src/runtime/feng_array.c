@@ -9,24 +9,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static size_t feng_array_align_up(size_t value, size_t align) {
-    return (value + (align - 1U)) & ~(align - 1U);
-}
-
-static size_t feng_array_data_offset(void) {
-    return feng_array_align_up(sizeof(struct FengArray), _Alignof(max_align_t));
-}
-
-void *feng_array_payload_inline(struct FengArray *a) {
-    unsigned char *base;
-
-    if (a == NULL || a->capacity == 0U) {
-        return NULL;
-    }
-    base = (unsigned char *)a;
-    return (void *)(base + feng_array_data_offset());
-}
-
 const void *feng_array_payload_inline_const(const struct FengArray *a) {
     const unsigned char *base;
 
@@ -34,7 +16,7 @@ const void *feng_array_payload_inline_const(const struct FengArray *a) {
         return NULL;
     }
     base = (const unsigned char *)a;
-    return (const void *)(base + feng_array_data_offset());
+    return (const void *)(base + FENG_ARRAY_DATA_OFFSET);
 }
 
 void feng_array_slice_copy_into(struct FengArray *dst,
@@ -256,7 +238,7 @@ FengArray *feng_array_new_storage_kinded(
                    element_size);
     }
     payload_size = capacity * element_size;
-    data_offset = feng_array_data_offset();
+    data_offset = FENG_ARRAY_DATA_OFFSET;
     if (payload_size > SIZE_MAX - data_offset) {
         feng_panic("feng_array_new_storage_kinded: data_offset %zu + payload_size %zu overflows",
                    data_offset,
@@ -321,27 +303,6 @@ FengArray *feng_array_new(const FengTypeDescriptor *element_desc,
                                  element_desc,
                                  element_size,
                                  length);
-}
-
-size_t feng_array_length(const FengArray *array) {
-    return array != NULL ? ((const struct FengArray *)array)->length : 0U;
-}
-
-void *feng_array_data(FengArray *array) {
-    struct FengArray *storage = (struct FengArray *)array;
-
-    if (storage == NULL || storage->length == 0U) {
-        return NULL;
-    }
-    return feng_array_payload_inline(storage);
-}
-
-void feng_array_check_index(const FengArray *array, size_t index) {
-    size_t length = feng_array_length(array);
-
-    if (index >= length) {
-        feng_panic("array index %zu out of range (length=%zu)", index, length);
-    }
 }
 
 FengValueKind feng_array_element_kind(const FengArray *array) {

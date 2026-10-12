@@ -19,6 +19,7 @@ func main(args: string[]) {
     run_numeric_tests();
     run_path_tests();
     run_fs_tests();
+    run_fs_bulk_read_tests();
     run_lexer_tests();
     run_parser_tests();
     run_throw_constraint_parser_tests();

@@ -10,7 +10,7 @@ mkdir -p -- "$3"
 output=$(cd -- "$3" && pwd)
 source_dir=$(cd -- "$(dirname -- "$0")" && pwd)
 repo=$(cd -- "$source_dir/../.." && pwd)
-[[ $("$sdk/bin/llvm-config" --version) == 22.1.8 ]] || exit 2
+[[ $("$sdk/bin/llvm-config" --version) == 23.1.3 ]] || exit 2
 link_flags=()
 case "$(uname -s)-$(uname -m)" in
     Darwin-arm64) platform=macos-arm64;;

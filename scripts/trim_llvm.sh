@@ -8,7 +8,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-LLVM_VERSION="${LLVM_VERSION:-22.1.8}"
+LLVM_VERSION="${LLVM_VERSION:-23.1.3}"
 PLATFORM=""
 LLVM_ROOT=""
 OUTPUT_PARENT="${PROJECT_ROOT}/toolchain/llvm"
@@ -33,7 +33,7 @@ Options:
   -h, --help             Show this help.
 
 Environment:
-  LLVM_VERSION           Upstream LLVM version. Default: 22.1.8.
+  LLVM_VERSION           Upstream LLVM version. Default: 23.1.3.
 
 Linux maintenance dependencies:
   ar, bsdtar, file, patchelf, readelf or llvm-readelf, tar, zstd
@@ -373,8 +373,8 @@ extract_linux_runtime_packages() {
       *.rpm) bsdtar -xf "${package}" -C "${RUNTIME_SOURCE}" ;;
       *.deb) extract_deb "${package}" ;;
       cpython-*-LICENSE.txt)
-        mkdir -p "${RUNTIME_SOURCE}/usr/share/licenses/python3.11"
-        cp "${package}" "${RUNTIME_SOURCE}/usr/share/licenses/python3.11/LICENSE"
+        mkdir -p "${RUNTIME_SOURCE}/usr/share/licenses/python3.14"
+        cp "${package}" "${RUNTIME_SOURCE}/usr/share/licenses/python3.14/LICENSE"
         ;;
       *) die "unsupported Linux runtime package: ${filename}" ;;
     esac
@@ -385,17 +385,17 @@ extract_linux_runtime_packages() {
 # filesystem codec. No interpreter, general standard library or LLDB Python
 # bindings are retained.
 copy_python_bootstrap_runtime() {
-  local source_dir="${RUNTIME_SOURCE}/usr/lib64/python3.11/encodings"
-  local destination_dir="${STAGING_DIR}/lib/python-home/lib64/python3.11"
+  local source_dir="${RUNTIME_SOURCE}/usr/lib64/python3.14/encodings"
+  local destination_dir="${STAGING_DIR}/lib/python-home/lib64/python3.14"
   [[ -d "${source_dir}" ]] ||
-    die "Python 3.11 encodings input missing: ${source_dir}"
+    die "Python 3.14 encodings input missing: ${source_dir}"
   mkdir -p "${destination_dir}/encodings"
   # Source modules are sufficient for embedded-Python imports. Package-built
   # __pycache__ files are redundant, optimization-level-specific artifacts.
   find "${source_dir}" -maxdepth 1 -type f -name '*.py' \
     -exec cp {} "${destination_dir}/encodings/" \;
   [[ -f "${destination_dir}/encodings/__init__.py" ]] ||
-    die "Python 3.11 encodings package is incomplete"
+    die "Python 3.14 encodings package is incomplete"
 }
 
 # Return the single extracted candidate for one unresolved soname.
@@ -513,7 +513,7 @@ Included:
 - ordinary-link Clang runtime files supplied by the official package
 - liblldb shared-library files and their soname chain
 - Linux non-glibc DT_NEEDED closure resolved from the pinned packages below
-- Linux Python 3.11 encodings bootstrap package and internal LLDB launchers
+- Linux Python 3.14 encodings bootstrap package and internal LLDB launchers
 - upstream and package license texts
 
 Excluded:
@@ -538,7 +538,7 @@ EOF
 Linux runtime policy:
 - Only the Linux kernel, dynamic loader and glibc foundation remain host
   prerequisites.
-- libpython3.11.so.1.0 and encodings exist only for liblldb initialization.
+- libpython3.14.so.1.0 and encodings exist only for liblldb initialization.
   Feng never uses or supports Python scripts.
 - bin/lldb and bin/lldb-dap select lib/python-home through a private relative
   PYTHONHOME before executing their hidden original ELF files. Users do not
@@ -641,24 +641,24 @@ verify_linux_ncurses_abi() {
 # subset: libpython plus the encodings package selected by the private home.
 verify_minimal_python_runtime() {
   local path relative
-  [[ -f "${STAGING_DIR}/lib/libpython3.11.so.1.0" ]] ||
-    die "private libpython3.11.so.1.0 is missing"
-  [[ -f "${STAGING_DIR}/lib/python-home/lib64/python3.11/encodings/__init__.py" ]] ||
-    die "private Python 3.11 encodings package is missing"
+  [[ -f "${STAGING_DIR}/lib/libpython3.14.so.1.0" ]] ||
+    die "private libpython3.14.so.1.0 is missing"
+  [[ -f "${STAGING_DIR}/lib/python-home/lib64/python3.14/encodings/__init__.py" ]] ||
+    die "private Python 3.14 encodings package is missing"
   while IFS= read -r -d '' path; do
-    relative="${path#"${STAGING_DIR}/lib/python-home/lib64/python3.11/"}"
+    relative="${path#"${STAGING_DIR}/lib/python-home/lib64/python3.14/"}"
     case "${relative}" in
       encodings|encodings/*) ;;
       *) die "unexpected Python standard-library content retained: ${relative}" ;;
     esac
-  done < <(find "${STAGING_DIR}/lib/python-home/lib64/python3.11" \
+  done < <(find "${STAGING_DIR}/lib/python-home/lib64/python3.14" \
     -mindepth 1 -print0)
   while IFS= read -r -d '' path; do
     relative="${path#"${STAGING_DIR}/"}"
     case "${relative}" in
-      lib/libpython3.11.so.1.0|lib/python-home|\
-      lib/python-home/lib64/python3.11|\
-      lib/python-home/lib64/python3.11/encodings/*|LICENSES/*) ;;
+      lib/libpython3.14.so.1.0|lib/python-home|\
+      lib/python-home/lib64/python3.14|\
+      lib/python-home/lib64/python3.14/encodings/*|LICENSES/*) ;;
       *) die "unexpected Python runtime content retained: ${relative}" ;;
     esac
   done < <(find "${STAGING_DIR}" -iname '*python*' -print0)

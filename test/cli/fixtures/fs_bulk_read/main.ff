@@ -1,0 +1,94 @@
+module fs_bulk_read_faults;
+
+import std.fs;
+import std.test;
+
+/** Configure a deterministic POSIX input and fault schedule. */
+@cdecl("feng_fs_bulk_read_fixture", "fs_fixture_prepare")
+extern func fsBulkPrepare(size: int, mode: int, limit: int, fail: int): void;
+/** Validate all bytes against the independent fixture pattern. */
+@cdecl("feng_fs_bulk_read_fixture", "fs_fixture_verify")
+extern func fsBulkVerify(data: byte*, length: int, offset: int): int;
+/** Observe the descriptor used by the reader. */
+@cdecl("feng_fs_bulk_read_fixture", "fs_fixture_is_open")
+extern func fsBulkIsOpen(): int;
+/** Remove the input and reap a stream producer when present. */
+@cdecl("feng_fs_bulk_read_fixture", "fs_fixture_finish")
+extern func fsBulkFinish(): void;
+
+/** Check content and descriptor ownership under a controlled POSIX fault. */
+func fsBulkCheckRead(size: int, mode: int, limit: int, offset: int) {
+    fsBulkPrepare(size, mode, limit, -1);
+    let file = File.create("input.bin", FileMode.Read);
+    if offset > 0 {
+        let prefix: byte[!] = byte[:offset];
+        assert(file.read(prefix) == offset, "prefix count", []);
+    }
+    let data = file.readBytes();
+    assert(fsBulkVerify(&data, data.length(), offset) == 1, "exact bytes and length", []);
+    assert(fsBulkIsOpen() == 1, "File.readBytes keeps descriptor open", []);
+    assert(file.readBytes().length() == 0, "repeat EOF is empty", []);
+    file.close();
+    assert(fsBulkIsOpen() == 0, "explicit close", []);
+    fsBulkFinish();
+}
+
+/** Force growth boundaries, short reads, changing files and real streams. */
+func fsBulkFaults() {
+    let sizes: int[] = [0, 1, 17, 65535, 65536, 65537, 131071, 131072, 131073,
+                        1048575, 1048576, 1048577, 3145745];
+    for let size in sizes {
+        fsBulkCheckRead(size, 3, 0, 0);
+    }
+    fsBulkCheckRead(257, 0, 7, 13);
+    fsBulkCheckRead(257, 1, 7, 13);
+    fsBulkCheckRead(257, 2, 7, 13);
+    fsBulkCheckRead(257, 7, 7, 0);
+    fsBulkCheckRead(200003, 4, 113, 0);
+    fsBulkCheckRead(200003, 5, 113, 0);
+    fsBulkCheckRead(200003, 6, 113, 0);
+}
+
+/** Preserve read errors and descriptor ownership before and after partial reads. */
+func fsBulkFailures() {
+    for let fail in [0, 17, 65537] {
+        fsBulkPrepare(200003, 3, 13, fail);
+        let file = File.create("input.bin", FileMode.Read);
+        var caught = false;
+        try file.readBytes() catch ex: string { caught = ex == "fs/read-failed"; }
+        assert(caught, "read failure propagated", []);
+        assert(fsBulkIsOpen() == 1, "failed File read keeps descriptor open", []);
+        file.close();
+        fsBulkFinish();
+        fsBulkPrepare(200003, 3, 13, fail);
+        caught = false;
+        try readBytes("input.bin") catch ex: string { caught = ex == "fs/read-failed"; }
+        assert(caught, "top-level read failure propagated", []);
+        assert(fsBulkIsOpen() == 0, "failed top-level read closes descriptor", []);
+        fsBulkFinish();
+        fsBulkPrepare(200003, 8, 13, fail);
+        caught = false;
+        try readText("input.bin") catch ex: string { caught = ex == "fs/read-failed"; }
+        assert(caught, "interrupted text read preserves read failure", []);
+        assert(fsBulkIsOpen() == 0, "failed top-level text read closes descriptor", []);
+        fsBulkFinish();
+    }
+}
+
+/** Observe the native descriptor after a successful top-level read. */
+func fsBulkDescriptorCleanup() {
+    fsBulkPrepare(200003, 0, 31, -1);
+    let data = readBytes("input.bin");
+    assert(fsBulkVerify(&data, data.length(), 0) == 1, "top-level exact content", []);
+    assert(fsBulkIsOpen() == 0, "successful top-level read closes descriptor", []);
+    fsBulkFinish();
+}
+
+/** Run only the cases whose setup or assertions require the native fixture. */
+func main(args: string[]) {
+    describe("std.fs native read faults", () {
+        test("hints, growth, short reads and streams", fsBulkFaults);
+        test("errors and descriptor cleanup", fsBulkFailures);
+        test("successful descriptor cleanup", fsBulkDescriptorCleanup);
+    });
+}

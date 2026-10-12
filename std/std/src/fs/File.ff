@@ -28,8 +28,25 @@ extern func c_rename(from: byte*, to: byte*): i32;
 @cdecl("libc", "fstat")
 extern func fs_posix_fstat(fd: int, buf: i64*): i32;
 
+/** Query the current POSIX offset without changing it (off_t is i64 on supported targets). */
+@cdecl("libc", "lseek")
+extern func fs_posix_lseek(fd: i32, offset: i64, whence: i32): i64;
+
+/** Copy bytes between distinct, owned read buffers during migration. */
+@cdecl("libc", "memcpy")
+extern func fs_copy_bytes(destination: byte*, source: byte*, count: uint): byte*;
+
+/** Advance a byte pointer using the existing runtime pointer contract. */
+@runtime
+extern func feng_pointer_move(ptr: byte*, offset: int): byte*;
+
 // Default file creation permission: 0644 = 420
 seal let DEFAULT_FILE_MODE: int = 420;
+
+// Read buffers use platform-sized counts, independent of POSIX off_t.
+seal let FILE_READ_MAX_LENGTH: int = (int)((~(uint)0) >> (uint)1);
+seal let FILE_READ_INITIAL_CAPACITY: int = (int)65536;
+seal let FILE_READ_REQUEST_LIMIT: int = (int)1048576;
 
 /**
  * File I/O object, wrapping a file descriptor with read/write operations.
@@ -73,6 +90,97 @@ open type File {
   }
 
   /**
+   * Read from the current offset until EOF, without closing this File.
+   * The private buffer has fixed array length; used tracks only bytes read.
+   */
+  open func readBytes(): byte[] {
+    self.ensureOpen();
+    var capacity = self.remainingLengthHint();
+    var buffer: byte[!] = byte[:capacity];
+    var used: int = (int)0;
+    while true {
+      if used == capacity {
+        // Probe EOF before allocating: exact-size and empty files need no growth.
+        let probe: byte[!] = byte[:(int)1];
+        if self.readInto(probe, (int)0, (int)1) == (int)0 {
+          break;
+        }
+        if capacity == FILE_READ_MAX_LENGTH {
+          throw "fs/read-failed";
+        }
+        var larger = FILE_READ_INITIAL_CAPACITY;
+        if capacity > (int)0 {
+          if capacity > FILE_READ_MAX_LENGTH / (int)2 {
+            larger = FILE_READ_MAX_LENGTH;
+          } else {
+            larger = capacity * (int)2;
+          }
+        }
+        let replacement: byte[!] = byte[:larger];
+        if used > (int)0 {
+          fs_copy_bytes(&replacement, &buffer, (uint)used);
+        }
+        replacement[used] = probe[0];
+        buffer = replacement;
+        capacity = larger;
+        used += (int)1;
+      } else {
+        var request = capacity - used;
+        if request > FILE_READ_REQUEST_LIMIT {
+          request = FILE_READ_REQUEST_LIMIT;
+        }
+        let count = self.readInto(buffer, used, request);
+        if count == (int)0 {
+          break;
+        }
+        used += count;
+      }
+    }
+    if used == capacity {
+      return (byte[])buffer;
+    }
+    return ((byte[])buffer).clone((int)0, used);
+  }
+
+  /** Read into an owned array window; never compute a pointer for an empty window. */
+  seal func readInto(buffer: byte[!], offset: int, count: int): int {
+    self.ensureOpen();
+    let length = buffer.length();
+    if offset < (int)0 || offset > length || count < (int)0 || count > length - offset {
+      throw "fs/read-failed";
+    }
+    if count == (int)0 {
+      return (int)0;
+    }
+    let destination = feng_pointer_move(&buffer, offset);
+    let result = c_read(self.fd, destination, (uint)count);
+    if result < (int)0 {
+      throw "fs/read-failed";
+    }
+    return result;
+  }
+
+  /** Return a representable remaining-size hint, or zero when metadata is unavailable. */
+  seal func remainingLengthHint(): int {
+    let info = try self.stat() catch {
+      return (int)0;
+    };
+    if info.kind != EntryKind.File || info.size <= (i64)0 {
+      return (int)0;
+    }
+    // SEEK_CUR = 1 on the supported POSIX targets; an offset of zero does not seek.
+    let position = fs_posix_lseek((i32)self.fd, (i64)0, (i32)1);
+    if position < (i64)0 || position >= info.size {
+      return (int)0;
+    }
+    let remaining = info.size - position;
+    if remaining > (i64)FILE_READ_MAX_LENGTH {
+      return (int)0;
+    }
+    return (int)remaining;
+  }
+
+  /**
    * Write bytes to the file.
    * @param bytes - Output byte sequence
    * @return Number of bytes actually written
@@ -105,7 +213,7 @@ open type File {
    * @return UTF-8 string of the remaining file contents
    */
   open func readText(): string {
-    let bytes = readAllBytes(self);
+    let bytes = self.readBytes();
     return string.fromUtf8Bytes(bytes);
   }
 
@@ -198,24 +306,6 @@ open type File {
 // ---- 顶层便捷函数 ----
 
 /**
- * Read all remaining bytes through the public File stream API.
- */
-seal func readAllBytes(file: File): byte[] {
-  let allBytes = List<byte>();
-  let chunk: byte[!] = byte[:(int)4096];
-  while true {
-    let count = file.read(chunk);
-    if count == (int)0 {
-      break;
-    }
-    for var i: int = (int)0; i < count; i += (int)1 {
-      allBytes.add(chunk[i]);
-    }
-  }
-  return allBytes.entries();
-}
-
-/**
  * Write all bytes through the public File stream API.
  */
 seal func writeAllBytes(file: File, bytes: byte[]): void {
@@ -264,7 +354,7 @@ open func writeText(path: string, text: string): void {
  */
 open func readBytes(path: string): byte[] {
   let file = File.create(path, FileMode.Read);
-  let result = try readAllBytes(file) catch ex: string {
+  let result = try file.readBytes() catch ex: string {
     file.close();
     throw ex;
   };

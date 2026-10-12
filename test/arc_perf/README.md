@@ -5,15 +5,15 @@
 共享 CI 的耗时门槛，不将手动释放或 C++ `shared_ptr` 当作等价语义。
 
 ```sh
-bash test/arc_perf/build.sh build/arc-baseline/bin/feng /opt/homebrew/opt/llvm@22 build/arc-perf/baseline
-bash test/arc_perf/build.sh build/bin/feng /opt/homebrew/opt/llvm@22 build/arc-perf/current
+bash test/arc_perf/build.sh build/arc-baseline/bin/feng /opt/homebrew/opt/llvm@23 build/arc-perf/baseline
+bash test/arc_perf/build.sh build/bin/feng /opt/homebrew/opt/llvm@23 build/arc-perf/current
 bash test/arc_perf/measure.sh build/arc-perf/results.tsv build/arc-perf/baseline build/arc-perf/current
 node test/arc_perf/report.js build/arc-perf/results.tsv
-node test/arc_perf/structure.js /opt/homebrew/opt/llvm@22 build/arc-perf/baseline build/arc-perf/current
+node test/arc_perf/structure.js /opt/homebrew/opt/llvm@23 build/arc-perf/baseline build/arc-perf/current
 ```
 
 编译器旁必须有配套 runtime、共享头、插件和工具链布局。构建使用完整 Clang
-22.1.8，macOS 普通测量使用 bundled LLD；正式计时关闭 sanitizer。保存工具哈希、
+23.1.3，macOS 普通测量使用 bundled LLD；正式计时关闭 sanitizer。保存工具哈希、
 命令、生成 C、IR、汇编及二进制。执行产物仅放在工程 `build/` 或根 `temp/`。
 `make test` 会清理两者，执行前必须另行归档证据。
 

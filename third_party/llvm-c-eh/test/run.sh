@@ -24,8 +24,8 @@ mkdir -p -- "$output"
 output=$(cd -- "$output" && pwd)
 plugin=$(cd -- "$(dirname -- "$plugin")" && pwd)/$(basename -- "$plugin")
 "$compiler" --version > "$output/compiler.txt"
-if ! head -1 "$output/compiler.txt" | grep -Eq 'clang version 22\.1\.8([[:space:]]|$)'; then
-    echo 'llvm-c-eh tests require Clang 22.1.8' >&2
+if ! head -1 "$output/compiler.txt" | grep -Eq 'clang version 23\.1\.3([[:space:]]|$)'; then
+    echo 'llvm-c-eh tests require Clang 23.1.3' >&2
     exit 1
 fi
 flags=(-std=gnu11 -fexceptions -g -Wall -Wextra -Werror "-fpass-plugin=$plugin"

@@ -236,11 +236,11 @@ C 预处理器将宏展开成整数常量，Clang 生成 IR 后，Pass 读取配
 | `__LLVM_C_EH_PROTOCOL_VERSION` | 本项目定义；C 发码使用方与插件之间的协议版本，通过 `__llvm_c_eh_configure` 传入 |
 | personality 参数中的 `int version` | 原生展开 ABI 定义；由展开器调用 personality 时传入，表示该调用接口的 ABI 版本 |
 | `LLVM_PLUGIN_API_VERSION` | LLVM 的 `PassPlugin.h` 定义；用于检查 LLVM 加载 Pass 插件的接口版本，保持其原名 |
-| LLVM `22.1.8` | 配套工具链和开发 SDK 的版本，涉及插件二进制的构建与加载兼容性 |
+| LLVM `23.1.3` | 配套工具链和开发 SDK 的版本，涉及插件二进制的构建与加载兼容性 |
 
 其中两个函数参数虽然都名为 `version`，但 `__llvm_c_eh_configure` 接收的是本项目的
 发码协议版本，personality 接收的是展开器提供的 ABI 版本；不得用协议版本宏替代后者。
-LLVM 插件接口的定义见 [LLVM 22.1.8 PassPlugin.h](https://github.com/llvm/llvm-project/blob/llvmorg-22.1.8/llvm/include/llvm/Plugins/PassPlugin.h)。
+LLVM 插件接口的定义见 [LLVM 23.1.3 PassPlugin.h](https://github.com/llvm/llvm-project/blob/llvmorg-23.1.3/llvm/include/llvm/Plugins/PassPlugin.h)。
 协议版本校验不能代替 §7 的 LLVM 工具链和插件加载兼容性验证。
 
 ## 5. 转换与校验顺序
@@ -317,7 +317,7 @@ C++ 异常 runtime。正常使用不输出逐函数转换日志。
 
 - 不指定平台时构建 §6 的全部三个 host；`--platform=<host>` 只构建指定 host。
 - `--llvm-root=<path>` 为可选覆盖；省略时在对应构建环境查找已安装的完整
-  LLVM 22.1.8 SDK，校验版本和必要组件，找不到时明确报错，不自动安装工具链。
+  LLVM 23.1.3 SDK，校验版本和必要组件，找不到时明确报错，不自动安装工具链。
 - 独立工程统一使用 Makefile，不再依赖 CMake／Ninja；从 `llvm-config` 读取 SDK
   编译配置，保留导出入口、无 SDK RPATH 和不另链接 LLVM 的规则。
 - 全平台维护入口为 macOS ARM64：macOS 在本机执行，Linux 分别在已准备的本机
@@ -334,14 +334,14 @@ C++ 异常 runtime。正常使用不输出逐函数转换日志。
 理论上补齐这些依赖可以交叉构建插件，但仍需在 Linux 加载验证。本阶段不扩展
 sysroot 或新增交叉 SDK 管理，使用人工已授权的 Apple Container。
 
-首版配套 LLVM **22.1.8**。构建需要完整开发 SDK 的头文件、构建信息及必要工具；
+当前配套 LLVM **23.1.3**。构建需要完整开发 SDK 的头文件、构建信息及必要工具；
 已剪裁的发行工具链不作为完整 SDK。维护脚本负责以下顺序：
 
-1. 使用显式 SDK，或通过 `llvm-config`／`llvm-config-22` 及已安装的版本目录查找 SDK；
+1. 使用显式 SDK，或通过 `llvm-config`／`llvm-config-23` 及已安装的版本目录查找 SDK；
    校验 LLVM 版本、完整性和 host，记录构建配置；不隐式安装或切换系统工具链。
 2. 在工程 `build/` 或 `temp/` 内构建插件，运行独立测试；不在临时系统目录执行产物。
 3. 分别用该 host 的 bundled Clang 和 sanitizer 测试使用的宿主 Clang 加载、转换并执行
-   夹具。二者均须为 22.1.8，但版本号相同不能代替 LLVM C++ ABI、导出符号和依赖检查；
+   夹具。二者均须为 23.1.3，但版本号相同不能代替 LLVM C++ ABI、导出符号和依赖检查；
    也不要求 `clang` 与 `cc` 指向同一文件。
 4. 全部验证通过后，将动态库、头文件和许可证安装到对应预构建目录。产物不得引用
    维护者本机的临时 SDK 绝对路径；在预期使用环境验证其加载依赖。
@@ -366,8 +366,8 @@ Feng 用户发行包的安装路径与组装由[工具链接入方案](./feng-ll
 2026-09-24 人工明确：Apple 工具链与 LLVM 官方工具链分开使用，不混用。
 
 - Apple 原生对照使用 Apple Clang、Apple ld 及其配套编译资源；不将其结果作为
-  LLVM 22.1.8 插件的加载或行为验收结果。
-- LLVM 插件构建及使用方验收使用 LLVM 22.1.8 Clang、同版本 LLD 和配套编译资源；
+  LLVM 23.1.3 插件的加载或行为验收结果。
+- LLVM 插件构建及使用方验收使用 LLVM 23.1.3 Clang、同版本 LLD 和配套编译资源；
   显式选择并记录实际链接器，不能只检查 Clang 版本后沿用默认 Apple ld。
 - LLVM sanitizer 验证使用完整 LLVM SDK 的配套 sanitizer 资源；发行场景使用已剪裁
   的 bundled 工具链，不要求其提供 sanitizer runtime。macOS 目标 SDK 与系统库的
@@ -385,7 +385,7 @@ LFS 下载。补丁 LLD 不替换 `toolchain/llvm/` 中的原版 LLD，也不进
 Feng Makefile／CI 的消费方式及发行排除规则见[接入文档](./feng-llvm-c-eh-integration-dev.md)。
 
 - `third_party/lld/` 只维护固定版本的来源、SHA256、许可证、补丁和构建说明，不提交
-  完整 LLVM 源码。独立构建使用 `lld/`、公共 CMake 文件及 LLVM 22.1.8 完整开发 SDK；
+  完整 LLVM 源码。独立构建使用 `lld/`、公共 CMake 文件及 LLVM 23.1.3 完整开发 SDK；
   上游测试工具从同版本源码或 SDK 获取，不新增自行编写的 Python 脚本。
 - `scripts/build_test_lld.sh` 为唯一手工维护入口：获取并校验固定源码、应用补丁、调用
   LLD 上游构建系统、运行 Mach-O 回归及本缺陷对照，验证后安装至
@@ -397,7 +397,7 @@ Feng Makefile／CI 的消费方式及发行排除规则见[接入文档](./feng-
   LLD 源码归档，或通过参数复用已有归档；不修改既有下载脚本。
 - 预构建工具须能搬移，不能依赖维护者 Homebrew 的绝对路径；保留所需依赖及许可证，
   记录 LLVM 版本、host、源码和补丁散列、产物散列及验证结果。
-- 独立缺陷验收使用完整 LLVM 22.1.8 Clang 与补丁 LLD，覆盖正常配置和 UBSan 配置；
+- 独立缺陷验收使用完整 LLVM 23.1.3 Clang 与补丁 LLD，覆盖正常配置和 UBSan 配置；
   不降低 sanitizer 检查或优化级别。后续插件验收仍须分别记录原版 LLD 普通结果和
   补丁 LLD UBSan 结果，不能相互替代。Feng 如何消费这些工具见[接入文档](./feng-llvm-c-eh-integration-dev.md)。
 

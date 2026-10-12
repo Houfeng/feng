@@ -31141,6 +31141,249 @@ static void test_lsp_empty_fit_header_hover_and_definition(void) {
     }
 }
 
+/* Reuse the CLI suite's command runner for the runtime distribution matrix. */
+static void runtime_inline_command(const char *format, ...) {
+    va_list args, copy;
+    int length;
+    char *command;
+    va_start(args, format);
+    va_copy(copy, args);
+    length = vsnprintf(NULL, 0, format, copy);
+    va_end(copy);
+    ASSERT(length >= 0);
+    command = malloc((size_t)length + 1U);
+    ASSERT(command != NULL);
+    vsnprintf(command, (size_t)length + 1U, format, args);
+    va_end(args);
+    run_command_or_die(command);
+    free(command);
+}
+
+/* Count actual function definitions, including weak or private duplicates. */
+static size_t runtime_inline_definitions(const char *symbols, const char *name) {
+    size_t count = 0;
+    while (*symbols != '\0') {
+        char kind, symbol[256];
+        const char *next = strchr(symbols, '\n');
+        if (sscanf(symbols, "%*s %c %255s", &kind, symbol) == 2 &&
+            strchr("TtWw", kind) != NULL &&
+            strcmp(symbol[0] == '_' ? symbol + 1 : symbol, name) == 0) {
+            ++count;
+        }
+        if (next == NULL) break;
+        symbols = next + 1;
+    }
+    return count;
+}
+
+/* Preserve the ordinary abort signal and exact bounds diagnostic in each mode. */
+static void runtime_inline_expect_panic(const char *program, const char *argument,
+                                        const char *expected, const char *output) {
+    int status;
+    pid_t child = fork();
+    ASSERT(child >= 0);
+    if (child == 0) {
+        const struct rlimit limit = {0, 0};
+        int fd = open(output, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (fd < 0 || setrlimit(RLIMIT_CORE, &limit) != 0 ||
+            dup2(fd, STDERR_FILENO) < 0) _exit(127);
+        close(fd);
+        execl(program, program, argument, (char *)NULL);
+        _exit(127);
+    }
+    ASSERT(waitpid(child, &status, 0) == child);
+    ASSERT(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+    char *text = read_text_file(output);
+    ASSERT(strstr(text, expected) != NULL);
+    free(text);
+}
+
+/* Installed headers must work with independent C archives and Feng packages. */
+static void test_runtime_inline_distribution(void) {
+    static const char *const modes[] = {"-O0", "-O2", "-O2 -fno-inline"};
+    static const char *const names[] = {
+        "feng_array_length", "feng_array_data", "feng_array_check_index"
+    };
+    static const char *const headers[] = {
+        "feng_runtime.h", "feng_runtime_contract.inc", "feng_generated.h"
+    };
+    static const char *const targets[] = {
+        "macos-arm64", "linux-x64-gnu", "linux-x64-musl",
+        "linux-arm64-gnu", "linux-arm64-musl"
+    };
+    static const char *const triples[] = {
+        "arm64-apple-macosx", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-gnu", "aarch64-unknown-linux-musl"
+    };
+    char work[] = "temp/runtime-inline-XXXXXX";
+    const char *cc = getenv("FENG_CC");
+    const char *flags = getenv("FENG_CC_FLAGS");
+    const char *sdk = "";
+    char *host = NULL, *command, *text;
+    char *include, *library, *program, *output, *header_source;
+    if (cc == NULL || cc[0] == '\0') cc = "build/toolchain/llvm/bin/clang";
+    if (flags == NULL) flags = "";
+#if defined(__APPLE__)
+    sdk = "-isysroot \"$(xcrun --sdk macosx --show-sdk-path)\"";
+#endif
+    ASSERT(mkdtemp(work) != NULL);
+    ASSERT(feng_platform_detect_host_platform(&host, NULL));
+    include = path_join(work, "relocated/include");
+    library = path_join(work, "relocated/libfeng_runtime.a");
+    program = path_join(work, "program");
+    output = path_join(work, "output.txt");
+    header_source = path_join(work, "header.cpp");
+    mkdir_p(include);
+    for (size_t i = 0; i < sizeof(headers) / sizeof(headers[0]); ++i) {
+        char *source = path_join("build/include", headers[i]);
+        char *destination = path_join(include, headers[i]);
+        copy_file_or_die(source, destination);
+        free(source); free(destination);
+    }
+    command = dup_printf("build/lib/%s/libfeng_runtime.a", host);
+    copy_file_or_die(command, library);
+    free(command);
+    write_text_file(header_source, "#include \"feng_runtime.h\"\n");
+    runtime_inline_command("\"%s\" %s -std=c++17 -Wall -Wextra -Werror -pedantic "
+        "-I'%s' -fsyntax-only '%s'", cc, sdk, include, header_source);
+    for (size_t mode = 0; mode < sizeof(modes) / sizeof(modes[0]); ++mode) {
+        for (char consumer = 'a'; consumer <= 'b'; ++consumer) {
+            char *object = dup_printf("%s/%c.o", work, consumer);
+            runtime_inline_command("\"%s\" %s %s %s -std=c11 -Wall -Wextra -Werror "
+                "-pedantic -I'%s' -DCONSUMER=consumer_%c "
+                "-c test/runtime/fixtures/inline/consumer.c -o '%s'",
+                cc, flags, sdk, modes[mode], include, consumer, object);
+            runtime_inline_command("build/toolchain/llvm/bin/llvm-ar rcs '%s/lib%c.a' '%s'",
+                work, consumer, object);
+            text = read_binary_symbols_or_die(object, output);
+            for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
+                ASSERT(runtime_inline_definitions(text, names[i]) == 0);
+            free(text); free(object);
+        }
+        runtime_inline_command("\"%s\" %s %s %s -std=c11 -Wall -Wextra -Werror "
+            "-pedantic -fuse-ld=lld -I'%s' test/runtime/fixtures/inline/main.c "
+            "'%s/liba.a' '%s/libb.a' '%s' 'extlib/%s/libfeng_unwind.a' "
+            "-lpthread -lm -o '%s'", cc, flags, sdk, modes[mode], include,
+            work, work, library, host, program);
+        text = run_binary_capture_stdout_or_die(program);
+        ASSERT(strstr(text, "PASS: inline identity, storage boundaries, values and ownership") != NULL);
+        free(text);
+        text = read_binary_symbols_or_die(program, output);
+        for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
+            ASSERT(runtime_inline_definitions(text, names[i]) == 1);
+        free(text);
+        runtime_inline_expect_panic(program, "null", "array index 0 out of range (length=0)", output);
+        runtime_inline_expect_panic(program, "length", "array index 2 out of range (length=2)", output);
+        runtime_inline_expect_panic(program, "maximum",
+            "array index 18446744073709551615 out of range (length=2)", output);
+    }
+    for (size_t i = 0; i < sizeof(targets) / sizeof(targets[0]); ++i) {
+        char *sysroot = i == 0 ? dup_cstr("/") : path_join("toolchain/sysroot", targets[i]);
+        runtime_inline_command("build/toolchain/llvm/bin/clang --target='%s' --sysroot='%s' "
+            "-ffreestanding -std=c11 -O2 -Wall -Wextra -Werror -pedantic -I'%s' "
+            "-DCONSUMER=consumer_a -c test/runtime/fixtures/inline/consumer.c -o '%s/%s.o'",
+            triples[i], sysroot, include, work, targets[i]);
+        free(sysroot);
+    }
+    for (size_t i = 0; i < 2; ++i) {
+        const char *name = i == 0 ? "first" : "last";
+        char *source_dir = dup_printf("%s/%s/src", work, name);
+        char *manifest = dup_printf("%s/%s/feng.fm", work, name);
+        char *source = path_join(source_dir, "library.ff");
+        mkdir_p(source_dir);
+        text = dup_printf("[package]\nname: \"%s\"\nversion: \"0.1.0\"\n"
+            "target: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n", name);
+        write_text_file(manifest, text); free(text);
+        text = dup_printf("open module inline_test.%s;\n"
+            "open func %s(values: int[]): int { return values[%zu]; }\n", name, name, i);
+        write_text_file(source, text); free(text);
+        runtime_inline_command("build/bin/feng pack '%s/%s' --platform='%s'", work, name, host);
+        free(source_dir); free(manifest); free(source);
+    }
+    char *source = path_join(work, "main.ff");
+    write_text_file(source, "module inline_test.main;\nimport inline_test.first;\n"
+        "import inline_test.last;\nfunc main(args: string[]) {\n"
+        " let values: int[] = [7, 13];\n"
+        " if first(values) != 7 || last(values) != 13 { throw \"inline/package-result\"; }\n}\n");
+    for (size_t release = 0; release < 2; ++release) {
+        runtime_inline_command("build/bin/feng '%s' --target=bin --platform='%s' %s "
+            "--pkg='%s/first/build/pkg/first-0.1.0.fb' "
+            "--pkg='%s/last/build/pkg/last-0.1.0.fb' --out='%s/feng-%zu' --name=program",
+            source, host, release ? "--release" : "", work, work, work, release);
+        command = dup_printf("%s/feng-%zu/bin/program", work, release);
+        text = run_binary_capture_stdout_or_die(command);
+        free(text); free(command);
+    }
+    free(source); free(header_source); free(include); free(library);
+    free(program); free(output); free(host);
+    char *error = NULL;
+    ASSERT(feng_cli_project_remove_tree(work, &error));
+    free(error);
+    puts("runtime inline: archive identity, relocation, five targets and two .fb packages passed");
+}
+
+/* Keep each native fault case and its Feng consumer in the CLI test suite. */
+static void test_fs_bulk_read_faults(void) {
+    char work[] = "temp/fs-bulk-read-XXXXXX";
+    const char *cc = getenv("FENG_CC");
+    const char *flags = getenv("FENG_CC_FLAGS");
+    char *host = NULL, *remove_error = NULL;
+    char *root, *workspace, *source_dir, *source, *manifest, *object, *library;
+    char *sdk, *command, *text, *binary, *output;
+
+    if (cc == NULL || cc[0] == '\0') cc = "build/toolchain/llvm/bin/clang";
+    if (flags == NULL) flags = "";
+    ASSERT(mkdtemp(work) != NULL);
+    ASSERT(feng_platform_detect_host_platform(&host, NULL));
+    root = getcwd(NULL, 0);
+    ASSERT(root != NULL);
+    workspace = path_join(root, work);
+    source_dir = path_join(workspace, "src");
+    source = path_join(source_dir, "main.ff");
+    manifest = path_join(workspace, "feng.fm");
+    object = path_join(workspace, "fixture.o");
+    library = path_join(workspace, "libfeng_fs_bulk_read_fixture.a");
+    output = path_join(workspace, "output.txt");
+    binary = project_host_build_path(workspace, "bin/fs_bulk_read_faults");
+    mkdir_p(source_dir);
+    copy_file_or_die("test/cli/fixtures/fs_bulk_read/main.ff", source);
+    text = dup_printf("[package]\nname: \"fs_bulk_read_faults\"\nversion: \"0.1.0\"\n"
+        "target: \"bin\"\nsrc: \"src/\"\nout: \"build/\"\n"
+        "[dependencies]\nstd: \"%s/std/std\"\n", root);
+    write_text_file(manifest, text);
+    free(text);
+#if defined(__APPLE__)
+    sdk = dup_cstr("-isysroot \"$(xcrun --sdk macosx --show-sdk-path)\"");
+#else
+    sdk = dup_printf("--sysroot=build/toolchain/sysroot/%s "
+        "--gcc-toolchain=build/toolchain/sysroot/%s", host, host);
+#endif
+    command = dup_printf("\"%s\" %s --target='%s' %s -std=c11 -O2 -Wall -Wextra "
+        "-Werror -c test/cli/fixtures/fs_bulk_read/fixture.c -o '%s'",
+        cc, flags, feng_platform_clang_target(host), sdk, object);
+    run_command_or_die(command);
+    free(command);
+    command = dup_printf("build/toolchain/llvm/bin/llvm-ar rcs '%s' '%s'", library, object);
+    run_command_or_die(command);
+    free(command);
+    command = dup_printf("LIBRARY_PATH=\"%s${LIBRARY_PATH:+:$LIBRARY_PATH}\" "
+        "build/bin/feng build '%s'", workspace, workspace);
+    run_command_or_die(command);
+    free(command);
+    /* Only this child uses the fixture directory; the suite keeps its original cwd. */
+    command = dup_printf("cd '%s' && '%s' > '%s'", workspace, binary, output);
+    run_command_or_die(command);
+    free(command);
+    text = read_text_file(output);
+    ASSERT(strstr(text, "Total: 3, Passed: 3, Failed: 0, Skipped: 0") != NULL);
+    free(text);
+    ASSERT(feng_cli_project_remove_tree(workspace, &remove_error));
+    free(remove_error);
+    free(binary); free(output); free(sdk); free(library); free(object);
+    free(manifest); free(source); free(source_dir); free(workspace); free(root); free(host);
+    puts("std.fs native faults: hints, growth, short reads, streams and descriptor cleanup passed");
+}
+
 #include "dap_callable.inc"
 #include "dap_union.inc"
 #include "throw_constraint.inc"
@@ -31164,6 +31407,8 @@ int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
 
+    test_runtime_inline_distribution();
+    test_fs_bulk_read_faults();
     test_bundle_ft_diagnostic_lifetime();
     test_main_argv_lifetime();
     test_binary_operand_lifetime();

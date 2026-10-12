@@ -19,7 +19,7 @@ sha256() { shasum -a 256 "$1" | cut -d ' ' -f 1; }
 # Discover an already installed complete SDK without changing the machine.
 find_sdk() {
     local candidate
-    for candidate in "$(command -v llvm-config || true)" /opt/homebrew/opt/llvm@22/bin/llvm-config; do
+    for candidate in "$(command -v llvm-config || true)" /opt/homebrew/opt/llvm@23/bin/llvm-config; do
         [[ -x "$candidate" ]] || continue
         if [[ $("$candidate" --version) == "$LLD_VERSION" ]]; then "$candidate" --prefix; return; fi
     done
@@ -96,16 +96,16 @@ for option in "$@"; do
     esac
 done
 [[ $(uname -s)/$(uname -m) == Darwin/arm64 ]] || die 'maintenance requires macOS ARM64'
-if [[ -z "$sdk" ]]; then sdk=$(find_sdk) || die 'complete LLVM 22.1.8 SDK not found; use --llvm-root'; fi
+if [[ -z "$sdk" ]]; then sdk=$(find_sdk) || die 'complete LLVM 23.1.3 SDK not found; use --llvm-root'; fi
 sdk=$(cd "$sdk" && pwd)
 for tool in clang clang++ llvm-config FileCheck not llvm-mc llvm-nm llvm-dwarfdump llvm-strip; do
     [[ -x "$sdk/bin/$tool" ]] || die "SDK lacks $tool"
 done
-[[ $("$sdk/bin/llvm-config" --version) == "$LLD_VERSION" ]] || die 'SDK version must be 22.1.8'
+[[ $("$sdk/bin/llvm-config" --version) == "$LLD_VERSION" ]] || die 'SDK version must be 23.1.3'
 for tool in clang clang++; do
     case $("$sdk/bin/$tool" --version | head -1) in
         *"clang version $LLD_VERSION"|*"clang version $LLD_VERSION "*) ;;
-        *) die "$tool version must be 22.1.8";;
+        *) die "$tool version must be 23.1.3";;
     esac
 done
 for tool in cmake ninja python3 curl patch tar codesign shasum file otool xcrun; do command -v "$tool" >/dev/null || die "missing $tool"; done
@@ -113,7 +113,7 @@ original="$repo/toolchain/llvm/macos-arm64/bin/lld"
 [[ -x "$original" ]] || die 'original bundled LLD is required to build the test linker'
 case $("$original" -flavor darwin --version) in
     "LLD $LLD_VERSION"|"LLD $LLD_VERSION "*) ;;
-    *) die 'original LLD version must be 22.1.8';;
+    *) die 'original LLD version must be 23.1.3';;
 esac
 work="$repo/build/test-lld/macos-arm64"
 mkdir -p "$work"
@@ -142,7 +142,7 @@ macos_sdk=$(xcrun --sdk macosx --show-sdk-path)
 cmake -S "$work/source/lld" -B "$work/build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER="$sdk/bin/clang" -DCMAKE_CXX_COMPILER="$sdk/bin/clang++" \
     -DLLVM_DIR="$vendor/cmake" -DTEST_LLD_LLVM_CMAKE_DIR="$sdk/lib/cmake/llvm" \
-    -DCMAKE_EXE_LINKER_FLAGS="--ld-path=$work/tools/ld64.lld" \
+    -DCMAKE_EXE_LINKER_FLAGS="--ld-path=$work/tools/ld64.lld -Wl,-dead_strip_dylibs" \
     -DCMAKE_OSX_SYSROOT="$macos_sdk" -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 -DCMAKE_SKIP_RPATH=ON \
     -DLLVM_INCLUDE_TESTS=ON -DLLVM_EXTERNAL_LIT="$work/lit/lit.py" \
     -DLLD_VENDOR="Feng UBSan test tools patch $LLD_PATCH_REVISION"

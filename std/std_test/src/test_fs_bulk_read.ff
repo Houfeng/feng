@@ -1,0 +1,106 @@
+module std_test;
+import std.fs;
+import std.test;
+import std.text;
+import std.collections;
+
+let fsBulkTestDir = "temp/std-fs-bulk-read";
+
+/** Create binary data with embedded zero bytes using only the public API. */
+func fsBulkWriteInput(path: string, size: int) {
+    let bytes: byte[!] = byte[:size];
+    for var i = 0; i < size; i += 1 {
+        bytes[i] = (byte)((i * 37 + 11) % 256);
+    }
+    writeBytes(path, (byte[])bytes);
+}
+
+/** Validate every byte independently of the reader's buffer layout. */
+func fsBulkVerifyBytes(data: byte[], size: int, offset: int) {
+    check(data.length() == size - offset, "exact byte length");
+    var exact = true;
+    for var i = 0; i < data.length(); i += 1 {
+        if data[i] != (byte)(((i + offset) * 37 + 11) % 256) { exact = false; }
+    }
+    check(exact, "exact byte content");
+}
+
+/** Check exact content, EOF, offset preservation, and File ownership. */
+func fsBulkCheckRead(size: int, offset: int) {
+    let path = fsBulkTestDir + "/input.bin";
+    fsBulkWriteInput(path, size);
+    let file = File.create(path, FileMode.Read);
+    if offset > 0 {
+        let prefix: byte[!] = byte[:offset];
+        check(file.read(prefix) == offset, "prefix count");
+    }
+    let data = file.readBytes();
+    fsBulkVerifyBytes(data, size, offset);
+    check(!file.isClosed(), "File.readBytes keeps File open");
+    check(file.readBytes().length() == 0, "repeat EOF is empty");
+    file.close();
+    check(file.isClosed(), "explicit close");
+    remove(path);
+}
+
+/** Exercise ordinary files around capacity and request boundaries, including NULs. */
+func fsBulkBoundaries() {
+    let sizes: int[] = [0, 1, 17, 65535, 65536, 65537, 131071, 131072, 131073,
+                        1048575, 1048576, 1048577, 3145745];
+    for let size in sizes {
+        fsBulkCheckRead(size, 0);
+    }
+    fsBulkCheckRead(257, 13);
+    fsBulkCheckRead(257, 257);
+}
+
+/** Closed and missing files need no native fault injection. */
+func fsBulkFailures() {
+    let path = fsBulkTestDir + "/input.bin";
+    fsBulkWriteInput(path, 17);
+    let file = File.create(path, FileMode.Read);
+    file.close();
+    var closed = false;
+    try file.readBytes() catch ex: string { closed = ex == "fs/file-closed"; }
+    check(closed, "closed File diagnostic");
+    remove(path);
+    var missing = false;
+    try readBytes(path) catch ex: string { missing = ex == "fs/open-failed"; }
+    check(missing, "open failure diagnostic");
+}
+
+/** Verify public entrypoints, UTF-8 decoding, and the existing line behavior. */
+func fsBulkEntrypoints() {
+    let path = fsBulkTestDir + "/input.bin";
+    fsBulkWriteInput(path, 200003);
+    fsBulkVerifyBytes(readBytes(path), 200003, 0);
+    remove(path);
+    let textPath = fsBulkTestDir + "/text.txt";
+    writeText(textPath, "前缀中文\n第二行\r\n");
+    let file = File.create(textPath, FileMode.Read);
+    let prefix: byte[!] = byte[:6];
+    check(file.read(prefix) == 6, "UTF-8 prefix");
+    check(file.readText() == "中文\n第二行\r\n", "remaining UTF-8 text");
+    file.close();
+    check(readText(textPath) == "前缀中文\n第二行\r\n", "top-level text");
+    let linesFile = File.create(textPath, FileMode.Read);
+    let lines = linesFile.readLines();
+    linesFile.close();
+    check(lines.length() == 2 && lines[0] == "前缀中文" && lines[1] == "第二行", "line behavior");
+    let invalid: byte[] = [(byte)255, (byte)0, (byte)195];
+    writeBytes(textPath, invalid);
+    check(readText(textPath) == string.fromUtf8Bytes(invalid), "same invalid UTF-8 decoder");
+    remove(textPath);
+}
+
+/** Register bulk-reader behavior in the existing std_test suite. */
+open func run_fs_bulk_read_tests() {
+    describe("std.fs bulk read", () {
+        if !isDir("temp") { mkdir("temp"); }
+        if !isDir(fsBulkTestDir) { mkdir(fsBulkTestDir); }
+        test("content, boundaries, offsets and EOF", fsBulkBoundaries);
+        test("closed and missing files", fsBulkFailures);
+        test("public entrypoints and decoding", fsBulkEntrypoints);
+        rmdir(fsBulkTestDir);
+    });
+}

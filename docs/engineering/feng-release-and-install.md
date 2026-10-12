@@ -94,7 +94,7 @@ feng-<version>-<platform>/
 │   │   │   ├── lldb           # 命令行调试器
 │   │   │   └── lldb-dap       # DAP 适配器，供 feng dap / VS Code 使用
 │   │   └── lib/
-│   │       ├── clang/22/      # clang 官方 resource-dir，保持与 bin/clang 的相对位置
+│   │       ├── clang/23/      # clang 官方 resource-dir，保持与 bin/clang 的相对位置
 │   │       │   ├── include/   # 编译器内置头文件（平台无关）
 │   │       │   └── lib/<os>/  # 编译器运行时库（目标 OS）
 │   │       └── liblldb.*       # lldb / lldb-dap 运行所必需的库
@@ -146,14 +146,15 @@ feng-<version>-<platform>/
 
 - LLVM
   - 来源：LLVM 官方 host 平台预编译包。
-  - 版本：`22.1.8`。
+  - 版本：`23.1.3`。
   - 工具：`clang`。
   - 工具：`lld`、`ld.lld`；macOS 另有 `ld64.lld -> lld`。
   - 工具：`llvm-ar`、`llvm-ranlib`。
   - 工具：`lldb`、`lldb-dap`、`lldb-argdumper`、`debugserver` / `lldb-server`。
   - 脚本：`scripts/fetch_llvm.sh`、`scripts/trim_llvm.sh`。
   - Linux host 私有运行库（§5.2）
-    - AlmaLinux 8.10：`libxml2 2.9.7`、`xz 5.2.4`、`zlib 1.2.11`、`libgcc 8.5.0`、`Python 3.11.9`。
+    - AlmaLinux 8.10：`libxml2 2.9.7`、`xz 5.2.4`、`zlib 1.2.11`、`libgcc 8.5.0`。
+    - AlmaLinux 9.8：`Python 3.14.7`。
     - Ubuntu 22.04：`ncurses 6.3`、`libstdc++ 12.3.0`。
     - host 下限：glibc `2.34`。
 - LLVM C EH
@@ -194,7 +195,7 @@ strategy:
       # 扩展时追加：macos-x64、windows-x64 等
 ```
 
-三个平台任务互不交叉构建 Feng 可执行文件，只在对应 native host 产出当前 host 平台的 `feng`。macOS 使用 `macos-26` arm64 runner，并显式选择与本机一致的 Xcode 26.3、macOS 26.2 SDK、Homebrew `llvm@22` 22.1.8 和 Homebrew `coreutils`；`$(brew --prefix llvm@22)/bin` 必须位于构建任务 `PATH` 首位，使 Makefile 构建 Feng 实际调用的 host `clang` 与本机一致，`coreutils` 提供 smoke 回归脚本所需的 `timeout`，不得依赖 runner 的隐式工具解析结果，也不得将构建 Feng 自身使用的 host Clang 与 Feng 编译 `.ff` 时使用的 bundled Clang 混为同一工具。macOS 安装步骤在该 LLVM 的 `bin` 目录中创建指向 `clang` 的 `cc` 软链接，环境检查分别确认 `clang`、`cc` 的精确版本均为 22.1.8。两个 Linux host runner 分别提供 x64 与 arm64 CPU，在 `ubuntu:26.04` job container 中通过 APT 安装构建依赖。工作流的 LLVM 安装步骤显式配置 LLVM 官方 `https://apt.llvm.org/resolute/` 的 `llvm-toolchain-resolute-22` 源，以独立的 `signed-by` 密钥限定该源的信任范围，并按固定的完整 Debian 包版本安装 Clang、compiler-rt 和 LLD 22.1.8；不回退到其他版本。构建、bundled packages 和安装验收任务均将 `/usr/lib/llvm-22/bin` 写入 `GITHUB_PATH`；测试辅助程序调用的 `cc` 通过 `update-alternatives` 选择 Clang 22.1.8。校验 Ubuntu 26.04，并分别检查 `clang`、`cc` 报告的精确版本均为 22.1.8 后再执行任务；不要求两个入口指向同一文件。Git、GitHub CLI、curl 与 CA 证书可作为 CI checkout、APT 密钥和预构建下载的传输依赖额外安装，不改变构建工具基线。CI checkout 固定关闭 Git LFS，并在任何构建或组装脚本读取 `toolchain/` 之前调用 `scripts/toolchain-prebuilt-fetch.sh`，按 [Feng CI 预构建 Toolchain Release 实施方案](./feng-prebuilt-toolchain-ci.md)恢复完整目录。
+三个平台任务互不交叉构建 Feng 可执行文件，只在对应 native host 产出当前 host 平台的 `feng`。macOS 使用 `macos-26` arm64 runner，并显式选择 Xcode 26.3、macOS 26.2 SDK、Homebrew `llvm@23` 23.1.3 和 Homebrew `coreutils`；`$(brew --prefix llvm@23)/bin` 必须位于构建任务 `PATH` 首位，使 Makefile 构建 Feng 实际调用指定版本的 host `clang`，`coreutils` 提供 smoke 回归脚本所需的 `timeout`，不得依赖 runner 的隐式工具解析结果，也不得将构建 Feng 自身使用的 host Clang 与 Feng 编译 `.ff` 时使用的 bundled Clang 混为同一工具。macOS 安装步骤在该 LLVM 的 `bin` 目录中创建指向 `clang` 的 `cc` 软链接，环境检查分别确认 `clang`、`cc` 的精确版本均为 23.1.3。两个 Linux host runner 分别提供 x64 与 arm64 CPU，在 `ubuntu:26.04` job container 中通过 APT 安装构建依赖。工作流的 LLVM 安装步骤显式配置 LLVM 官方 `https://apt.llvm.org/resolute/` 的 `llvm-toolchain-resolute-23` 源，以独立的 `signed-by` 密钥限定该源的信任范围，并按固定的完整 Debian 包版本安装 Clang、compiler-rt 和 LLD 23.1.3；不回退到其他版本。构建、bundled packages 和安装验收任务均将 `/usr/lib/llvm-23/bin` 写入 `GITHUB_PATH`；测试辅助程序调用的 `cc` 通过 `update-alternatives` 选择 Clang 23.1.3。校验 Ubuntu 26.04，并分别检查 `clang`、`cc` 报告的精确版本均为 23.1.3 后再执行任务；不要求两个入口指向同一文件。Git、GitHub CLI、curl 与 CA 证书可作为 CI checkout、APT 密钥和预构建下载的传输依赖额外安装，不改变构建工具基线。CI checkout 固定关闭 Git LFS，并在任何构建或组装脚本读取 `toolchain/` 之前调用 `scripts/toolchain-prebuilt-fetch.sh`，按 [Feng CI 预构建 Toolchain Release 实施方案](./feng-prebuilt-toolchain-ci.md)恢复完整目录。
 
 macOS 全量回归步骤从 `DEVELOPER_DIR` 推导当前 Xcode 的 `SharedFrameworks/LLDB.framework/Versions/A/Resources/debugserver` 路径，检查其可执行后，通过该步骤的 `LLDB_DEBUGSERVER_PATH` 环境变量供仓库 `lldb-dap` 使用。此配置使用 Apple 签名的调试辅助程序，避免无人值守 CI 阻塞于普通 taskport 用户认证；仅作用于全量回归步骤及其子进程。
 
@@ -216,7 +217,7 @@ macOS 任务生成 `macos-arm64` runtime；两个 Linux 任务分别使用同架
 6. 仅在版本 tag 创建或手动试发时校验 `feng` 的格式和 CPU 架构，并逐一校验 runtime 归档成员的格式和 CPU 架构
 7. 仅在版本 tag 创建或手动试发时生成并上传 `release-component-<host-platform>`。构件解压后的固定结构为 `<host-platform>/bin/feng`、`<host-platform>/lib/<runtime-platform>/libfeng_runtime.a`、`<host-platform>/include/` 和 `<host-platform>/SHA256SUMS`；`SHA256SUMS` 记录上述全部文件的 SHA-256。macOS 构件包含一份 runtime，两个 Linux 构件分别包含同架构的 GNU 与 musl runtime。
 
-LSP / DAP 行为由第 5 步 `make test` 中的原生用例验证，干净安装验收不重复执行协议测试，也不为此引入 Python 可执行程序。Linux LLVM 内随包分发的私有 `libpython3.11.so.1.0` 仅用于 LLDB 初始化，不是 CI Python 依赖。
+LSP / DAP 行为由第 5 步 `make test` 中的原生用例验证，干净安装验收不重复执行协议测试，也不为此引入 Python 可执行程序。Linux LLVM 内随包分发的私有 `libpython3.14.so.1.0` 仅用于 LLDB 初始化，不是 CI Python 依赖。
 
 随附包任务：
 
@@ -360,9 +361,9 @@ curl -fsSL https://feng-lang.com/install.sh |
 - [x] `scripts/trim_llvm.sh` 从同一 LLVM 包保留 `clang`、`lld` / `ld.lld`、`lldb`、`lldb-dap` 及包内依赖。Linux 额外依赖由后续任务处理。
 - [x] `scripts/trim_llvm.sh` 保留同一 LLVM 包中的 `llvm-ar` 和 `llvm-ranlib`，供 §9 跨目标归档使用，不依赖 host `ar`。
 - [x] 按 host 平台生成 `toolchain/llvm/macos-arm64/`、`toolchain/llvm/linux-x64-gnu/` 和 `toolchain/llvm/linux-arm64-gnu/`，并校验二进制平台。
-- [x] `scripts/fetch_llvm.sh` 按 §5.2 下载并校验固定版本的 AlmaLinux 8.10 RPM、Ubuntu 22.04 ncurses 和 `libstdc++6` DEB，缓存到 `local/llvm/`。仓库地址、文件名、版本和 SHA-256 必须固定。
+- [x] `scripts/fetch_llvm.sh` 按 §5.2 下载并校验固定版本的 AlmaLinux 8.10／9.8 RPM、Ubuntu 22.04 ncurses 和 `libstdc++6` DEB，缓存到 `local/llvm/`。仓库地址、文件名、版本和 SHA-256 必须固定。
 - [x] `scripts/trim_llvm.sh` 只提取 Linux LLVM 需要的共享库和 soname 链，设置相对 RPATH / RUNPATH，并检查全部 `DT_NEEDED` 依赖和 ncurses 版本化符号。失败时不留下半成品；除 glibc 外，不依赖系统运行库。
-- [x] Linux LLVM 仅保留 `libpython3.11.so.1.0` 和 LLDB 初始化所需的 `encodings`，由内部启动器设置相对 `PYTHONHOME`。不包含 Python 可执行文件、其他标准库、LLDB Python bindings、第三方模块或脚本功能。
+- [x] Linux LLVM 仅保留 `libpython3.14.so.1.0` 和 LLDB 初始化所需的 `encodings`，由内部启动器设置相对 `PYTHONHOME`。不包含 Python 可执行文件、其他标准库、LLDB Python bindings、第三方模块或脚本功能。
 - [x] `scripts/fetch_musl_sysroot.sh` 从 musl.cc 下载并解压 x64 和 arm64 预构建包。
 - [x] `scripts/trim_musl_sysroot.sh` 保留两种架构的 musl、CRT、libgcc 和所需目录，移除 GCC 和 binutils 可执行文件。
 - [x] 将 musl sysroot 迁移到 `toolchain/sysroot/linux-x64-musl/` 和 `toolchain/sysroot/linux-arm64-musl/`，保留原有来源、许可及编译链接验证。
@@ -384,7 +385,7 @@ curl -fsSL https://feng-lang.com/install.sh |
 
 Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 值，也不支持 GCC。Linux host 在严格 C11 模式下统一启用 glibc 的 GNU feature namespace，以公开源码和测试实际使用的 GNU、XSI 与 POSIX.1-2008 接口。Feng 语义分析器直接调用 `fmod` 完成编译期浮点常量计算，因此仅为包含该语义分析器对象的 Linux host 工具与测试可执行文件链接 `libm`；这属于 Feng 编译器自身的构建依赖，不得用于替代 [feng-build.md](../specifications/feng-build.md#25-收集链接信息) 规定的 Feng 用户程序 external 链接信息收集机制。
 
-本地与 CI 共用独立的 `make check-clang`，检查当前 `PATH` 中 `clang` 的精确版本为 22.1.8；`make all`、`make cli`、`make runtime` 及直接构建对象或可执行文件均以前置检查保证编译前完成校验。测试入口 `make test`、`make test-normal`、`make test-sanitize` 还通过 `make check-cc` 独立检查 `cc`，并在清理构建产物之前完成两项校验。两个检查复用同一实现；命令缺失、版本读取失败或版本不符时立即报错停止，版本不符的错误包含实际版本与命令路径。不要求两个入口指向同一文件，也不修改本机工具安装或 `PATH`。检查是只读的，作为构建产物的顺序依赖，不触发重复编译，并保留无改动构建的 `Nothing to be done` 提示。
+本地与 CI 共用独立的 `make check-clang`，检查当前 `PATH` 中 `clang` 的精确版本为 23.1.3；`make all`、`make cli`、`make runtime` 及直接构建对象或可执行文件均以前置检查保证编译前完成校验。测试入口 `make test`、`make test-normal`、`make test-sanitize` 还通过 `make check-cc` 独立检查 `cc`，并在清理构建产物之前完成两项校验。两个检查复用同一实现；命令缺失、版本读取失败或版本不符时立即报错停止，版本不符的错误包含实际版本与命令路径。不要求两个入口指向同一文件，也不修改本机工具安装或 `PATH`。检查是只读的，作为构建产物的顺序依赖，不触发重复编译，并保留无改动构建的 `Nothing to be done` 提示。
 
 - [x] Makefile 在缺失或目标不匹配时创建或更新 `build/toolchain/llvm -> ../../toolchain/llvm/<host-platform>`、`build/toolchain/llvm-c-eh -> ../../toolchain/llvm-c-eh/<host-platform>` 和 `build/toolchain/sysroot -> ../../toolchain/sysroot`；`build/toolchain` 本身保持实体目录。链接已经匹配且所有构建产物均为最新时，`make all` 不写入任何文件，并明确输出包含 `Nothing to be done` 的提示。
 - [x] 在 `src/cli/common.*` 统一实现 Feng 可执行文件、安装根、相对路径和 `PATH` 工具的查找与错误提示。runtime 和 host LLVM 共用该实现，`lldb-dap` 在 §8.4 接入。不增加工具链根目录环境变量。

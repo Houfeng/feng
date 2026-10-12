@@ -3,8 +3,8 @@ SOURCE_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 LLVM_ROOT ?= $(shell llvm-config --prefix 2>/dev/null)
 LLVM_CONFIG := $(LLVM_ROOT)/bin/llvm-config
 LLVM_VERSION := $(shell "$(LLVM_CONFIG)" --version 2>/dev/null)
-ifneq ($(LLVM_VERSION),22.1.8)
-$(error LLVM_ROOT must select a complete LLVM 22.1.8 SDK)
+ifneq ($(LLVM_VERSION),23.1.3)
+$(error LLVM_ROOT must select a complete LLVM 23.1.3 SDK)
 endif
 
 CXX := $(LLVM_ROOT)/bin/clang++

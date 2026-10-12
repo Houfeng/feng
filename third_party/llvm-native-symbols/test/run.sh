@@ -21,7 +21,7 @@ done
 test_dir=$(cd -- "$(dirname -- "$0")" && pwd)
 mkdir -p "$output"
 "$compiler" --version > "$output/compiler.txt"
-grep -Eq 'clang version 22\.1\.8([[:space:]]|$)' "$output/compiler.txt"
+grep -Eq 'clang version 23\.1\.3([[:space:]]|$)' "$output/compiler.txt"
 flags=(-std=c11 -g -Wall -Wextra -Werror)
 if [[ $(uname -s) == Darwin ]]; then flags+=(-isysroot "$(xcrun --show-sdk-path)"); fi
 if [[ -n "$sanitizer" ]]; then flags+=("-fsanitize=$sanitizer" -fno-sanitize-recover=all); fi

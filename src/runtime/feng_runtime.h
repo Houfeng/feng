@@ -723,6 +723,31 @@ bool feng_spec_subject_equal(void *left, void *right);
 
 /* --- Array ------------------------------------------------------------- */
 
+/* Compiler-private array layout shared by the inline accessors below.
+ * Generated C must call those accessors rather than duplicating field access
+ * or payload offset calculations. Layout and ownership are unchanged. */
+struct FengArray {
+    FengManagedHeader header;
+    /* Number of initialized elements, not bytes. */
+    size_t length;
+    /* Number of tail-inline element slots allocated for this instance. */
+    size_t capacity;
+    /* Per-element storage size in bytes (fixed per array instance). */
+    size_t element_size;
+    const FengTypeDescriptor *element_desc;
+    /* Three-way classification per docs/engineering/feng-value-model-delivered.md §7.3.
+     * TRIVIAL    — bytes only.
+     * MANAGED_POINTER — payload is interpreted as `void *` slots.
+     * AGGREGATE  — payload is interpreted as by-value aggregates of size
+     *              `element_aggregate->size`; `element_aggregate` MUST be
+     *              non-NULL when element_kind == AGGREGATE. */
+    FengValueKind element_kind;
+    const FengAggregateDescriptor *element_aggregate;
+    /* No payload pointer/placeholder member exists in this struct.
+     * Element bytes live in the same allocation, tail-inline after an
+     * alignment-adjusted offset computed by feng_array_payload_inline(). */
+};
+
 typedef struct FengArray FengArray;
 
 /* Creates a fresh +1 array. Element classification follows
@@ -963,6 +988,59 @@ void feng_panic(const char *fmt, ...) __attribute__((noreturn, format(printf, 1,
 #else
 void feng_panic(const char *fmt, ...);
 #endif
+
+/* --- Shared runtime inline definitions --------------------------------- */
+
+/* Only feng_runtime_inline.c selects the ordinary external definitions.
+ * All other translation units offer these same bodies for GNU C inlining;
+ * an unexpanded call or function address refers to the runtime archive. */
+#ifdef FENG_RUNTIME_INLINE_IMPLEMENTATION
+#define FENG_RUNTIME_INLINE
+#else
+#define FENG_RUNTIME_INLINE extern inline __attribute__((gnu_inline))
+#endif
+
+/* Keep allocation and access on the same aligned tail-payload offset. */
+#define FENG_ARRAY_DATA_OFFSET \
+    ((sizeof(struct FengArray) + (__alignof__(max_align_t) - 1U)) & \
+     ~(__alignof__(max_align_t) - 1U))
+
+/* Return reserved payload storage, including an empty initialized prefix. */
+FENG_RUNTIME_INLINE void *feng_array_payload_inline(struct FengArray *a) {
+    unsigned char *base;
+
+    if (a == NULL || a->capacity == 0U) {
+        return NULL;
+    }
+    base = (unsigned char *)a;
+    return (void *)(base + FENG_ARRAY_DATA_OFFSET);
+}
+
+/* Read the initialized element count; the internal empty representation is zero. */
+FENG_RUNTIME_INLINE size_t feng_array_length(const FengArray *array) {
+    return array != NULL ? ((const struct FengArray *)array)->length : 0U;
+}
+
+/* Return the first initialized element address, or NULL for an empty array. */
+FENG_RUNTIME_INLINE void *feng_array_data(FengArray *array) {
+    struct FengArray *storage = (struct FengArray *)array;
+
+    if (storage == NULL || storage->length == 0U) {
+        return NULL;
+    }
+    return feng_array_payload_inline(storage);
+}
+
+/* Preserve the checked array access failure and diagnostic for every caller. */
+FENG_RUNTIME_INLINE void feng_array_check_index(const FengArray *array, size_t index) {
+    size_t length = feng_array_length(array);
+
+    if (index >= length) {
+        feng_panic("array index %zu out of range (length=%zu)", index, length);
+    }
+}
+
+#undef FENG_RUNTIME_INLINE
 
 /* --- Runtime Contract ------------------------------------------------- */
 

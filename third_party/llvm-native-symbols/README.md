@@ -9,7 +9,7 @@
 ```sh
 scripts/build_llvm_native_symbols.sh
 scripts/build_llvm_native_symbols.sh --platform=macos-arm64
-scripts/build_llvm_native_symbols.sh --platform=linux-arm64-gnu --llvm-root=/usr/lib/llvm-22
+scripts/build_llvm_native_symbols.sh --platform=linux-arm64-gnu --llvm-root=/usr/lib/llvm-23
 ```
 
 验证成功才安装到 `toolchain/llvm-native-symbols/<host>/lib/`，macOS 基名为

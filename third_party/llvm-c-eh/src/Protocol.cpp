@@ -108,15 +108,15 @@ static bool typeKey(const Value *V) {
 /* A retention edge may cross only compiler-created, unconditional goto blocks. */
 static bool retentionEdge(CallInst &C, BasicBlock *Landing) {
   if (!C.hasOneUse()) return false;
-  auto *Branch = dyn_cast<BranchInst>(*C.user_begin());
-  if (!Branch || !Branch->isConditional() || Branch->getCondition() != &C ||
+  auto *Branch = dyn_cast<CondBrInst>(*C.user_begin());
+  if (!Branch || Branch->getCondition() != &C ||
       Branch->getParent() != C.getParent()) return false;
   SmallPtrSet<BasicBlock *, 8> Seen;
   BasicBlock *B = Branch->getSuccessor(0);
   while (B != Landing) {
     if (!Seen.insert(B).second) return false;
-    auto *Next = dyn_cast<BranchInst>(B->getTerminator());
-    if (!Next || !Next->isUnconditional()) return false;
+    auto *Next = dyn_cast<UncondBrInst>(B->getTerminator());
+    if (!Next) return false;
     for (Instruction &I : *B)
       if (&I != Next && !I.isDebugOrPseudoInst()) return false;
     B = Next->getSuccessor(0);

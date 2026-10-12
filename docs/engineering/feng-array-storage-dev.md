@@ -87,6 +87,12 @@ payload 继续尾随内联在同一块 allocation 中：
 allocation size = aligned array header + capacity * element_size
 ```
 
+结构定义统一位于编译器使用的 `feng_runtime.h`，供数组辅助函数内联使用；
+生成 C 仍调用 accessor，不直接访问布局。分配与取址共用按 `max_align_t`
+对齐的 `FENG_ARRAY_DATA_OFFSET` 表达式，不维护另一份数字偏移。
+头文件与静态库共享函数体的组织方式见
+[text-scan 优化方案 §4.2](feng-text-scan-performance-optimize.md#42-静态库与头文件共同分发)。
+
 ### 4.2 核心不变量
 
 任意时刻必须满足：

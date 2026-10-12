@@ -12,7 +12,7 @@ forward_options=()
 usage() {
     echo 'usage: scripts/build_llvm_native_symbols.sh [--platform=HOST] [--llvm-root=PATH]'
     echo 'HOST: macos-arm64, linux-arm64-gnu or linux-x64-gnu; omitted means all three.'
-    echo 'LLVM 22.1.8 SDK discovery is automatic; --llvm-root overrides one selected host.'
+    echo 'LLVM 23.1.3 SDK discovery is automatic; --llvm-root overrides one selected host.'
     echo 'All-host maintenance uses macOS ARM64 and prepared Apple Container Linux environments.'
 }
 
@@ -29,13 +29,13 @@ sha256() {
 find_sdk() {
     local candidate prefix
     local candidates=()
-    for candidate in llvm-config llvm-config-22; do
+    for candidate in llvm-config llvm-config-23; do
         if prefix=$(command -v "$candidate"); then candidates+=("$prefix"); fi
     done
-    candidates+=(/opt/homebrew/opt/llvm@22/bin/llvm-config /usr/lib/llvm-22/bin/llvm-config)
+    candidates+=(/opt/homebrew/opt/llvm@23/bin/llvm-config /usr/lib/llvm-23/bin/llvm-config)
     for candidate in "${candidates[@]}"; do
         [[ -x "$candidate" ]] || continue
-        [[ $("$candidate" --version) == 22.1.8 ]] || continue
+        [[ $("$candidate" --version) == 23.1.3 ]] || continue
         prefix=$("$candidate" --prefix)
         [[ -x "$prefix/bin/clang++" && -f "$prefix/include/llvm/Plugins/PassPlugin.h" ]] || continue
         printf '%s\n' "$prefix"
@@ -92,7 +92,7 @@ if [[ "$platform" != "$host" ]]; then
         linux-arm64-gnu) container_name=llvm-c-eh-arm64; container_arch=arm64;;
         linux-x64-gnu) container_name=llvm-c-eh-x64; container_arch=amd64;;
     esac
-    inspection=$(container inspect "$container_name") || die "prepare Apple Container $container_name with LLVM 22.1.8 and this repository mounted at /work"
+    inspection=$(container inspect "$container_name") || die "prepare Apple Container $container_name with LLVM 23.1.3 and this repository mounted at /work"
     # Apple plutil reads the documented JSON inspection output without extra dependencies.
     json_field() { printf '%s' "$inspection" | plutil -extract "$1" raw -o - -; }
     [[ $(json_field 0.configuration.platform.os) == linux &&
@@ -123,12 +123,12 @@ if [[ "$platform" != "$host" ]]; then
     exit 0
 fi
 
-if [[ -z "$sdk" ]]; then sdk=$(find_sdk) || die 'complete LLVM 22.1.8 SDK not found; provide --llvm-root'; fi
+if [[ -z "$sdk" ]]; then sdk=$(find_sdk) || die 'complete LLVM 23.1.3 SDK not found; provide --llvm-root'; fi
 sdk=$(cd -- "$sdk" && pwd)
 for tool in clang clang++ llvm-config opt FileCheck llvm-nm llvm-readelf; do
     [[ -x "$sdk/bin/$tool" ]] || die "complete SDK lacks $tool"
 done
-[[ $("$sdk/bin/llvm-config" --version) == 22.1.8 ]] || die 'SDK must be LLVM 22.1.8'
+[[ $("$sdk/bin/llvm-config" --version) == 23.1.3 ]] || die 'SDK must be LLVM 23.1.3'
 [[ -f "$sdk/include/llvm/Plugins/PassPlugin.h" ]] || die 'SDK lacks LLVM development headers'
 for tool in make git; do command -v "$tool" >/dev/null || die "missing $tool"; done
 source_revision=$(git -c safe.directory="$repo" -C "$repo" rev-parse HEAD)
@@ -152,10 +152,10 @@ if [[ "$host" == macos-arm64 ]]; then
     [[ -x "$original_linker" ]] || die 'missing original bundled LLD'
     [[ -x "$sanitizer_linker" ]] || die 'missing UBSan test LLD; run scripts/build_test_lld.sh manually'
     case $("$original_linker" -flavor darwin --version) in
-        "LLD 22.1.8"|"LLD 22.1.8 "*) ;;
-        *) die 'original LLD must be 22.1.8';;
+        "LLD 23.1.3"|"LLD 23.1.3 "*) ;;
+        *) die 'original LLD must be 23.1.3';;
     esac
-    [[ $("$sanitizer_linker" --version) == "Feng UBSan test tools patch $LLD_PATCH_REVISION LLD 22.1.8" ]] ||
+    [[ $("$sanitizer_linker" --version) == "Feng UBSan test tools patch $LLD_PATCH_REVISION LLD 23.1.3" ]] ||
         die 'UBSan test LLD does not match the approved version and patch'
     mkdir -p "$work/tools"
     ln -sf "$original_linker" "$work/tools/ld64.lld"
@@ -169,8 +169,8 @@ else
     normal_linker="$repo/toolchain/llvm/$host/bin/ld.lld"
     [[ -x "$normal_linker" ]] || die 'missing bundled LLVM linker'
     case $("$normal_linker" --version) in
-        "LLD 22.1.8"|"LLD 22.1.8 "*) ;;
-        *) die 'bundled LLD must be 22.1.8';;
+        "LLD 23.1.3"|"LLD 23.1.3 "*) ;;
+        *) die 'bundled LLD must be 23.1.3';;
     esac
     sanitizer_linker="$normal_linker"
     make_args+=("LDFLAGS=--ld-path=\"$normal_linker\"")
@@ -229,7 +229,7 @@ bash "$source_dir/test/run.sh" "$bundled" "$work/relocated plugin/llvm_native_sy
     done
 ) > "$work/source-files.sha256"
 {
-    printf 'project=llvm-native-symbols\nplugin_version=0.1.0\nplugin_build_mode=Release\nbuild_system=make\nllvm_version=22.1.8\nhost=%s\n' "$host"
+    printf 'project=llvm-native-symbols\nplugin_version=0.1.0\nplugin_build_mode=Release\nbuild_system=make\nllvm_version=23.1.3\nhost=%s\n' "$host"
     printf 'source_git_revision=%s\n' "$source_revision"
     printf 'source_tree_sha256=%s\n' "$(sha256 "$work/source-files.sha256")"
     printf 'maintenance_script_sha256=%s\n' "$(sha256 "$0")"

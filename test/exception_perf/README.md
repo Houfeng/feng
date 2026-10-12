@@ -10,7 +10,7 @@
 在工程 `build/` 中构建和运行性能基准：
 
 ```sh
-bash test/exception_perf/build.sh build/bin/feng /opt/homebrew/opt/llvm@22 build/exception-perf/current
+bash test/exception_perf/build.sh build/bin/feng /opt/homebrew/opt/llvm@23 build/exception-perf/current
 bash test/exception_perf/measure.sh build/exception-perf/results.tsv build/exception-perf/baseline build/exception-perf/current
 node test/exception_perf/report.js build/exception-perf/results.tsv
 # 按相同轮次生成相对于 baseline 的逐项差值与差值汇总（候选减基线）。
@@ -18,7 +18,7 @@ node test/exception_perf/report.js build/exception-perf/results.tsv baseline bui
 ```
 
 先冻结基线，再构建候选。编译器旁的 runtime、共享头文件与插件必须与该版本配套。
-使用完整 LLVM 22.1.8 SDK，C++ 和真实 Feng driver 使用同一个 Clang；macOS 普通
+使用完整 LLVM 23.1.3 SDK，C++ 和真实 Feng driver 使用同一个 Clang；macOS 普通
 性能对照都用原 bundled LLD，不使用 UBSan 补丁链接器。主计时关闭 sanitizer。
 保存源码、完整命令、工具及产物哈希、IR、汇编及二进制。Clang 保存的 `.bc`／`.ll`
 是插件降级前的输入；`.lowered.ll` 是单独重放插件得到的检查产物，实际编译的汇编为

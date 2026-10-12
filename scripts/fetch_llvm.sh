@@ -8,7 +8,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-LLVM_VERSION="${LLVM_VERSION:-22.1.8}"
+LLVM_VERSION="${LLVM_VERSION:-23.1.3}"
 LLVM_TAG="llvmorg-${LLVM_VERSION}"
 PLATFORM=""
 CACHE_DIR="${PROJECT_ROOT}/local/llvm"
@@ -28,7 +28,7 @@ Options:
   -h, --help             Show this help.
 
 Environment:
-  LLVM_VERSION           Upstream LLVM version. Default: 22.1.8.
+  LLVM_VERSION           Upstream LLVM version. Default: 23.1.3.
   LLVM_SRC_URL           Override the official LLVM archive URL.
 
 Examples:
@@ -185,8 +185,8 @@ https://repo.almalinux.org/almalinux/8.10/BaseOS/x86_64/os/Packages/libxml2-2.9.
 https://repo.almalinux.org/almalinux/8.10/BaseOS/x86_64/os/Packages/xz-libs-5.2.4-4.el8_6.x86_64.rpm|xz-libs-5.2.4-4.el8_6.x86_64.rpm|eab633cd7e81de007792509bfbea6cbd48dec90e4c0f18a4c1c337cb9c06ee51
 https://repo.almalinux.org/almalinux/8.10/BaseOS/x86_64/os/Packages/zlib-1.2.11-25.el8.x86_64.rpm|zlib-1.2.11-25.el8.x86_64.rpm|ab40e85f180a6d38ce0291408b7ef5c422250f53cb26c44399ef1a4e8622778e
 https://repo.almalinux.org/almalinux/8.10/BaseOS/x86_64/os/Packages/libgcc-8.5.0-28.el8_10.alma.1.x86_64.rpm|libgcc-8.5.0-28.el8_10.alma.1.x86_64.rpm|629a08266f7c1397c00d7c32c0ac6d110fe56e993dcf94024559aa28a570f18d
-https://repo.almalinux.org/almalinux/8.10/AppStream/x86_64/os/Packages/python3.11-libs-3.11.9-1.el8_10.x86_64.rpm|python3.11-libs-3.11.9-1.el8_10.x86_64.rpm|a4f260e7a38d7ee990f3feab2a0c21b4d815ff5d2f9bac328c54d52959c29526
-https://raw.githubusercontent.com/python/cpython/v3.11.9/LICENSE|cpython-3.11.9-LICENSE.txt|3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf
+https://repo.almalinux.org/almalinux/9.8/AppStream/x86_64/os/Packages/python3.14-libs-3.14.7-2.el9_8.x86_64.rpm|python3.14-libs-3.14.7-2.el9_8.x86_64.rpm|f56668549797ef01574d8eef7dcbadb0803c7507b5df9e53af61994ad15217eb
+https://raw.githubusercontent.com/python/cpython/v3.14.7/LICENSE|cpython-3.14.7-LICENSE.txt|b0e25a78cffb43f4d92de8b61ccfa1f1f98ecbc22330b54b5251e7b6ba010231
 https://security.ubuntu.com/ubuntu/pool/main/n/ncurses/libncurses6_6.3-2ubuntu0.2_amd64.deb|libncurses6_6.3-2ubuntu0.2_amd64.deb|0ab876ebf9b8a9118cd45afe435a95e3ec2e6e0302f44c18e3fdc28f26be75ee
 https://security.ubuntu.com/ubuntu/pool/main/n/ncurses/libtinfo6_6.3-2ubuntu0.2_amd64.deb|libtinfo6_6.3-2ubuntu0.2_amd64.deb|47ee28ef9c424ce2010e91101f0c2c98009a432071bc654c4379e2f62b6335d8
 https://archive.ubuntu.com/ubuntu/pool/main/g/gcc-12/gcc-12-base_12.3.0-1ubuntu1~22.04.3_amd64.deb|gcc-12-base_12.3.0-1ubuntu1~22.04.3_amd64.deb|7f9253b7e0976f0526fc21346c73ee006e185a7b2f2f865048ea78a2af55bc8d
@@ -199,8 +199,8 @@ https://repo.almalinux.org/almalinux/8.10/BaseOS/aarch64/os/Packages/libxml2-2.9
 https://repo.almalinux.org/almalinux/8.10/BaseOS/aarch64/os/Packages/xz-libs-5.2.4-4.el8_6.aarch64.rpm|xz-libs-5.2.4-4.el8_6.aarch64.rpm|eb1bf61e0b1635d73c0f8abda8a892d3facb8112fa5dbeb0865a7bdfacb4298a
 https://repo.almalinux.org/almalinux/8.10/BaseOS/aarch64/os/Packages/zlib-1.2.11-25.el8.aarch64.rpm|zlib-1.2.11-25.el8.aarch64.rpm|2822e566148dd0d50844f53830f24864bfb0e68a9f2bb7cb741e78da99bfd0ed
 https://repo.almalinux.org/almalinux/8.10/BaseOS/aarch64/os/Packages/libgcc-8.5.0-28.el8_10.alma.1.aarch64.rpm|libgcc-8.5.0-28.el8_10.alma.1.aarch64.rpm|6978c6f3dc10c50fcd44d02c398e89a08b9eabb7fbf038f09249fb9368e9b073
-https://repo.almalinux.org/almalinux/8.10/AppStream/aarch64/os/Packages/python3.11-libs-3.11.9-1.el8_10.aarch64.rpm|python3.11-libs-3.11.9-1.el8_10.aarch64.rpm|b38245bef65020a5482d70842eb715d4df7aed4b078872cd6399b46a6b6d2629
-https://raw.githubusercontent.com/python/cpython/v3.11.9/LICENSE|cpython-3.11.9-LICENSE.txt|3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf
+https://repo.almalinux.org/almalinux/9.8/AppStream/aarch64/os/Packages/python3.14-libs-3.14.7-2.el9_8.aarch64.rpm|python3.14-libs-3.14.7-2.el9_8.aarch64.rpm|94ffecaab66e133d21780a2d2d45532f525a8f588c7edc450e71b1e765a8997b
+https://raw.githubusercontent.com/python/cpython/v3.14.7/LICENSE|cpython-3.14.7-LICENSE.txt|b0e25a78cffb43f4d92de8b61ccfa1f1f98ecbc22330b54b5251e7b6ba010231
 https://ports.ubuntu.com/ubuntu-ports/pool/main/n/ncurses/libncurses6_6.3-2ubuntu0.2_arm64.deb|libncurses6_6.3-2ubuntu0.2_arm64.deb|1269a0a90a6b9ab074ada65d8eed43636ec58ac9974e9c600a56469702be0bd4
 https://ports.ubuntu.com/ubuntu-ports/pool/main/n/ncurses/libtinfo6_6.3-2ubuntu0.2_arm64.deb|libtinfo6_6.3-2ubuntu0.2_arm64.deb|4884d3f3a3bfd86440e8f2c81c69fc893b43d230719c2a5ff25529f4157650fb
 https://ports.ubuntu.com/ubuntu-ports/pool/main/g/gcc-12/gcc-12-base_12.3.0-1ubuntu1~22.04.3_arm64.deb|gcc-12-base_12.3.0-1ubuntu1~22.04.3_arm64.deb|b2bc566681989941dd059d6391b01c41854857f26d83c53358287d620dfb0fd4

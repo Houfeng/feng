@@ -226,7 +226,7 @@ all cli runtime: | check-clang
 # successful check expands to no recipe, preserving Make's no-op reporting.
 define CHECK_CLANG_VERSION
 $(eval CLANG_CHECK_ERROR := $(shell \
-	compiler="$(1)"; required_version=22.1.8; \
+	compiler="$(1)"; required_version=23.1.3; \
 	compiler_path=$$(command -v "$$compiler") || { \
 		echo "$$compiler $$required_version is required; command not found in PATH"; \
 		exit; \
@@ -275,7 +275,7 @@ test-sanitize: export ASAN_OPTIONS := $(if $(ASAN_OPTIONS),$(ASAN_OPTIONS):)dete
 test-sanitize: check-clang check-cc
 ifeq ($(_HOST_OS),macos)
 	@test -x "$(TEST_LLD_ROOT)/bin/ld64.lld" || { echo "error: missing macOS UBSan linker; restore the toolchain prebuilt archive" >&2; exit 1; }
-	@test "$$('$(TEST_LLD_ROOT)/bin/ld64.lld' --version)" = "Feng UBSan test tools patch 1 LLD 22.1.8"
+	@test "$$('$(TEST_LLD_ROOT)/bin/ld64.lld' --version)" = "Feng UBSan test tools patch 1 LLD 23.1.3"
 	@$(CC) -### -fuse-ld=lld -fsanitize=undefined -fsanitize=address -x c /dev/null -o /dev/null 2>&1 | grep -F '"$(TEST_LLD_ROOT)/bin/ld64.lld"' >/dev/null || { echo "error: Clang did not select the macOS UBSan linker" >&2; exit 1; }
 endif
 	$(MAKE) clean

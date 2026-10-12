@@ -46,19 +46,19 @@ memory 等属性。保留已有 nobuiltin 限制及 errno／浮点语义。
 `toolchain/llvm-native-symbols/<host>/lib/llvm_native_symbols.{dylib,so}` 并携带许可证。
 插件没有运行时头文件，不额外创建空的 include 目录或协议版本。
 
-固定 LLVM 22.1.8；不链接私有 libLLVM、不携带 SDK RPATH。无参数手工入口尝试
+固定 LLVM 23.1.3；不链接私有 libLLVM、不携带 SDK RPATH。无参数手工入口尝试
 macos-arm64、linux-arm64-gnu、linux-x64-gnu，支持 `--platform` 与 `--llvm-root`，
 复用已经准备的 `llvm-c-eh-arm64`／`llvm-c-eh-x64` 维护容器及其 `/work` 挂载。
 不隐式安装依赖，不从普通 make、make test 或 CI 源码重建插件。每个 host 均需验证
 bundled／完整 SDK Clang、O0/O2/O3、sanitizer、搬移、导出与依赖，成功后才安装。
 Linux 主机构建的插件也通过跨目标 IR 检查 macOS 转换。Linux x64 转译执行与原生
 执行分别记录；本轮不发布远端预构建归档。
-维护入口在三个 host 均显式选择、校验并记录 LLVM 22.1.8 LLD；macOS UBSan
+维护入口在三个 host 均显式选择、校验并记录 LLVM 23.1.3 LLD；macOS UBSan
 沿用既有测试专用 LLD，不依赖 Clang 的系统链接器默认值。
 
 ```sh
 scripts/build_llvm_native_symbols.sh --platform=macos-arm64
-make -C third_party/llvm-native-symbols LLVM_ROOT=/path/to/llvm-22.1.8 test
+make -C third_party/llvm-native-symbols LLVM_ROOT=/path/to/llvm-23.1.3 test
 FENG_CC_FLAGS='-fpass-plugin=/absolute/path/llvm_native_symbols.dylib' feng ...
 ```
 

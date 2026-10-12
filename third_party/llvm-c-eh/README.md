@@ -3,7 +3,7 @@
 将 GNU C11 中的编译期异常标记转换为 LLVM 原生异常控制流的独立 LLVM Pass 插件。
 协议及职责边界以[开发方案](../../../docs/engineering/c-ir-llvm-exception-plugin-dev.md)为准。
 
-本项目使用 LLVM 22.1.8 完整 SDK 构建。插件由 Clang 加载，不链接到目标程序；
+本项目使用 LLVM 23.1.3 完整 SDK 构建。插件由 Clang 加载，不链接到目标程序；
 目标程序使用其自身的 personality、异常记录与原生展开器。`test/runtime.c` 仅用于测试，
 不是产品 runtime。
 
@@ -27,17 +27,17 @@ make -C third_party/llvm-c-eh LLVM_ROOT="$LLVM_SDK" test-ubsan
 bash scripts/build_llvm_c_eh.sh
 bash scripts/build_llvm_c_eh.sh --platform=macos-arm64
 bash scripts/build_llvm_c_eh.sh --platform=linux-arm64-gnu
-bash scripts/build_llvm_c_eh.sh --platform=linux-x64-gnu --llvm-root=/usr/lib/llvm-22
+bash scripts/build_llvm_c_eh.sh --platform=linux-x64-gnu --llvm-root=/usr/lib/llvm-23
 ```
 
 无参数时，以 macOS ARM64 为维护入口尝试全部三个 host，逐项报告结果；任一失败则
 最终返回非零，仅安装各自通过全部检查的产物。`--llvm-root` 是所选构建环境内的路径，
-与 `--platform` 一起使用；省略时查找 `llvm-config`、`llvm-config-22` 或已安装的
-Homebrew／Linux LLVM 22 目录，并校验精确版本及开发组件。
+与 `--platform` 一起使用；省略时查找 `llvm-config`、`llvm-config-23` 或已安装的
+Homebrew／Linux LLVM 23 目录，并校验精确版本及开发组件。
 
 Linux 可以直接在对应架构执行单平台命令。macOS 调度 Linux 时使用预先准备的本机
 Apple Container：`llvm-c-eh-arm64`（arm64）及 `llvm-c-eh-x64`（amd64），两者均须将
-当前仓库挂载到 `/work`，安装完整 LLVM 22.1.8 SDK、make 和 git。脚本检查架构和挂载，
+当前仓库挂载到 `/work`，安装完整 LLVM 23.1.3 SDK、make 和 git。脚本检查架构和挂载，
 不自动创建容器或安装依赖；启动原本停止的容器，并在结束时恢复停止状态，原本运行的
 容器保持运行。x64 在 Apple Silicon 上使用 Rosetta，不能代替原生 x64 验收。
 
