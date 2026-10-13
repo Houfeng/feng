@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 export const suite = join(root, 'benchmarks');
 export const work = join(root, 'build/benchmarks');
-export const languages = ['feng', 'cpp', 'rust', 'go', 'swift'];
+export const languages = ['feng', 'cpp', 'rust', 'go', 'swift', 'csharp', 'csharp-aot', 'java'];
 
 /** Compute an identity for a source, executable or input file. */
 export function hashFile(path) {
@@ -46,9 +46,9 @@ export function quantile(values, probability) {
 }
 
 /** Rotate starting positions and reverse alternate rounds to limit order bias. */
-export function languageOrder(round) {
-  const offset = Math.floor(round / 2) % languages.length;
-  const order = [...languages.slice(offset), ...languages.slice(0, offset)];
+export function languageOrder(round, configurations = languages) {
+  const offset = Math.floor(round / 2) % configurations.length;
+  const order = [...configurations.slice(offset), ...configurations.slice(0, offset)];
   return round % 2 ? order.reverse() : order;
 }
 
@@ -59,10 +59,10 @@ export function validateOutput(output, expected, tolerance = 0) {
   tokens.forEach((token, index) => {
     if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(token)) throw new Error(`invalid numeric output: ${token}`);
     if (!tolerance) {
-      if (!/^\d+$/.test(token) || BigInt(token) !== BigInt(expected[index])) throw new Error(`checksum mismatch at field ${index}: ${token} != ${expected[index]}`);
+      if (!/^[+-]?\d+$/.test(token) || BigInt(token) !== BigInt(expected[index])) throw new Error(`checksum mismatch at field ${index}: ${token} != ${expected[index]}`);
     } else {
       const value = Number(token);
-      if (!Number.isFinite(value) || Math.abs(value - expected[index]) > tolerance) throw new Error(`energy mismatch at field ${index}: ${token} != ${expected[index]}`);
+      if (!Number.isFinite(value) || Math.abs(value - expected[index]) > tolerance) throw new Error(`numeric mismatch at field ${index}: ${token} != ${expected[index]}`);
     }
   });
 }
@@ -131,4 +131,60 @@ export function textInput(path, rows) {
   }
   writeFileSync(path, data);
   return { expected: [rows, warnings, errors, sum], units: data.length, unit: 'bytes/s', tolerance: 0, sha256: hashFile(path) };
+}
+
+/** Independently enumerate permutations recursively, without the measured counter algorithm. */
+export function fannkuchReference(n) {
+  if (!Number.isInteger(n) || n < 1 || n > 11) throw new Error('invalid permutation size');
+  const permutation = Array.from({ length: n }, (_, i) => i), scratch = Array(n);
+  let checksum = 0, maximum = 0, ordinal = 0;
+  /** Visit smaller prefixes and rotate this prefix through each possible last element. */
+  function enumerate(size) {
+    if (size === 1) {
+      for (let i = 0; i < n; ++i) scratch[i] = permutation[i];
+      let flips = 0;
+      while (scratch[0] !== 0) {
+        for (let left = 0, right = scratch[0]; left < right; ++left, --right) {
+          const value = scratch[left]; scratch[left] = scratch[right]; scratch[right] = value;
+        }
+        ++flips;
+      }
+      checksum += ordinal++ % 2 === 0 ? flips : -flips;
+      maximum = Math.max(maximum, flips);
+      return;
+    }
+    for (let rotation = 0; rotation < size; ++rotation) {
+      enumerate(size - 1);
+      const first = permutation[0];
+      for (let i = 0; i < size - 1; ++i) permutation[i] = permutation[i + 1];
+      permutation[size - 1] = first;
+    }
+  }
+  enumerate(n);
+  return { expected: [checksum, maximum], units: ordinal, unit: 'permutations/s', tolerance: 0 };
+}
+
+/** Materialize a matrix for the independent reference; measured programs evaluate it on demand. */
+export function spectralReference(n) {
+  if (!Number.isInteger(n) || n < 1 || n > 10000) throw new Error('invalid matrix size');
+  const matrix = new Float64Array(n * n), u = new Float64Array(n).fill(1);
+  const v = new Float64Array(n), scratch = new Float64Array(n);
+  for (let i = 0; i < n; ++i) for (let j = 0; j < n; ++j) {
+    matrix[i * n + j] = 1 / ((i + j) * (i + j + 1) / 2 + i + 1);
+  }
+  /** Multiply by stored coefficients, transposing only the matrix indexing. */
+  function multiply(input, output, transpose) {
+    for (let i = 0; i < n; ++i) {
+      let sum = 0;
+      for (let j = 0; j < n; ++j) sum += matrix[transpose ? j * n + i : i * n + j] * input[j];
+      output[i] = sum;
+    }
+  }
+  for (let iteration = 0; iteration < 10; ++iteration) {
+    multiply(u, scratch, false); multiply(scratch, v, true);
+    multiply(v, scratch, false); multiply(scratch, u, true);
+  }
+  let uv = 0, vv = 0;
+  for (let i = 0; i < n; ++i) { uv += u[i] * v[i]; vv += v[i] * v[i]; }
+  return { expected: [Math.sqrt(uv / vv)], units: 40 * n * n, unit: 'elements/s', tolerance: 1e-9 };
 }

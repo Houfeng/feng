@@ -3,8 +3,8 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
-import { languages, languageOrder, nbodyReference, quantile, textInput, treeReference, validateOutput, work, writeJson } from './common.mjs';
-import { measure, report } from './bench.mjs';
+import { fannkuchReference, languages, languageOrder, nbodyReference, quantile, spectralReference, textInput, treeReference, validateOutput, work, writeJson } from './common.mjs';
+import { artifactFor, benchmarkEnvironment, measure, report } from './bench.mjs';
 
 const directory = join(work, 'self-test');
 mkdirSync(directory, { recursive: true });
@@ -54,15 +54,15 @@ test('summary quantiles interpolate without mutating samples', () => {
   assert.throws(() => quantile([NaN], 0.5));
 });
 
-// Every language occupies every ordinal position twice in ten rounds.
+// Every configuration occupies every ordinal position twice in a full cycle.
 test('sampling order balances all languages and preserves one run per round', () => {
-  const positions = Object.fromEntries(languages.map(language => [language, Array(5).fill(0)]));
-  for (let round = 0; round < 10; round++) {
+  const positions = Object.fromEntries(languages.map(language => [language, Array(languages.length).fill(0)]));
+  for (let round = 0; round < languages.length * 2; round++) {
     const order = languageOrder(round);
-    assert.equal(new Set(order).size, 5);
+    assert.equal(new Set(order).size, languages.length);
     order.forEach((language, position) => positions[language][position]++);
   }
-  for (const counts of Object.values(positions)) assert.deepEqual(counts, [2, 2, 2, 2, 2]);
+  for (const counts of Object.values(positions)) assert.deepEqual(counts, Array(languages.length).fill(2));
 });
 
 // The sampler must execute argv literally and isolate stdout from stderr.
@@ -125,7 +125,7 @@ function reportFixture(label) {
 test('report excludes warmups and refuses incomplete or tampered results', () => {
   const fixture = reportFixture('report');
   const rows = report(fixture.path);
-  assert.equal(rows.length, 5);
+  assert.equal(rows.length, languages.length);
   assert.equal(rows[0].median_ms, 1.5);
   fixture.samples.pop();
   writeFileSync(join(fixture.path, 'samples.jsonl'), fixture.samples.map(sample => JSON.stringify(sample)).join('\n'));
@@ -145,4 +145,85 @@ test('CLI rejects invalid counts and unknown cases', () => {
     assert.equal(result.status, 1);
     assert.match(result.stderr, /invalid|unknown/);
   }
+});
+
+// Managed launch arguments precede input arguments without introducing a shell.
+test('managed and native artifacts resolve directly to their measured processes', () => {
+  const launch = { command: '/runtime with spaces/java', args: ['-cp', '/classes with spaces', 'Main'] };
+  const manifest = { artifacts: [
+    { case: 'nbody', language: 'java', path: 'build/Main.class', launch },
+    { case: 'nbody', language: 'feng', path: 'build/benchmarks/bin/nbody-feng' },
+  ] };
+  assert.deepEqual(artifactFor(manifest, 'nbody', 'java'), launch);
+  assert.deepEqual(artifactFor(manifest, 'nbody', 'feng'), { command: join(work, 'bin/nbody-feng'), args: [] });
+  assert.throws(() => artifactFor(manifest, 'nbody', 'missing'), /missing implementation/);
+});
+
+// Ambient tuning must not silently change JIT, GC or injected Java arguments.
+test('managed runtime configuration uses defaults and suite-owned caches', () => {
+  const overrides = { DOTNET_TieredPGO: '0', COMPlus_gcServer: '1', JAVA_TOOL_OPTIONS: '-Xmx64m',
+    JDK_JAVA_OPTIONS: '-Xint', JDK_JAVAC_OPTIONS: '--release 8', CLASSPATH: 'ambient' };
+  const previous = Object.fromEntries(Object.keys(overrides).map(key => [key, process.env[key]]));
+  try {
+    Object.assign(process.env, overrides);
+    const env = benchmarkEnvironment();
+    for (const key of Object.keys(overrides)) assert.equal(env[key], undefined);
+    assert.equal(env.NUGET_PACKAGES, join(work, 'cache/nuget'));
+    assert.equal(env.DOTNET_CLI_HOME, join(work, 'cache/dotnet'));
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
+
+// Archived runs retain their five-configuration matrix after the suite expands.
+test('report keeps historical artifact configurations and their sampling order', () => {
+  const fixture = reportFixture('report-legacy');
+  const legacy = ['feng', 'cpp', 'rust', 'go', 'swift'];
+  const samples = [];
+  for (let round = 0; round < 3; ++round) languageOrder(round, legacy).forEach((language, position) => samples.push({
+    case: 'nbody', language, round, position, phase: round ? 'measure' : 'warmup',
+    wall_ns: (round ? round : 1000) * 1000000, peak_rss_bytes: 1024 ** 2, stdout: '1 2',
+  }));
+  writeJson(join(fixture.path, 'build.json'), {
+    tools: Object.fromEntries(legacy.map(language => [language, { version: 'legacy' }])),
+    artifacts: legacy.map(language => ({ case: 'nbody', language })),
+  });
+  writeFileSync(join(fixture.path, 'samples.jsonl'), samples.map(sample => JSON.stringify(sample)).join('\n') + '\n');
+  const rows = report(fixture.path);
+  assert.deepEqual(rows.map(row => row.language), legacy);
+  assert.equal(rows[0].median_ms, 1.5);
+});
+
+// Hand-worked small permutations and the public n=7 result constrain the reference.
+test('fannkuch reference covers permutation order, signed checksums and factorial work', () => {
+  assert.deepEqual(fannkuchReference(1).expected, [0, 0]);
+  assert.deepEqual(fannkuchReference(2).expected, [-1, 1]);
+  assert.deepEqual(fannkuchReference(3).expected, [2, 2]);
+  assert.deepEqual(fannkuchReference(4).expected, [4, 4]);
+  assert.deepEqual(fannkuchReference(7).expected, [228, 16]);
+  assert.equal(fannkuchReference(7).units, 5040);
+  for (const n of [0, 12, 1.5]) assert.throws(() => fannkuchReference(n), /invalid/);
+});
+
+// A closed-form 2x2 eigenvalue and the public n=100 result constrain matrix indexing.
+test('spectral reference agrees with independent small matrices and public output', () => {
+  assert.deepEqual(spectralReference(1).expected, [1]);
+  const a = 1 + 1 / 9, b = 1 / 2 + 1 / 15, d = 1 / 4 + 1 / 25;
+  const norm = Math.sqrt((a + d + Math.sqrt((a - d) ** 2 + 4 * b * b)) / 2);
+  assert.ok(Math.abs(spectralReference(2).expected[0] - norm) < 1e-12);
+  assert.equal(spectralReference(2).units, 160);
+  validateOutput('1.274219991', spectralReference(100).expected, 1e-9);
+  for (const n of [0, 10001, 1.5]) assert.throws(() => spectralReference(n), /invalid/);
+});
+
+// Exact signed arithmetic is needed for the two-element fannkuch checksum.
+test('signed integer checksums remain exact and reject fractional or changed output', () => {
+  validateOutput('-1 1', [-1, 1]);
+  validateOutput('-9007199254740993', [-9007199254740993n]);
+  for (const output of ['1 1', '-1.0 1', '-1e0 1', '-1 1 0']) {
+    assert.throws(() => validateOutput(output, [-1, 1]));
+  }
+  assert.throws(() => validateOutput('-9007199254740992', [-9007199254740993n]));
 });

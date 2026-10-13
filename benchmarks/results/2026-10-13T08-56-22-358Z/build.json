@@ -1,0 +1,1564 @@
+{
+  "schema": 2,
+  "created_at": "2026-10-13T08:53:55.635Z",
+  "host": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "release": "27.0.0",
+    "version": "Darwin Kernel Version 27.0.0: Tue Aug 11 21:05:48 PDT 2026; root:xnu-13432.1.9~1/RELEASE_ARM64_T6041",
+    "cpu": "Apple M4 Pro",
+    "logical_cpus": 12,
+    "total_memory_bytes": 51539607552,
+    "node": "v22.14.0",
+    "load_average": [
+      4.27392578125,
+      3.98779296875,
+      4.0380859375
+    ]
+  },
+  "platform": "macos-arm64",
+  "languages": [
+    "feng",
+    "cpp",
+    "rust",
+    "go",
+    "swift",
+    "csharp",
+    "csharp-aot",
+    "java"
+  ],
+  "tools": {
+    "feng": {
+      "path": "/Users/houfeng/Repositories/feng-language/build/bin/feng",
+      "real_path": "/Users/houfeng/Repositories/feng-language/build/bin/feng",
+      "version": "feng 0.1.0",
+      "sha256": "224a0228194c9ccf88b3668f7688cb2708f2eb350aec7f2acc5084049ee888e6"
+    },
+    "cc": {
+      "path": "/opt/homebrew/bin/clang",
+      "real_path": "/opt/homebrew/Cellar/llvm/23.1.3_1/bin/clang-23",
+      "version": "Homebrew clang version 23.1.3\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm/23.1.3_1/bin\nConfiguration file: /opt/homebrew/Cellar/llvm/23.1.3_1/etc/clang/arm64-apple-darwin27.cfg",
+      "sha256": "efdad95de9f1ee4863117fd89a89bdb1a2389298a6d3c444e042aadf92d95448"
+    },
+    "cpp": {
+      "path": "/opt/homebrew/bin/clang++",
+      "real_path": "/opt/homebrew/Cellar/llvm/23.1.3_1/bin/clang-23",
+      "version": "Homebrew clang version 23.1.3\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm/23.1.3_1/bin\nConfiguration file: /opt/homebrew/Cellar/llvm/23.1.3_1/etc/clang/arm64-apple-darwin27.cfg",
+      "sha256": "efdad95de9f1ee4863117fd89a89bdb1a2389298a6d3c444e042aadf92d95448"
+    },
+    "rust": {
+      "path": "/Users/houfeng/.cargo/bin/rustc",
+      "real_path": "/Users/houfeng/.cargo/bin/rustup",
+      "version": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+      "sha256": "9dada6167fb0bc26e44e23f09179ea15b4d9a8ec491fef1ac5a16484699540ac"
+    },
+    "go": {
+      "path": "/opt/homebrew/bin/go",
+      "real_path": "/opt/homebrew/Cellar/go/1.27.0/libexec/bin/go",
+      "version": "go version go1.27.0 darwin/arm64",
+      "sha256": "71c4991041d8e44975c882e4f72005719c958013d3340dc665a3808b72ddf702"
+    },
+    "swift": {
+      "path": "/usr/bin/swiftc",
+      "real_path": "/usr/bin/swiftc",
+      "version": "Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64-apple-macosx27.0.0",
+      "sha256": "34129c71a01a74f7f3b2443521519b2e5447553fa187f5fcafaaf8c42cc192e2"
+    },
+    "csharp": {
+      "path": "/usr/local/share/dotnet/dotnet",
+      "real_path": "/usr/local/share/dotnet/dotnet",
+      "version": "10.0.201",
+      "sha256": "ed548b55647ac4a72abe824947d276544072d895d3ec46cbdd036429134fbf98",
+      "info": ".NET SDK:\n Version:           10.0.201\n Commit:            4d3023de60\n Workload version:  10.0.200-manifests.341de679\n MSBuild version:   18.3.0-release-26153-122+4d3023de6\n\nRuntime Environment:\n OS Name:     Mac OS X\n OS Version:  27.0\n OS Platform: Darwin\n RID:         osx-arm64\n Base Path:   /usr/local/share/dotnet/sdk/10.0.201/\n\n.NET workloads installed:\nThere are no installed workloads to display.\nConfigured to use workload sets when installing new manifests.\nNo workload sets are installed. Run \"dotnet workload restore\" to install a workload set.\n\nHost:\n  Version:      10.0.5\n  Architecture: arm64\n  Commit:       a612c2a105\n\n.NET SDKs installed:\n  9.0.203 [/usr/local/share/dotnet/sdk]\n  10.0.100 [/usr/local/share/dotnet/sdk]\n  10.0.201 [/usr/local/share/dotnet/sdk]\n\n.NET runtimes installed:\n  Microsoft.AspNetCore.App 9.0.4 [/usr/local/share/dotnet/shared/Microsoft.AspNetCore.App]\n  Microsoft.AspNetCore.App 10.0.0 [/usr/local/share/dotnet/shared/Microsoft.AspNetCore.App]\n  Microsoft.AspNetCore.App 10.0.5 [/usr/local/share/dotnet/shared/Microsoft.AspNetCore.App]\n  Microsoft.NETCore.App 9.0.4 [/usr/local/share/dotnet/shared/Microsoft.NETCore.App]\n  Microsoft.NETCore.App 10.0.0 [/usr/local/share/dotnet/shared/Microsoft.NETCore.App]\n  Microsoft.NETCore.App 10.0.5 [/usr/local/share/dotnet/shared/Microsoft.NETCore.App]\n\nOther architectures found:\n  None\n\nEnvironment variables:\n  DOTNET_CLI_HOME                          [/Users/houfeng/Repositories/feng-language/build/benchmarks/cache/dotnet]\n  DOTNET_CLI_TELEMETRY_OPTOUT              [1]\n  DOTNET_NOLOGO                            [1]\n\nglobal.json file:\n  Not found\n\nLearn more:\n  https://aka.ms/dotnet/info\n\nDownload .NET:\n  https://aka.ms/dotnet/download"
+    },
+    "java": {
+      "path": "/Library/Java/JavaVirtualMachines/jdk-25.jdk/Contents/Home/bin/java",
+      "real_path": "/Library/Java/JavaVirtualMachines/jdk-25.jdk/Contents/Home/bin/java",
+      "version": "java 25.0.2 2026-01-20 LTS\nJava(TM) SE Runtime Environment (build 25.0.2+10-LTS-69)\nJava HotSpot(TM) 64-Bit Server VM (build 25.0.2+10-LTS-69, mixed mode, sharing)",
+      "sha256": "593ed014256f2ef1cc542f2318dcb1a464d0448b9a90d5a38a05339f8d8828f1"
+    },
+    "javac": {
+      "path": "/Library/Java/JavaVirtualMachines/jdk-25.jdk/Contents/Home/bin/javac",
+      "real_path": "/Library/Java/JavaVirtualMachines/jdk-25.jdk/Contents/Home/bin/javac",
+      "version": "javac 25.0.2",
+      "sha256": "748d04504d3b2a48292fa7c541f88bdac795926462563612663d006b118fcb23"
+    },
+    "csharp-aot": {
+      "path": "/usr/local/share/dotnet/dotnet",
+      "real_path": "/usr/local/share/dotnet/dotnet",
+      "version": "10.0.201",
+      "sha256": "ed548b55647ac4a72abe824947d276544072d895d3ec46cbdd036429134fbf98",
+      "info": ".NET SDK:\n Version:           10.0.201\n Commit:            4d3023de60\n Workload version:  10.0.200-manifests.341de679\n MSBuild version:   18.3.0-release-26153-122+4d3023de6\n\nRuntime Environment:\n OS Name:     Mac OS X\n OS Version:  27.0\n OS Platform: Darwin\n RID:         osx-arm64\n Base Path:   /usr/local/share/dotnet/sdk/10.0.201/\n\n.NET workloads installed:\nThere are no installed workloads to display.\nConfigured to use workload sets when installing new manifests.\nNo workload sets are installed. Run \"dotnet workload restore\" to install a workload set.\n\nHost:\n  Version:      10.0.5\n  Architecture: arm64\n  Commit:       a612c2a105\n\n.NET SDKs installed:\n  9.0.203 [/usr/local/share/dotnet/sdk]\n  10.0.100 [/usr/local/share/dotnet/sdk]\n  10.0.201 [/usr/local/share/dotnet/sdk]\n\n.NET runtimes installed:\n  Microsoft.AspNetCore.App 9.0.4 [/usr/local/share/dotnet/shared/Microsoft.AspNetCore.App]\n  Microsoft.AspNetCore.App 10.0.0 [/usr/local/share/dotnet/shared/Microsoft.AspNetCore.App]\n  Microsoft.AspNetCore.App 10.0.5 [/usr/local/share/dotnet/shared/Microsoft.AspNetCore.App]\n  Microsoft.NETCore.App 9.0.4 [/usr/local/share/dotnet/shared/Microsoft.NETCore.App]\n  Microsoft.NETCore.App 10.0.0 [/usr/local/share/dotnet/shared/Microsoft.NETCore.App]\n  Microsoft.NETCore.App 10.0.5 [/usr/local/share/dotnet/shared/Microsoft.NETCore.App]\n\nOther architectures found:\n  None\n\nEnvironment variables:\n  DOTNET_CLI_HOME                          [/Users/houfeng/Repositories/feng-language/build/benchmarks/cache/dotnet]\n  DOTNET_CLI_TELEMETRY_OPTOUT              [1]\n  DOTNET_NOLOGO                            [1]\n\nglobal.json file:\n  Not found\n\nLearn more:\n  https://aka.ms/dotnet/info\n\nDownload .NET:\n  https://aka.ms/dotnet/download"
+    }
+  },
+  "commands": [
+    {
+      "command": "/opt/homebrew/bin/clang",
+      "args": [
+        "-std=c11",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/scripts/measure.c",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/measure"
+      ],
+      "log": "build/benchmarks/logs/measure.log",
+      "seconds": 0.24338729200000012,
+      "exit_code": 0
+    },
+    {
+      "command": "/Users/houfeng/Repositories/feng-language/build/bin/feng",
+      "args": [
+        "pack",
+        "/Users/houfeng/Repositories/feng-language/std/std",
+        "--platform=macos-arm64"
+      ],
+      "log": "build/benchmarks/logs/feng-std.log",
+      "seconds": 1.577051834,
+      "exit_code": 0
+    },
+    {
+      "command": "/Users/houfeng/Repositories/feng-language/build/bin/feng",
+      "args": [
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/nbody/feng/main.ff",
+        "--target=bin",
+        "--release",
+        "--platform=macos-arm64",
+        "--pkg=/Users/houfeng/Repositories/feng-language/std/std/build/pkg/std-0.1.0.fb",
+        "--out=/Users/houfeng/Repositories/feng-language/build/benchmarks/feng/nbody",
+        "--name=nbody"
+      ],
+      "log": "build/benchmarks/logs/nbody-feng.log",
+      "seconds": 0.3020539160000003,
+      "exit_code": 0
+    },
+    {
+      "command": "/opt/homebrew/bin/clang++",
+      "args": [
+        "-std=c++17",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/nbody/cpp/main.cpp",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/nbody-cpp"
+      ],
+      "log": "build/benchmarks/logs/nbody-cpp.log",
+      "seconds": 0.3628952919999997,
+      "exit_code": 0
+    },
+    {
+      "command": "/Users/houfeng/.cargo/bin/rustc",
+      "args": [
+        "--edition=2021",
+        "-C",
+        "opt-level=3",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/nbody/rust/main.rs",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/nbody-rust"
+      ],
+      "log": "build/benchmarks/logs/nbody-rust.log",
+      "seconds": 0.6122647079999997,
+      "exit_code": 0
+    },
+    {
+      "command": "/opt/homebrew/bin/go",
+      "args": [
+        "build",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/nbody-go",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/nbody/go/main.go"
+      ],
+      "log": "build/benchmarks/logs/nbody-go.log",
+      "seconds": 0.2508368330000003,
+      "exit_code": 0
+    },
+    {
+      "command": "/usr/bin/swiftc",
+      "args": [
+        "-O",
+        "-module-cache-path",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/cache/swift",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/nbody/swift/main.swift",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/nbody-swift"
+      ],
+      "log": "build/benchmarks/logs/nbody-swift.log",
+      "seconds": 1.287302375,
+      "exit_code": 0
+    },
+    {
+      "command": "/usr/local/share/dotnet/dotnet",
+      "args": [
+        "publish",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/nbody/csharp/Benchmark.csproj",
+        "-c",
+        "Release",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/nbody/csharp/publish",
+        "--nologo",
+        "-r",
+        "osx-arm64",
+        "--self-contained",
+        "false",
+        "-p:PublishAot=false",
+        "-p:PublishReadyToRun=false",
+        "-p:UseAppHost=false"
+      ],
+      "log": "build/benchmarks/logs/nbody-csharp.log",
+      "seconds": 2.0409081669999996,
+      "exit_code": 0
+    },
+    {
+      "command": "/usr/local/share/dotnet/dotnet",
+      "args": [
+        "publish",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/nbody/csharp-aot/Benchmark.csproj",
+        "-c",
+        "Release",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/nbody/csharp-aot/publish",
+        "--nologo",
+        "-r",
+        "osx-arm64",
+        "--self-contained",
+        "true",
+        "-p:PublishAot=true",
+        "-p:PublishReadyToRun=false",
+        "-p:UseAppHost=true"
+      ],
+      "log": "build/benchmarks/logs/nbody-csharp-aot.log",
+      "seconds": 2.3590665829999997,
+      "exit_code": 0
+    },
+    {
+      "command": "/Library/Java/JavaVirtualMachines/jdk-25.jdk/Contents/Home/bin/javac",
+      "args": [
+        "-encoding",
+        "UTF-8",
+        "-d",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/nbody/java",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/nbody/java/Main.java"
+      ],
+      "log": "build/benchmarks/logs/nbody-java.log",
+      "seconds": 0.2625041250000013,
+      "exit_code": 0
+    },
+    {
+      "command": "/Users/houfeng/Repositories/feng-language/build/bin/feng",
+      "args": [
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/binary-trees/feng/main.ff",
+        "--target=bin",
+        "--release",
+        "--platform=macos-arm64",
+        "--pkg=/Users/houfeng/Repositories/feng-language/std/std/build/pkg/std-0.1.0.fb",
+        "--out=/Users/houfeng/Repositories/feng-language/build/benchmarks/feng/binary-trees",
+        "--name=binary-trees"
+      ],
+      "log": "build/benchmarks/logs/binary-trees-feng.log",
+      "seconds": 0.32524904100000096,
+      "exit_code": 0
+    },
+    {
+      "command": "/opt/homebrew/bin/clang++",
+      "args": [
+        "-std=c++17",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/binary-trees/cpp/main.cpp",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/binary-trees-cpp"
+      ],
+      "log": "build/benchmarks/logs/binary-trees-cpp.log",
+      "seconds": 0.2578202500000007,
+      "exit_code": 0
+    },
+    {
+      "command": "/Users/houfeng/.cargo/bin/rustc",
+      "args": [
+        "--edition=2021",
+        "-C",
+        "opt-level=3",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/binary-trees/rust/main.rs",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/binary-trees-rust"
+      ],
+      "log": "build/benchmarks/logs/binary-trees-rust.log",
+      "seconds": 0.26866049999999997,
+      "exit_code": 0
+    },
+    {
+      "command": "/opt/homebrew/bin/go",
+      "args": [
+        "build",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/binary-trees-go",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/binary-trees/go/main.go"
+      ],
+      "log": "build/benchmarks/logs/binary-trees-go.log",
+      "seconds": 0.06751516699999957,
+      "exit_code": 0
+    },
+    {
+      "command": "/usr/bin/swiftc",
+      "args": [
+        "-O",
+        "-module-cache-path",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/cache/swift",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/binary-trees/swift/main.swift",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/binary-trees-swift"
+      ],
+      "log": "build/benchmarks/logs/binary-trees-swift.log",
+      "seconds": 1.1756744579999996,
+      "exit_code": 0
+    },
+    {
+      "command": "/usr/local/share/dotnet/dotnet",
+      "args": [
+        "publish",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/binary-trees/csharp/Benchmark.csproj",
+        "-c",
+        "Release",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/binary-trees/csharp/publish",
+        "--nologo",
+        "-r",
+        "osx-arm64",
+        "--self-contained",
+        "false",
+        "-p:PublishAot=false",
+        "-p:PublishReadyToRun=false",
+        "-p:UseAppHost=false"
+      ],
+      "log": "build/benchmarks/logs/binary-trees-csharp.log",
+      "seconds": 0.7190741249999992,
+      "exit_code": 0
+    },
+    {
+      "command": "/usr/local/share/dotnet/dotnet",
+      "args": [
+        "publish",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/binary-trees/csharp-aot/Benchmark.csproj",
+        "-c",
+        "Release",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/binary-trees/csharp-aot/publish",
+        "--nologo",
+        "-r",
+        "osx-arm64",
+        "--self-contained",
+        "true",
+        "-p:PublishAot=true",
+        "-p:PublishReadyToRun=false",
+        "-p:UseAppHost=true"
+      ],
+      "log": "build/benchmarks/logs/binary-trees-csharp-aot.log",
+      "seconds": 2.2346648339999993,
+      "exit_code": 0
+    },
+    {
+      "command": "/Library/Java/JavaVirtualMachines/jdk-25.jdk/Contents/Home/bin/javac",
+      "args": [
+        "-encoding",
+        "UTF-8",
+        "-d",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/binary-trees/java",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/binary-trees/java/Main.java"
+      ],
+      "log": "build/benchmarks/logs/binary-trees-java.log",
+      "seconds": 0.22369808299999933,
+      "exit_code": 0
+    },
+    {
+      "command": "/Users/houfeng/Repositories/feng-language/build/bin/feng",
+      "args": [
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/text-scan/feng/main.ff",
+        "--target=bin",
+        "--release",
+        "--platform=macos-arm64",
+        "--pkg=/Users/houfeng/Repositories/feng-language/std/std/build/pkg/std-0.1.0.fb",
+        "--out=/Users/houfeng/Repositories/feng-language/build/benchmarks/feng/text-scan",
+        "--name=text-scan"
+      ],
+      "log": "build/benchmarks/logs/text-scan-feng.log",
+      "seconds": 0.3781627089999984,
+      "exit_code": 0
+    },
+    {
+      "command": "/opt/homebrew/bin/clang++",
+      "args": [
+        "-std=c++17",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/text-scan/cpp/main.cpp",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/text-scan-cpp"
+      ],
+      "log": "build/benchmarks/logs/text-scan-cpp.log",
+      "seconds": 0.28815212500000054,
+      "exit_code": 0
+    },
+    {
+      "command": "/Users/houfeng/.cargo/bin/rustc",
+      "args": [
+        "--edition=2021",
+        "-C",
+        "opt-level=3",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/text-scan/rust/main.rs",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/text-scan-rust"
+      ],
+      "log": "build/benchmarks/logs/text-scan-rust.log",
+      "seconds": 0.3047111659999973,
+      "exit_code": 0
+    },
+    {
+      "command": "/opt/homebrew/bin/go",
+      "args": [
+        "build",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/text-scan-go",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/text-scan/go/main.go"
+      ],
+      "log": "build/benchmarks/logs/text-scan-go.log",
+      "seconds": 0.07551104199999827,
+      "exit_code": 0
+    },
+    {
+      "command": "/usr/bin/swiftc",
+      "args": [
+        "-O",
+        "-module-cache-path",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/cache/swift",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/text-scan/swift/main.swift",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/text-scan-swift"
+      ],
+      "log": "build/benchmarks/logs/text-scan-swift.log",
+      "seconds": 1.1425956659999974,
+      "exit_code": 0
+    },
+    {
+      "command": "/usr/local/share/dotnet/dotnet",
+      "args": [
+        "publish",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/text-scan/csharp/Benchmark.csproj",
+        "-c",
+        "Release",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/text-scan/csharp/publish",
+        "--nologo",
+        "-r",
+        "osx-arm64",
+        "--self-contained",
+        "false",
+        "-p:PublishAot=false",
+        "-p:PublishReadyToRun=false",
+        "-p:UseAppHost=false"
+      ],
+      "log": "build/benchmarks/logs/text-scan-csharp.log",
+      "seconds": 0.7338127910000003,
+      "exit_code": 0
+    },
+    {
+      "command": "/usr/local/share/dotnet/dotnet",
+      "args": [
+        "publish",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/text-scan/csharp-aot/Benchmark.csproj",
+        "-c",
+        "Release",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/text-scan/csharp-aot/publish",
+        "--nologo",
+        "-r",
+        "osx-arm64",
+        "--self-contained",
+        "true",
+        "-p:PublishAot=true",
+        "-p:PublishReadyToRun=false",
+        "-p:UseAppHost=true"
+      ],
+      "log": "build/benchmarks/logs/text-scan-csharp-aot.log",
+      "seconds": 2.3352707090000004,
+      "exit_code": 0
+    },
+    {
+      "command": "/Library/Java/JavaVirtualMachines/jdk-25.jdk/Contents/Home/bin/javac",
+      "args": [
+        "-encoding",
+        "UTF-8",
+        "-d",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/text-scan/java",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/text-scan/java/Main.java"
+      ],
+      "log": "build/benchmarks/logs/text-scan-java.log",
+      "seconds": 0.24480820799999856,
+      "exit_code": 0
+    },
+    {
+      "command": "/Users/houfeng/Repositories/feng-language/build/bin/feng",
+      "args": [
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/fannkuch-redux/feng/main.ff",
+        "--target=bin",
+        "--release",
+        "--platform=macos-arm64",
+        "--pkg=/Users/houfeng/Repositories/feng-language/std/std/build/pkg/std-0.1.0.fb",
+        "--out=/Users/houfeng/Repositories/feng-language/build/benchmarks/feng/fannkuch-redux",
+        "--name=fannkuch-redux"
+      ],
+      "log": "build/benchmarks/logs/fannkuch-redux-feng.log",
+      "seconds": 0.32748670800000035,
+      "exit_code": 0
+    },
+    {
+      "command": "/opt/homebrew/bin/clang++",
+      "args": [
+        "-std=c++17",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/fannkuch-redux/cpp/main.cpp",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/fannkuch-redux-cpp"
+      ],
+      "log": "build/benchmarks/logs/fannkuch-redux-cpp.log",
+      "seconds": 0.2877304579999982,
+      "exit_code": 0
+    },
+    {
+      "command": "/Users/houfeng/.cargo/bin/rustc",
+      "args": [
+        "--edition=2021",
+        "-C",
+        "opt-level=3",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/fannkuch-redux/rust/main.rs",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/fannkuch-redux-rust"
+      ],
+      "log": "build/benchmarks/logs/fannkuch-redux-rust.log",
+      "seconds": 0.2844480829999993,
+      "exit_code": 0
+    },
+    {
+      "command": "/opt/homebrew/bin/go",
+      "args": [
+        "build",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/fannkuch-redux-go",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/fannkuch-redux/go/main.go"
+      ],
+      "log": "build/benchmarks/logs/fannkuch-redux-go.log",
+      "seconds": 0.0745460830000011,
+      "exit_code": 0
+    },
+    {
+      "command": "/usr/bin/swiftc",
+      "args": [
+        "-O",
+        "-module-cache-path",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/cache/swift",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/fannkuch-redux/swift/main.swift",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/fannkuch-redux-swift"
+      ],
+      "log": "build/benchmarks/logs/fannkuch-redux-swift.log",
+      "seconds": 1.2455254999999998,
+      "exit_code": 0
+    },
+    {
+      "command": "/usr/local/share/dotnet/dotnet",
+      "args": [
+        "publish",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/fannkuch-redux/csharp/Benchmark.csproj",
+        "-c",
+        "Release",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/fannkuch-redux/csharp/publish",
+        "--nologo",
+        "-r",
+        "osx-arm64",
+        "--self-contained",
+        "false",
+        "-p:PublishAot=false",
+        "-p:PublishReadyToRun=false",
+        "-p:UseAppHost=false"
+      ],
+      "log": "build/benchmarks/logs/fannkuch-redux-csharp.log",
+      "seconds": 0.6933573749999996,
+      "exit_code": 0
+    },
+    {
+      "command": "/usr/local/share/dotnet/dotnet",
+      "args": [
+        "publish",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/fannkuch-redux/csharp-aot/Benchmark.csproj",
+        "-c",
+        "Release",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/fannkuch-redux/csharp-aot/publish",
+        "--nologo",
+        "-r",
+        "osx-arm64",
+        "--self-contained",
+        "true",
+        "-p:PublishAot=true",
+        "-p:PublishReadyToRun=false",
+        "-p:UseAppHost=true"
+      ],
+      "log": "build/benchmarks/logs/fannkuch-redux-csharp-aot.log",
+      "seconds": 2.1190149579999997,
+      "exit_code": 0
+    },
+    {
+      "command": "/Library/Java/JavaVirtualMachines/jdk-25.jdk/Contents/Home/bin/javac",
+      "args": [
+        "-encoding",
+        "UTF-8",
+        "-d",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/fannkuch-redux/java",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/fannkuch-redux/java/Main.java"
+      ],
+      "log": "build/benchmarks/logs/fannkuch-redux-java.log",
+      "seconds": 0.23112837500000022,
+      "exit_code": 0
+    },
+    {
+      "command": "/Users/houfeng/Repositories/feng-language/build/bin/feng",
+      "args": [
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/spectral-norm/feng/main.ff",
+        "--target=bin",
+        "--release",
+        "--platform=macos-arm64",
+        "--pkg=/Users/houfeng/Repositories/feng-language/std/std/build/pkg/std-0.1.0.fb",
+        "--out=/Users/houfeng/Repositories/feng-language/build/benchmarks/feng/spectral-norm",
+        "--name=spectral-norm"
+      ],
+      "log": "build/benchmarks/logs/spectral-norm-feng.log",
+      "seconds": 0.28187075000000184,
+      "exit_code": 0
+    },
+    {
+      "command": "/opt/homebrew/bin/clang++",
+      "args": [
+        "-std=c++17",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/spectral-norm/cpp/main.cpp",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/spectral-norm-cpp"
+      ],
+      "log": "build/benchmarks/logs/spectral-norm-cpp.log",
+      "seconds": 0.2928558749999975,
+      "exit_code": 0
+    },
+    {
+      "command": "/Users/houfeng/.cargo/bin/rustc",
+      "args": [
+        "--edition=2021",
+        "-C",
+        "opt-level=3",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/spectral-norm/rust/main.rs",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/spectral-norm-rust"
+      ],
+      "log": "build/benchmarks/logs/spectral-norm-rust.log",
+      "seconds": 0.26356424999999944,
+      "exit_code": 0
+    },
+    {
+      "command": "/opt/homebrew/bin/go",
+      "args": [
+        "build",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/spectral-norm-go",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/spectral-norm/go/main.go"
+      ],
+      "log": "build/benchmarks/logs/spectral-norm-go.log",
+      "seconds": 0.07180325000000085,
+      "exit_code": 0
+    },
+    {
+      "command": "/usr/bin/swiftc",
+      "args": [
+        "-O",
+        "-module-cache-path",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/cache/swift",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/spectral-norm/swift/main.swift",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/spectral-norm-swift"
+      ],
+      "log": "build/benchmarks/logs/spectral-norm-swift.log",
+      "seconds": 1.2670914169999996,
+      "exit_code": 0
+    },
+    {
+      "command": "/usr/local/share/dotnet/dotnet",
+      "args": [
+        "publish",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/spectral-norm/csharp/Benchmark.csproj",
+        "-c",
+        "Release",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/spectral-norm/csharp/publish",
+        "--nologo",
+        "-r",
+        "osx-arm64",
+        "--self-contained",
+        "false",
+        "-p:PublishAot=false",
+        "-p:PublishReadyToRun=false",
+        "-p:UseAppHost=false"
+      ],
+      "log": "build/benchmarks/logs/spectral-norm-csharp.log",
+      "seconds": 0.7146227499999986,
+      "exit_code": 0
+    },
+    {
+      "command": "/usr/local/share/dotnet/dotnet",
+      "args": [
+        "publish",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/spectral-norm/csharp-aot/Benchmark.csproj",
+        "-c",
+        "Release",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/spectral-norm/csharp-aot/publish",
+        "--nologo",
+        "-r",
+        "osx-arm64",
+        "--self-contained",
+        "true",
+        "-p:PublishAot=true",
+        "-p:PublishReadyToRun=false",
+        "-p:UseAppHost=true"
+      ],
+      "log": "build/benchmarks/logs/spectral-norm-csharp-aot.log",
+      "seconds": 2.1588039580000005,
+      "exit_code": 0
+    },
+    {
+      "command": "/Library/Java/JavaVirtualMachines/jdk-25.jdk/Contents/Home/bin/javac",
+      "args": [
+        "-encoding",
+        "UTF-8",
+        "-d",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/spectral-norm/java",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/spectral-norm/java/Main.java"
+      ],
+      "log": "build/benchmarks/logs/spectral-norm-java.log",
+      "seconds": 0.2281413750000029,
+      "exit_code": 0
+    }
+  ],
+  "git": {
+    "revision": "65dab68548a8d4e32bace88dc812b5af5f99d5f7",
+    "status": "M benchmarks/README.md\n M benchmarks/scripts/bench.mjs\n M benchmarks/scripts/common.mjs\n M benchmarks/scripts/definitions.mjs\n M benchmarks/scripts/test.mjs\n?? benchmarks/cases/binary-trees/csharp/\n?? benchmarks/cases/binary-trees/java/\n?? benchmarks/cases/fannkuch-redux/\n?? benchmarks/cases/nbody/csharp/\n?? benchmarks/cases/nbody/java/\n?? benchmarks/cases/spectral-norm/\n?? benchmarks/cases/text-scan/csharp/\n?? benchmarks/cases/text-scan/java/\n?? benchmarks/results/2026-10-13T07-49-49-207Z/\n?? benchmarks/results/2026-10-13T08-43-26-386Z/\n?? benchmarks/scripts/csharp.csproj.template"
+  },
+  "identities": [
+    {
+      "path": "/Users/houfeng/Repositories/feng-language/build/lib/macos-arm64/libfeng_runtime.a",
+      "sha256": "77d1b38dba429f9886037f3f5fd4a7d27583f1b92685e47da62ac2fec9483caa"
+    },
+    {
+      "path": "/Users/houfeng/Repositories/feng-language/build/include/feng_runtime.h",
+      "sha256": "b9624c8ea9562be13d9a1ca6f751eb5f441546cb392b63e4e5a96c2ff3b12f04"
+    },
+    {
+      "path": "/Users/houfeng/Repositories/feng-language/build/toolchain/llvm-c-eh/lib/llvm_c_eh.dylib",
+      "sha256": "77b4189cb56f07dfdb3399ca6dfb13eb0921c6bfb9812a8584a4ab269f11df67"
+    },
+    {
+      "path": "/Users/houfeng/Repositories/feng-language/std/std/build/pkg/std-0.1.0.fb",
+      "sha256": "14ffc60e4843561466ed8efcea11cc120b13af36fed9ea40ee4cc5a0cb6f9e3e"
+    }
+  ],
+  "cleared_environment": [
+    "CFLAGS",
+    "CPPFLAGS",
+    "CXXFLAGS",
+    "LDFLAGS",
+    "FENG_CC_FLAGS",
+    "FENG_CC",
+    "FENG_AR",
+    "FENG_RANLIB",
+    "RUSTFLAGS",
+    "CARGO_ENCODED_RUSTFLAGS",
+    "GOFLAGS",
+    "GOEXPERIMENT",
+    "GOARCH",
+    "GOOS",
+    "GOAMD64",
+    "GOARM64",
+    "GOGC",
+    "GOMEMLIMIT",
+    "GODEBUG",
+    "SWIFTFLAGS",
+    "SDKROOT",
+    "ASAN_OPTIONS",
+    "UBSAN_OPTIONS",
+    "LSAN_OPTIONS",
+    "LD_PRELOAD",
+    "DYLD_INSERT_LIBRARIES",
+    "COMPILER_PATH",
+    "JAVA_TOOL_OPTIONS",
+    "_JAVA_OPTIONS",
+    "JDK_JAVA_OPTIONS",
+    "JDK_JAVAC_OPTIONS",
+    "CLASSPATH",
+    "DOTNET_STARTUP_HOOKS",
+    "DOTNET_ADDITIONAL_DEPS",
+    "DOTNET_SHARED_STORE"
+  ],
+  "cleared_environment_prefixes": [
+    "DOTNET_",
+    "COMPlus_",
+    "CORECLR_",
+    "COR_"
+  ],
+  "environment": {
+    "LC_ALL": "C",
+    "GOMAXPROCS": "1",
+    "GOTOOLCHAIN": "local",
+    "GOPROXY": "off"
+  },
+  "sources": [
+    {
+      "path": "benchmarks/README.md",
+      "sha256": "02f0855d232d8921eae1bee9689df0b3ab569fb146a3e75a33b6e9d2a53cbb39"
+    },
+    {
+      "path": "benchmarks/cases/binary-trees/README.md",
+      "sha256": "9d3b6d04b436a7c7f9d6e28fd836eaadc5727c0772db3029b525f3f532db6d4b"
+    },
+    {
+      "path": "benchmarks/cases/binary-trees/cpp/main.cpp",
+      "sha256": "7bac9e245ce87042b76b7798440eb08c7af2b47fff93a8c38b83cfcfe8df5f8b"
+    },
+    {
+      "path": "benchmarks/cases/binary-trees/csharp/main.cs",
+      "sha256": "b81ce78d1ed75f443bbbf8d22f119448010c10cb66bae5d2f439fda38aaad9a7"
+    },
+    {
+      "path": "benchmarks/cases/binary-trees/feng/main.ff",
+      "sha256": "180c613becb66b495ad268564a5860a9a6b98ff8be5c43a128eb176c338628dd"
+    },
+    {
+      "path": "benchmarks/cases/binary-trees/go/main.go",
+      "sha256": "9cd4fd5a90a985b7bf17fe7d8903f837397d6ac3fd02289d942e97ff88622a08"
+    },
+    {
+      "path": "benchmarks/cases/binary-trees/java/Main.java",
+      "sha256": "f0dc8576f0e62fbabdee8a1da5599fdf9fecf1cca8e40c62d384f880b7dc04db"
+    },
+    {
+      "path": "benchmarks/cases/binary-trees/rust/main.rs",
+      "sha256": "556720bd661ddba4ea78f4c9bc6cee136b71f29f4fd086bb860b538ac94868a6"
+    },
+    {
+      "path": "benchmarks/cases/binary-trees/swift/main.swift",
+      "sha256": "d9eea4e2c40761f31e7adb42e4d5d70af4936575d2771080a10ee9a445676de9"
+    },
+    {
+      "path": "benchmarks/cases/fannkuch-redux/README.md",
+      "sha256": "111a6cf206336f7dd418a4f50699c3da21d8ef72d1962d9426aa56e2a871e661"
+    },
+    {
+      "path": "benchmarks/cases/fannkuch-redux/cpp/main.cpp",
+      "sha256": "028dec1ab225337d0e5694ece062e164d2cbbcb58685234069b862d5ab621e12"
+    },
+    {
+      "path": "benchmarks/cases/fannkuch-redux/csharp/main.cs",
+      "sha256": "4bd38fda13602a317c7f83c73e47c31802bbc41e6c4626e5bfdde9a9c51f0d87"
+    },
+    {
+      "path": "benchmarks/cases/fannkuch-redux/feng/main.ff",
+      "sha256": "89cff2df58472815ac2caf837350783b20170a52148dbcf7f618c9dcd629e667"
+    },
+    {
+      "path": "benchmarks/cases/fannkuch-redux/go/main.go",
+      "sha256": "916c1831f94021ec0941eab9dd0c38c7e3c0fb404cf1d8cc4081cf58255c74bc"
+    },
+    {
+      "path": "benchmarks/cases/fannkuch-redux/java/Main.java",
+      "sha256": "d941dc7c52a59c7ad21e142aca69484f6e36027606901af773803033ecb05598"
+    },
+    {
+      "path": "benchmarks/cases/fannkuch-redux/rust/main.rs",
+      "sha256": "620952816e85bdedd677195f12fe3eecfb471d2dd2cdc768a204b69c9ecfe498"
+    },
+    {
+      "path": "benchmarks/cases/fannkuch-redux/swift/main.swift",
+      "sha256": "26d7f92a9372b15f1f0f9a013641bfe92985cf2bfc77c821f4124ecf42c502af"
+    },
+    {
+      "path": "benchmarks/cases/nbody/README.md",
+      "sha256": "780b55c15ba865681a9e6efedb0f20ee46a55c457fbd2f896b1fc68bb19fd7f3"
+    },
+    {
+      "path": "benchmarks/cases/nbody/cpp/main.cpp",
+      "sha256": "abd46c85236a307836cfcde721480d29a0310b334d9725408ff70c305c3ac53e"
+    },
+    {
+      "path": "benchmarks/cases/nbody/csharp/main.cs",
+      "sha256": "19960e79eadedfcafceeeb741967c4d2161a1aa4670003b99d26db8abd92fbe6"
+    },
+    {
+      "path": "benchmarks/cases/nbody/feng/main.ff",
+      "sha256": "c4b899f7fff6160adad1c8205e27e2b9c0afaf43f98980fb2551b7871366b3af"
+    },
+    {
+      "path": "benchmarks/cases/nbody/go/main.go",
+      "sha256": "8197da3a98aafa08e70b4d4aae50946a511e69c8f272f32b54aefd979dab666d"
+    },
+    {
+      "path": "benchmarks/cases/nbody/initial.json",
+      "sha256": "0ab433ce917d93ebc09bbd970cd273758667b9684cf44a084b841bee7a14e44d"
+    },
+    {
+      "path": "benchmarks/cases/nbody/java/Main.java",
+      "sha256": "1e0f9c71563585742976125c8bd54a4817e798a314c918243d5a0e48bc4fa3c7"
+    },
+    {
+      "path": "benchmarks/cases/nbody/rust/main.rs",
+      "sha256": "fe94bbb63f60e5b5ed67c04d7018d8c39c04db3f27e43c85b9d32075e30f835e"
+    },
+    {
+      "path": "benchmarks/cases/nbody/swift/main.swift",
+      "sha256": "eb5bb4fd5e1a654be4f46552f422137e6f6469a119185d165773199e989252db"
+    },
+    {
+      "path": "benchmarks/cases/spectral-norm/README.md",
+      "sha256": "47dac3dbc9c8d66874953037b9eaa0594b45fc0af09f0c64c4a6d0fca87e2edb"
+    },
+    {
+      "path": "benchmarks/cases/spectral-norm/cpp/main.cpp",
+      "sha256": "a02f1ce0e23b8ed565bb86c463d88b729a25a3ef87d9dc16fb8d5216e0888e81"
+    },
+    {
+      "path": "benchmarks/cases/spectral-norm/csharp/main.cs",
+      "sha256": "5836e1e31e7055d181c4c74b37fbebc6d2c56fe3ddab49baa15ca0fd28ef8b79"
+    },
+    {
+      "path": "benchmarks/cases/spectral-norm/feng/main.ff",
+      "sha256": "47915b7e77cdf5bfd15f537913d288e963ad376a0a61464e8d25ef1ab833b336"
+    },
+    {
+      "path": "benchmarks/cases/spectral-norm/go/main.go",
+      "sha256": "71376f8d3c59fa31c646f92252665b4054a073273b079f824f6e80e064291618"
+    },
+    {
+      "path": "benchmarks/cases/spectral-norm/java/Main.java",
+      "sha256": "51cafc0e9397e20d5cd88eb6cf434cf47c6b26ff6e8f3d6353f8adcc1c70b0c7"
+    },
+    {
+      "path": "benchmarks/cases/spectral-norm/rust/main.rs",
+      "sha256": "602a877a810ff3a30a5241cb66e66bd06b1be52fc357c6b521cf230c09a6839e"
+    },
+    {
+      "path": "benchmarks/cases/spectral-norm/swift/main.swift",
+      "sha256": "c79b38f0bb1dee21343a0f671202b38659dd6f4c6748535251b2b27825d11777"
+    },
+    {
+      "path": "benchmarks/cases/text-scan/README.md",
+      "sha256": "219e4cc466c65b7d86e2dd9b8583bc412aaafea4015bf7c855e82b7551c050c3"
+    },
+    {
+      "path": "benchmarks/cases/text-scan/cpp/main.cpp",
+      "sha256": "69125d60289fbdd623cef0d8d91e82382f24bb89408ab10b07808251f1b66f8f"
+    },
+    {
+      "path": "benchmarks/cases/text-scan/csharp/main.cs",
+      "sha256": "ab32f250c6056640f027572986fc44b321dedbfd9d7172fea7d2a5c0a5a20407"
+    },
+    {
+      "path": "benchmarks/cases/text-scan/feng/main.ff",
+      "sha256": "2a6fe272ff8819291ccaf2dfae15de37342775ab07c29a6994d1dba5f28db536"
+    },
+    {
+      "path": "benchmarks/cases/text-scan/go/main.go",
+      "sha256": "41ff39947ef518486348a6c0f84b23c9439f0907eea27959f30dd6801aaeccea"
+    },
+    {
+      "path": "benchmarks/cases/text-scan/java/Main.java",
+      "sha256": "d9837698463f7f98ff76bec4f6c4a9ffd457b385daf7e15f9a0a7611c40e9c1f"
+    },
+    {
+      "path": "benchmarks/cases/text-scan/rust/main.rs",
+      "sha256": "2b29d73bebfa7bcc6b59c9f6063c7729bfc3f221f2058584cf0035e472e6c5b5"
+    },
+    {
+      "path": "benchmarks/cases/text-scan/swift/main.swift",
+      "sha256": "79b17d72013bfb609aad4c2c36b238e35242ac078c5a25f7c46816ef87b6d492"
+    },
+    {
+      "path": "benchmarks/scripts/bench.mjs",
+      "sha256": "b97b4e8345d866e9b524907f8c6cf0334321c8708db097979383fad8015e7794"
+    },
+    {
+      "path": "benchmarks/scripts/common.mjs",
+      "sha256": "078129ea499a07cfeaa8078f6d4ca2b3a6794c34526c0d5572bcd1c5f9640a55"
+    },
+    {
+      "path": "benchmarks/scripts/csharp.csproj.template",
+      "sha256": "79ae0fe7785d22d831709239605bec039342ea62ffa20544eb931ceb4a256375"
+    },
+    {
+      "path": "benchmarks/scripts/definitions.mjs",
+      "sha256": "2071eb33db8be83091898148c175b0b3537ba4015b79c34a988c75dc91f5c7c8"
+    },
+    {
+      "path": "benchmarks/scripts/measure.c",
+      "sha256": "25cfa1844353e66a3305c3f831349f3bc9c5c98c69387f2fa5e93a9746b0f070"
+    },
+    {
+      "path": "benchmarks/scripts/test.mjs",
+      "sha256": "32f2437a4412b49cfc9f90f97aaaab4cb5c379f5bf671e08bcb73a459d124bc9"
+    }
+  ],
+  "artifacts": [
+    {
+      "case": "nbody",
+      "language": "feng",
+      "path": "build/benchmarks/bin/nbody-feng",
+      "sha256": "2e8cea9d5bfa38b6ade4544f19a0b637d20273e9f4cc687bf8a51a713a22eb65",
+      "bytes": 118688,
+      "files": []
+    },
+    {
+      "case": "nbody",
+      "language": "cpp",
+      "path": "build/benchmarks/bin/nbody-cpp",
+      "sha256": "7e431c54399633a4324cd9ab42d90de0a9de73a6178bdae9a411cb3ae22ed3c9",
+      "bytes": 36520,
+      "files": []
+    },
+    {
+      "case": "nbody",
+      "language": "rust",
+      "path": "build/benchmarks/bin/nbody-rust",
+      "sha256": "13af98c703fe3a9f2fb822e4a34d566fc66636a7f79f9a88f668ca8250579f3a",
+      "bytes": 480296,
+      "files": []
+    },
+    {
+      "case": "nbody",
+      "language": "go",
+      "path": "build/benchmarks/bin/nbody-go",
+      "sha256": "0d20f3864174d1a8fbf85e06c6b28d80be4629538ca95bf1513fbc2e88c16479",
+      "bytes": 2447202,
+      "files": []
+    },
+    {
+      "case": "nbody",
+      "language": "swift",
+      "path": "build/benchmarks/bin/nbody-swift",
+      "sha256": "2dee81f7d67fe80f649d3d181ef009fc142193b646e66c8a1db06aa62a1f79c5",
+      "bytes": 56904,
+      "files": []
+    },
+    {
+      "case": "nbody",
+      "language": "csharp",
+      "path": "build/benchmarks/managed/nbody/csharp/publish/Benchmark.dll",
+      "sha256": "6991b6c07697473502e3cbf30defe8d6789fb2baad9875fe8c824f279ed807d3",
+      "bytes": 6144,
+      "launch": {
+        "command": "/usr/local/share/dotnet/dotnet",
+        "args": [
+          "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/nbody/csharp/publish/Benchmark.dll"
+        ]
+      },
+      "files": [
+        {
+          "path": "build/benchmarks/managed/nbody/csharp/publish/Benchmark.deps.json",
+          "sha256": "ee211893edb4ea1e20f90c4585e584a1a24ad9036a347194eb88ad841868ab43"
+        },
+        {
+          "path": "build/benchmarks/managed/nbody/csharp/publish/Benchmark.pdb",
+          "sha256": "7e4cd239d01ca875e70dfc1cf6b94685d4c88015aea45092ae2af0242b3e4be5"
+        },
+        {
+          "path": "build/benchmarks/managed/nbody/csharp/publish/Benchmark.runtimeconfig.json",
+          "sha256": "9950d4583cfc9a106857c0d5b8a75b53e8774852b57b80bc3823a74d44a4d87f"
+        }
+      ]
+    },
+    {
+      "case": "nbody",
+      "language": "csharp-aot",
+      "path": "build/benchmarks/managed/nbody/csharp-aot/publish/Benchmark",
+      "sha256": "6713093708b3313a23017697f5b51be543df1475e1d1306434355acf5c4453e9",
+      "bytes": 1252616,
+      "files": [
+        {
+          "path": "build/benchmarks/managed/nbody/csharp-aot/publish/Benchmark.dSYM/Contents/Info.plist",
+          "sha256": "18625ab9b3b9f723f47a1beabce6b57bf1716d50445ad2a336187b82516b1966"
+        },
+        {
+          "path": "build/benchmarks/managed/nbody/csharp-aot/publish/Benchmark.dSYM/Contents/Resources/DWARF/Benchmark",
+          "sha256": "b90b0e2ac6910967dfc8f05dc308b784a67101a8667bca67026a8ac9d77e5f6b"
+        },
+        {
+          "path": "build/benchmarks/managed/nbody/csharp-aot/publish/Benchmark.dSYM/Contents/Resources/Relocations/aarch64/Benchmark.yml",
+          "sha256": "1902153455780ed8b3c1f1cad5f81e39ee9c7508c1606f93036010384b2ee200"
+        }
+      ]
+    },
+    {
+      "case": "nbody",
+      "language": "java",
+      "path": "build/benchmarks/managed/nbody/java/Main.class",
+      "sha256": "a8552627fdc25070461d78ffc703705a735c79681b2a1a312b847af043ebd805",
+      "bytes": 2894,
+      "launch": {
+        "command": "/Library/Java/JavaVirtualMachines/jdk-25.jdk/Contents/Home/bin/java",
+        "args": [
+          "-cp",
+          "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/nbody/java",
+          "Main"
+        ]
+      },
+      "files": [
+        {
+          "path": "build/benchmarks/managed/nbody/java/Main$Body.class",
+          "sha256": "fc0a6c0dbd27034ee3c5947af20403552e28442f7d400267b76552ad20723a50"
+        }
+      ]
+    },
+    {
+      "case": "binary-trees",
+      "language": "feng",
+      "path": "build/benchmarks/bin/binary-trees-feng",
+      "sha256": "9d1f107c3fe782c618171cd8eaa94c12befcd9cf3a6cdcd018b12b4ad4f5b436",
+      "bytes": 135312,
+      "files": []
+    },
+    {
+      "case": "binary-trees",
+      "language": "cpp",
+      "path": "build/benchmarks/bin/binary-trees-cpp",
+      "sha256": "2b7f342500ba22b0dd06a9e4f3bcc599cec9e9fb0e7c84cebc271f82272a7df6",
+      "bytes": 36736,
+      "files": []
+    },
+    {
+      "case": "binary-trees",
+      "language": "rust",
+      "path": "build/benchmarks/bin/binary-trees-rust",
+      "sha256": "4ad466b397eb93a034841164a3cd53885e22af55b5050fbf2c3e203b085f671f",
+      "bytes": 460656,
+      "files": []
+    },
+    {
+      "case": "binary-trees",
+      "language": "go",
+      "path": "build/benchmarks/bin/binary-trees-go",
+      "sha256": "c7a2b400aee0993e9a30f9cc419a2a20a9f96f9d10ae564e57f6e6389cbc69ee",
+      "bytes": 2430498,
+      "files": []
+    },
+    {
+      "case": "binary-trees",
+      "language": "swift",
+      "path": "build/benchmarks/bin/binary-trees-swift",
+      "sha256": "79b3c40e9fdba047ac10807c4bf20da4a1ba3a13a129555dee3efc0a268a09fb",
+      "bytes": 55728,
+      "files": []
+    },
+    {
+      "case": "binary-trees",
+      "language": "csharp",
+      "path": "build/benchmarks/managed/binary-trees/csharp/publish/Benchmark.dll",
+      "sha256": "136b76567f92f59394a1c425d90daa61c563f719e685770156b15af0ed6e6221",
+      "bytes": 4608,
+      "launch": {
+        "command": "/usr/local/share/dotnet/dotnet",
+        "args": [
+          "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/binary-trees/csharp/publish/Benchmark.dll"
+        ]
+      },
+      "files": [
+        {
+          "path": "build/benchmarks/managed/binary-trees/csharp/publish/Benchmark.deps.json",
+          "sha256": "ee211893edb4ea1e20f90c4585e584a1a24ad9036a347194eb88ad841868ab43"
+        },
+        {
+          "path": "build/benchmarks/managed/binary-trees/csharp/publish/Benchmark.pdb",
+          "sha256": "42197cee68fea3a0a1597009fa4e58d76dd46ed546946923c558c946e5c8943f"
+        },
+        {
+          "path": "build/benchmarks/managed/binary-trees/csharp/publish/Benchmark.runtimeconfig.json",
+          "sha256": "9950d4583cfc9a106857c0d5b8a75b53e8774852b57b80bc3823a74d44a4d87f"
+        }
+      ]
+    },
+    {
+      "case": "binary-trees",
+      "language": "csharp-aot",
+      "path": "build/benchmarks/managed/binary-trees/csharp-aot/publish/Benchmark",
+      "sha256": "9f5a58e7baea30747edba4d294d072f431a1461be9a52d3efe14ccce9ce60d1d",
+      "bytes": 1236072,
+      "files": [
+        {
+          "path": "build/benchmarks/managed/binary-trees/csharp-aot/publish/Benchmark.dSYM/Contents/Info.plist",
+          "sha256": "18625ab9b3b9f723f47a1beabce6b57bf1716d50445ad2a336187b82516b1966"
+        },
+        {
+          "path": "build/benchmarks/managed/binary-trees/csharp-aot/publish/Benchmark.dSYM/Contents/Resources/DWARF/Benchmark",
+          "sha256": "f3ae1bbdb1391fe2ce0aed776e381c2e3923e9de6b5b8c7eaabcdb82eeff6882"
+        },
+        {
+          "path": "build/benchmarks/managed/binary-trees/csharp-aot/publish/Benchmark.dSYM/Contents/Resources/Relocations/aarch64/Benchmark.yml",
+          "sha256": "1902153455780ed8b3c1f1cad5f81e39ee9c7508c1606f93036010384b2ee200"
+        }
+      ]
+    },
+    {
+      "case": "binary-trees",
+      "language": "java",
+      "path": "build/benchmarks/managed/binary-trees/java/Main.class",
+      "sha256": "65d54896e554f318cc7e3abea882e4176107812b4cfe2ee610b138e550ad38bd",
+      "bytes": 1668,
+      "launch": {
+        "command": "/Library/Java/JavaVirtualMachines/jdk-25.jdk/Contents/Home/bin/java",
+        "args": [
+          "-cp",
+          "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/binary-trees/java",
+          "Main"
+        ]
+      },
+      "files": [
+        {
+          "path": "build/benchmarks/managed/binary-trees/java/Main$Node.class",
+          "sha256": "ff6c148af635a1b533d8f217b6caca1bdd579f82060afc70f045be3f546c0b7a"
+        }
+      ]
+    },
+    {
+      "case": "text-scan",
+      "language": "feng",
+      "path": "build/benchmarks/bin/text-scan-feng",
+      "sha256": "8acc9be82625dba8f5452f490024423326d91f0eb37dc2f56c63950c2b3bd61b",
+      "bytes": 168704,
+      "files": []
+    },
+    {
+      "case": "text-scan",
+      "language": "cpp",
+      "path": "build/benchmarks/bin/text-scan-cpp",
+      "sha256": "7e77122fb4a7555477aca8b81c20754ae164494c8b934118c459900dcf53705e",
+      "bytes": 37952,
+      "files": []
+    },
+    {
+      "case": "text-scan",
+      "language": "rust",
+      "path": "build/benchmarks/bin/text-scan-rust",
+      "sha256": "88761e3e819059293c6bae79295913ad9a648e0ccd0ae1c2b0d13ddb590b933b",
+      "bytes": 460864,
+      "files": []
+    },
+    {
+      "case": "text-scan",
+      "language": "go",
+      "path": "build/benchmarks/bin/text-scan-go",
+      "sha256": "7dd20be5a17f29ce7b3711eeb0218db8d61c19e4d9024322f997f4b85de4838b",
+      "bytes": 2430738,
+      "files": []
+    },
+    {
+      "case": "text-scan",
+      "language": "swift",
+      "path": "build/benchmarks/bin/text-scan-swift",
+      "sha256": "40db8f7290bd5c724a08a23b59b7cdd86037668d85ee2c957ddca9dd96fe74fd",
+      "bytes": 53232,
+      "files": []
+    },
+    {
+      "case": "text-scan",
+      "language": "csharp",
+      "path": "build/benchmarks/managed/text-scan/csharp/publish/Benchmark.dll",
+      "sha256": "dfe1742cb391d47788c73d22ab94151ca7fedfc29d1432fe7e297bca73725c45",
+      "bytes": 4608,
+      "launch": {
+        "command": "/usr/local/share/dotnet/dotnet",
+        "args": [
+          "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/text-scan/csharp/publish/Benchmark.dll"
+        ]
+      },
+      "files": [
+        {
+          "path": "build/benchmarks/managed/text-scan/csharp/publish/Benchmark.deps.json",
+          "sha256": "ee211893edb4ea1e20f90c4585e584a1a24ad9036a347194eb88ad841868ab43"
+        },
+        {
+          "path": "build/benchmarks/managed/text-scan/csharp/publish/Benchmark.pdb",
+          "sha256": "f1fe8ce3f2ae45b75d0bb33c1db51bb580a7c317b444385d53d630d2e3dc5458"
+        },
+        {
+          "path": "build/benchmarks/managed/text-scan/csharp/publish/Benchmark.runtimeconfig.json",
+          "sha256": "9950d4583cfc9a106857c0d5b8a75b53e8774852b57b80bc3823a74d44a4d87f"
+        }
+      ]
+    },
+    {
+      "case": "text-scan",
+      "language": "csharp-aot",
+      "path": "build/benchmarks/managed/text-scan/csharp-aot/publish/Benchmark",
+      "sha256": "9cfd13e2e8a426c4f45cea5114b983db010ef96f7c382c53ab4ede93a55488a2",
+      "bytes": 1319080,
+      "files": [
+        {
+          "path": "build/benchmarks/managed/text-scan/csharp-aot/publish/Benchmark.dSYM/Contents/Info.plist",
+          "sha256": "18625ab9b3b9f723f47a1beabce6b57bf1716d50445ad2a336187b82516b1966"
+        },
+        {
+          "path": "build/benchmarks/managed/text-scan/csharp-aot/publish/Benchmark.dSYM/Contents/Resources/DWARF/Benchmark",
+          "sha256": "e0ef07dfb743f6e849b6227d14f6327398de66281aedbd8cf1dc6ce128ace4cb"
+        },
+        {
+          "path": "build/benchmarks/managed/text-scan/csharp-aot/publish/Benchmark.dSYM/Contents/Resources/Relocations/aarch64/Benchmark.yml",
+          "sha256": "1902153455780ed8b3c1f1cad5f81e39ee9c7508c1606f93036010384b2ee200"
+        }
+      ]
+    },
+    {
+      "case": "text-scan",
+      "language": "java",
+      "path": "build/benchmarks/managed/text-scan/java/Main.class",
+      "sha256": "ee23965f52986bf4fb55d2fb52bc85245c844fc9df7d4eade5bd4ed44f0bc039",
+      "bytes": 1649,
+      "launch": {
+        "command": "/Library/Java/JavaVirtualMachines/jdk-25.jdk/Contents/Home/bin/java",
+        "args": [
+          "-cp",
+          "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/text-scan/java",
+          "Main"
+        ]
+      },
+      "files": []
+    },
+    {
+      "case": "fannkuch-redux",
+      "language": "feng",
+      "path": "build/benchmarks/bin/fannkuch-redux-feng",
+      "sha256": "a51ddc7a698ee6ebb0d0344c1617100e21cbca2b8e721cc09ca97ce7c67f7218",
+      "bytes": 135344,
+      "files": []
+    },
+    {
+      "case": "fannkuch-redux",
+      "language": "cpp",
+      "path": "build/benchmarks/bin/fannkuch-redux-cpp",
+      "sha256": "b13b493adac9372d2a9b41f6aec686d31a29ade97aaeeeb65587e4eaea867759",
+      "bytes": 36848,
+      "files": []
+    },
+    {
+      "case": "fannkuch-redux",
+      "language": "rust",
+      "path": "build/benchmarks/bin/fannkuch-redux-rust",
+      "sha256": "0d90909a0fd5119660380f8ecc1f7c653da6902820e12f174b37ab3cbffb585e",
+      "bytes": 460944,
+      "files": []
+    },
+    {
+      "case": "fannkuch-redux",
+      "language": "go",
+      "path": "build/benchmarks/bin/fannkuch-redux-go",
+      "sha256": "f9c7ae1962082638e5f1acfd6dfd2f3122f522ed85cb4aaf9af9b56f43351741",
+      "bytes": 2430370,
+      "files": []
+    },
+    {
+      "case": "fannkuch-redux",
+      "language": "swift",
+      "path": "build/benchmarks/bin/fannkuch-redux-swift",
+      "sha256": "dc75242c7c7f8d4bb519785e073fa73caecb88256fe8aa917339b4685d8c4f7e",
+      "bytes": 55192,
+      "files": []
+    },
+    {
+      "case": "fannkuch-redux",
+      "language": "csharp",
+      "path": "build/benchmarks/managed/fannkuch-redux/csharp/publish/Benchmark.dll",
+      "sha256": "7585671c3104393b8c62387686a645951536f0e8cbb8342e4dd02723c2803f36",
+      "bytes": 4608,
+      "launch": {
+        "command": "/usr/local/share/dotnet/dotnet",
+        "args": [
+          "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/fannkuch-redux/csharp/publish/Benchmark.dll"
+        ]
+      },
+      "files": [
+        {
+          "path": "build/benchmarks/managed/fannkuch-redux/csharp/publish/Benchmark.deps.json",
+          "sha256": "ee211893edb4ea1e20f90c4585e584a1a24ad9036a347194eb88ad841868ab43"
+        },
+        {
+          "path": "build/benchmarks/managed/fannkuch-redux/csharp/publish/Benchmark.pdb",
+          "sha256": "bb9c04c2f3c2243a79b8d81e45a6f31dedae40b1e4f375b4637d82b978a56e39"
+        },
+        {
+          "path": "build/benchmarks/managed/fannkuch-redux/csharp/publish/Benchmark.runtimeconfig.json",
+          "sha256": "9950d4583cfc9a106857c0d5b8a75b53e8774852b57b80bc3823a74d44a4d87f"
+        }
+      ]
+    },
+    {
+      "case": "fannkuch-redux",
+      "language": "csharp-aot",
+      "path": "build/benchmarks/managed/fannkuch-redux/csharp-aot/publish/Benchmark",
+      "sha256": "6e807509a98eb4dd0accd58fdc95bb8de69e1c000cb6bbbc9f3ce537bb5c0ec9",
+      "bytes": 1236024,
+      "files": [
+        {
+          "path": "build/benchmarks/managed/fannkuch-redux/csharp-aot/publish/Benchmark.dSYM/Contents/Info.plist",
+          "sha256": "18625ab9b3b9f723f47a1beabce6b57bf1716d50445ad2a336187b82516b1966"
+        },
+        {
+          "path": "build/benchmarks/managed/fannkuch-redux/csharp-aot/publish/Benchmark.dSYM/Contents/Resources/DWARF/Benchmark",
+          "sha256": "d622ec06bb7fe2fdc113759fd262c47285b66a0956914960778567ea87a518f1"
+        },
+        {
+          "path": "build/benchmarks/managed/fannkuch-redux/csharp-aot/publish/Benchmark.dSYM/Contents/Resources/Relocations/aarch64/Benchmark.yml",
+          "sha256": "1902153455780ed8b3c1f1cad5f81e39ee9c7508c1606f93036010384b2ee200"
+        }
+      ]
+    },
+    {
+      "case": "fannkuch-redux",
+      "language": "java",
+      "path": "build/benchmarks/managed/fannkuch-redux/java/Main.class",
+      "sha256": "356b5e44aba8a2220dcc092de0adbe40018cbcebc125aac8888b1e7432e0cc42",
+      "bytes": 1672,
+      "launch": {
+        "command": "/Library/Java/JavaVirtualMachines/jdk-25.jdk/Contents/Home/bin/java",
+        "args": [
+          "-cp",
+          "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/fannkuch-redux/java",
+          "Main"
+        ]
+      },
+      "files": []
+    },
+    {
+      "case": "spectral-norm",
+      "language": "feng",
+      "path": "build/benchmarks/bin/spectral-norm-feng",
+      "sha256": "018293b62283f05883dce16c20405f86f1a1d43730ac33b6fd87136e45f5c4a1",
+      "bytes": 118784,
+      "files": []
+    },
+    {
+      "case": "spectral-norm",
+      "language": "cpp",
+      "path": "build/benchmarks/bin/spectral-norm-cpp",
+      "sha256": "8267ffa59a2131da43c0f4db39d7fd62b4df64dfa48d92cfb0f0aa699def1977",
+      "bytes": 37040,
+      "files": []
+    },
+    {
+      "case": "spectral-norm",
+      "language": "rust",
+      "path": "build/benchmarks/bin/spectral-norm-rust",
+      "sha256": "3c1189c33dfaf8930889189b3e5872b063c09f8c2b7fda2c61084e48f98aa4e2",
+      "bytes": 480640,
+      "files": []
+    },
+    {
+      "case": "spectral-norm",
+      "language": "go",
+      "path": "build/benchmarks/bin/spectral-norm-go",
+      "sha256": "f3af18f9c9ad6a592335aefcb925b9fee334d7c39105a85149cd58e3fc77bfa8",
+      "bytes": 2447074,
+      "files": []
+    },
+    {
+      "case": "spectral-norm",
+      "language": "swift",
+      "path": "build/benchmarks/bin/spectral-norm-swift",
+      "sha256": "72db35ab4b4d5d228f87e3e3f572ac4eb88cc808ec001f2ae759951cf2dc1495",
+      "bytes": 55216,
+      "files": []
+    },
+    {
+      "case": "spectral-norm",
+      "language": "csharp",
+      "path": "build/benchmarks/managed/spectral-norm/csharp/publish/Benchmark.dll",
+      "sha256": "f1b20df2ae7250e472679315d63ed82d2bce399295f3b22c01977ec21f0c2be6",
+      "bytes": 5120,
+      "launch": {
+        "command": "/usr/local/share/dotnet/dotnet",
+        "args": [
+          "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/spectral-norm/csharp/publish/Benchmark.dll"
+        ]
+      },
+      "files": [
+        {
+          "path": "build/benchmarks/managed/spectral-norm/csharp/publish/Benchmark.deps.json",
+          "sha256": "ee211893edb4ea1e20f90c4585e584a1a24ad9036a347194eb88ad841868ab43"
+        },
+        {
+          "path": "build/benchmarks/managed/spectral-norm/csharp/publish/Benchmark.pdb",
+          "sha256": "a2d1901f1446ba27f0de2685bfcf03cb7f71dcf9a008c271a47d1a130dd6ce80"
+        },
+        {
+          "path": "build/benchmarks/managed/spectral-norm/csharp/publish/Benchmark.runtimeconfig.json",
+          "sha256": "9950d4583cfc9a106857c0d5b8a75b53e8774852b57b80bc3823a74d44a4d87f"
+        }
+      ]
+    },
+    {
+      "case": "spectral-norm",
+      "language": "csharp-aot",
+      "path": "build/benchmarks/managed/spectral-norm/csharp-aot/publish/Benchmark",
+      "sha256": "714802b66d97184c11970cec2ad725c0e4e557858f5196655b7a052edc5ce8ae",
+      "bytes": 1252616,
+      "files": [
+        {
+          "path": "build/benchmarks/managed/spectral-norm/csharp-aot/publish/Benchmark.dSYM/Contents/Info.plist",
+          "sha256": "18625ab9b3b9f723f47a1beabce6b57bf1716d50445ad2a336187b82516b1966"
+        },
+        {
+          "path": "build/benchmarks/managed/spectral-norm/csharp-aot/publish/Benchmark.dSYM/Contents/Resources/DWARF/Benchmark",
+          "sha256": "ad5249a00c24cbb46697e5eebd79a0ac2264bcfdb86db5fead3c5e2f7a8f51fb"
+        },
+        {
+          "path": "build/benchmarks/managed/spectral-norm/csharp-aot/publish/Benchmark.dSYM/Contents/Resources/Relocations/aarch64/Benchmark.yml",
+          "sha256": "1902153455780ed8b3c1f1cad5f81e39ee9c7508c1606f93036010384b2ee200"
+        }
+      ]
+    },
+    {
+      "case": "spectral-norm",
+      "language": "java",
+      "path": "build/benchmarks/managed/spectral-norm/java/Main.class",
+      "sha256": "55d1b14131e1443f2a0a5cddcf5ab6afc2b1acbd650a65faa22b6d05a87d3a79",
+      "bytes": 1413,
+      "launch": {
+        "command": "/Library/Java/JavaVirtualMachines/jdk-25.jdk/Contents/Home/bin/java",
+        "args": [
+          "-cp",
+          "/Users/houfeng/Repositories/feng-language/build/benchmarks/managed/spectral-norm/java",
+          "Main"
+        ]
+      },
+      "files": []
+    }
+  ],
+  "sampler": {
+    "path": "build/benchmarks/bin/measure",
+    "sha256": "eab3e8ac83e63d03d7a73e80f7e5323f3ef09b5d08a772bef97b7f737a1c8f32"
+  }
+}

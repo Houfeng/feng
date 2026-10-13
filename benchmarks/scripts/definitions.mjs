@@ -1,6 +1,6 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { nbodyReference, textInput, treeReference, validateOutput } from './common.mjs';
+import { fannkuchReference, nbodyReference, spectralReference, textInput, treeReference, validateOutput } from './common.mjs';
 
 /** Declarative case adapters supply inputs and expected outputs to the generic runner. */
 export const definitions = {
@@ -40,6 +40,26 @@ export const definitions = {
         checks.push({ id, args: [path], invalid: true });
       }
       return checks;
+    },
+  },
+  'fannkuch-redux': {
+    profiles: { quick: 7, standard: 11 },
+    /** Derive the checksum and work count using the recursive reference. */
+    prepare(n) { return { args: [String(n)], ...fannkuchReference(n) }; },
+    /** Cover minimal, signed-checksum, ordinary and public-golden inputs. */
+    checks() {
+      validateOutput('228 16', fannkuchReference(7).expected);
+      return [1, 2, 3, 7].map(n => ({ id: String(n), ...this.prepare(n) }));
+    },
+  },
+  'spectral-norm': {
+    profiles: { quick: 100, standard: 2000 },
+    /** Calculate the norm with a stored-matrix reference outside measurement. */
+    prepare(n) { return { args: [String(n)], ...spectralReference(n) }; },
+    /** Cover minimal matrices and the public rounded checksum. */
+    checks() {
+      validateOutput('1.274219991', spectralReference(100).expected, 1e-9);
+      return [1, 2, 10, 100].map(n => ({ id: String(n), ...this.prepare(n) }));
     },
   },
 };

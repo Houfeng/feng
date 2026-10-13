@@ -7,25 +7,31 @@ import { filesUnder, hashFile, languageOrder, languages, quantile, readJson,
   root, sourceIdentities, suite, validateOutput, work, writeJson } from './common.mjs';
 import { cases, definitions, profiles } from './definitions.mjs';
 
-const extensions = { feng: 'ff', cpp: 'cpp', rust: 'rs', go: 'go', swift: 'swift' };
+const extensions = { feng: 'ff', cpp: 'cpp', rust: 'rs', go: 'go', swift: 'swift', csharp: 'cs', java: 'java' };
 const controlledVariables = ['CFLAGS', 'CPPFLAGS', 'CXXFLAGS', 'LDFLAGS', 'FENG_CC_FLAGS', 'FENG_CC',
   'FENG_AR', 'FENG_RANLIB', 'RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'GOFLAGS', 'GOEXPERIMENT', 'GOARCH',
   'GOOS', 'GOAMD64', 'GOARM64', 'GOGC', 'GOMEMLIMIT', 'GODEBUG', 'SWIFTFLAGS', 'SDKROOT',
-  'ASAN_OPTIONS', 'UBSAN_OPTIONS', 'LSAN_OPTIONS', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES', 'COMPILER_PATH'];
+  'ASAN_OPTIONS', 'UBSAN_OPTIONS', 'LSAN_OPTIONS', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES', 'COMPILER_PATH',
+  'JAVA_TOOL_OPTIONS', '_JAVA_OPTIONS', 'JDK_JAVA_OPTIONS', 'JDK_JAVAC_OPTIONS', 'CLASSPATH',
+  'DOTNET_STARTUP_HOOKS', 'DOTNET_ADDITIONAL_DEPS', 'DOTNET_SHARED_STORE'];
 
 /** Pin measurement-relevant environment while preserving normal tool lookup. */
 export function benchmarkEnvironment() {
   const env = { ...process.env };
   for (const key of controlledVariables) delete env[key];
+  // Keep runtime policy at its installed defaults, including JIT and GC behavior.
+  for (const key of Object.keys(env)) if (/^(DOTNET_|COMPlus_|CORECLR_|COR_)/i.test(key)) delete env[key];
   Object.assign(env, { LC_ALL: 'C', LANG: 'C', TZ: 'UTC', GOMAXPROCS: '1', GOTOOLCHAIN: 'local',
     GOPROXY: 'off', GOWORK: 'off', GOCACHE: join(work, 'cache/go'), GOMODCACHE: join(work, 'cache/gomod'),
-    CLANG_MODULE_CACHE_PATH: join(work, 'cache/clang'), TMPDIR: join(work, 'tmp') });
+    CLANG_MODULE_CACHE_PATH: join(work, 'cache/clang'), TMPDIR: join(work, 'tmp'),
+    DOTNET_CLI_HOME: join(work, 'cache/dotnet'), NUGET_PACKAGES: join(work, 'cache/nuget'),
+    DOTNET_CLI_TELEMETRY_OPTOUT: '1', DOTNET_NOLOGO: '1' });
   return env;
 }
 
 /** Create only suite-owned build, log and cache directories. */
 function prepareWork() {
-  for (const dir of ['bin', 'logs', 'runs', 'cache/go', 'cache/gomod', 'cache/clang', 'cache/swift', 'tmp']) {
+  for (const dir of ['bin', 'logs', 'runs', 'cache/go', 'cache/gomod', 'cache/clang', 'cache/swift', 'cache/dotnet', 'cache/nuget', 'tmp']) {
     mkdirSync(join(work, dir), { recursive: true });
   }
 }
@@ -66,18 +72,21 @@ function compile(command, args, label, env, commands) {
   console.log(`built ${label}`);
 }
 
-/** Build all five implementations and freeze their reproducibility metadata. */
+/** Build every execution configuration and freeze its reproducibility metadata. */
 function build() {
   prepareWork();
   rmSync(join(work, 'build.json'), { force: true });
   const env = benchmarkEnvironment();
   const selectors = { feng: process.env.FENG ?? join(root, 'build/bin/feng'), cc: process.env.CC ?? 'clang',
-    cpp: process.env.CXX ?? 'clang++', rust: process.env.RUSTC ?? 'rustc', go: process.env.GO ?? 'go', swift: process.env.SWIFTC ?? 'swiftc' };
+    cpp: process.env.CXX ?? 'clang++', rust: process.env.RUSTC ?? 'rustc', go: process.env.GO ?? 'go', swift: process.env.SWIFTC ?? 'swiftc',
+    csharp: process.env.DOTNET ?? 'dotnet', java: process.env.JAVA ?? 'java', javac: process.env.JAVAC ?? 'javac' };
   const tools = {};
   for (const [language, selector] of Object.entries(selectors)) {
     const path = executable(selector);
     tools[language] = { path, real_path: realpathSync(path), version: capture(path, language === 'go' ? ['version'] : ['--version'], env), sha256: hashFile(path) };
   }
+  tools.csharp.info = capture(tools.csharp.path, ['--info'], env);
+  tools['csharp-aot'] = { ...tools.csharp };
   if (!['darwin', 'linux'].includes(process.platform)) throw new Error('measurement currently supports macOS and Linux');
   const platform = process.platform === 'darwin' && process.arch === 'arm64' ? 'macos-arm64'
     : process.platform === 'linux' && ['arm64', 'x64'].includes(process.arch) ? `linux-${process.arch}-gnu` : null;
@@ -91,15 +100,41 @@ function build() {
   const stdPackage = packages[0];
   const artifacts = [];
   for (const name of cases) for (const language of languages) {
-    const source = join(suite, 'cases', name, language, `main.${extensions[language]}`);
+    const sourceLanguage = language === 'csharp-aot' ? 'csharp' : language;
+    const source = join(suite, 'cases', name, sourceLanguage, language === 'java' ? 'Main.java' : `main.${extensions[sourceLanguage]}`);
     const binary = join(work, 'bin', `${name}-${language}`);
     const command = tools[language].path;
+    let artifact = binary, launch = null, deployment = [];
     let args;
     if (language === 'feng') {
       const output = join(work, 'feng', name);
       args = [source, '--target=bin', '--release', `--platform=${platform}`, `--pkg=${stdPackage}`, `--out=${output}`, `--name=${name}`];
       compile(command, args, `${name}-${language}`, env, commands);
       copyFileSync(join(output, 'bin', name), binary); chmodSync(binary, 0o755);
+    } else if (sourceLanguage === 'csharp') {
+      const directory = join(work, 'managed', name, language);
+      rmSync(directory, { recursive: true, force: true });
+      mkdirSync(directory, { recursive: true });
+      const project = join(directory, 'Benchmark.csproj');
+      copyFileSync(join(suite, 'scripts/csharp.csproj.template'), project);
+      copyFileSync(source, join(directory, 'Program.cs'));
+      const output = join(directory, 'publish');
+      const aot = language === 'csharp-aot';
+      args = ['publish', project, '-c', 'Release', '-o', output, '--nologo',
+        '-r', `${process.platform === 'darwin' ? 'osx' : 'linux'}-${process.arch}`, '--self-contained', String(aot),
+        `-p:PublishAot=${aot}`, '-p:PublishReadyToRun=false', `-p:UseAppHost=${aot}`];
+      compile(command, args, `${name}-${language}`, env, commands);
+      artifact = join(output, aot ? 'Benchmark' : 'Benchmark.dll');
+      if (!aot) launch = { command, args: [artifact] };
+      deployment = filesUnder(output);
+    } else if (language === 'java') {
+      const directory = join(work, 'managed', name, language);
+      rmSync(directory, { recursive: true, force: true });
+      mkdirSync(directory, { recursive: true });
+      compile(tools.javac.path, ['-encoding', 'UTF-8', '-d', directory, source], `${name}-${language}`, env, commands);
+      artifact = join(directory, 'Main.class');
+      deployment = filesUnder(directory);
+      launch = { command, args: ['-cp', directory, 'Main'] };
     } else {
       const options = {
         cpp: ['-std=c++17', '-O2', '-Wall', '-Wextra', '-Werror', source, '-o', binary],
@@ -110,15 +145,17 @@ function build() {
       args = options[language];
       compile(command, args, `${name}-${language}`, env, commands);
     }
-    artifacts.push({ case: name, language, path: relative(root, binary), sha256: hashFile(binary), bytes: readFileSync(binary).length });
+    artifacts.push({ case: name, language, path: relative(root, artifact), sha256: hashFile(artifact), bytes: readFileSync(artifact).length,
+      ...(launch && { launch }),
+      files: deployment.filter(path => path !== artifact).map(path => ({ path: relative(root, path), sha256: hashFile(path) })) });
   }
   const install = dirname(dirname(realpathSync(tools.feng.path)));
   const runtime = join(install, 'lib', platform, 'libfeng_runtime.a');
   const plugin = join(install, 'toolchain/llvm-c-eh/lib', process.platform === 'darwin' ? 'llvm_c_eh.dylib' : 'llvm_c_eh.so');
   const identities = [runtime, join(install, 'include/feng_runtime.h'), plugin, stdPackage].map(path => ({ path, sha256: hashFile(path) }));
   const git = { revision: capture('git', ['rev-parse', 'HEAD'], env), status: capture('git', ['status', '--short'], env) };
-  const manifest = { schema: 1, created_at: new Date().toISOString(), host: hostMetadata(), platform, tools, commands,
-    git, identities, cleared_environment: controlledVariables,
+  const manifest = { schema: 2, created_at: new Date().toISOString(), host: hostMetadata(), platform, languages, tools, commands,
+    git, identities, cleared_environment: controlledVariables, cleared_environment_prefixes: ['DOTNET_', 'COMPlus_', 'CORECLR_', 'COR_'],
     environment: { LC_ALL: env.LC_ALL, GOMAXPROCS: env.GOMAXPROCS, GOTOOLCHAIN: env.GOTOOLCHAIN, GOPROXY: env.GOPROXY },
     sources: sourceIdentities(), artifacts, sampler: { path: 'build/benchmarks/bin/measure', sha256: hashFile(join(work, 'bin/measure')) } };
   writeJson(join(work, 'build.json'), manifest);
@@ -129,8 +166,12 @@ function build() {
 export function loadBuild() {
   const manifest = readJson(join(work, 'build.json'));
   if (JSON.stringify(manifest.sources) !== JSON.stringify(sourceIdentities())) throw new Error('benchmark sources changed; run build again');
-  for (const artifact of [...manifest.artifacts, manifest.sampler]) {
+  for (const artifact of [...manifest.artifacts, ...manifest.artifacts.flatMap(item => item.files ?? []), manifest.sampler]) {
     if (hashFile(join(root, artifact.path)) !== artifact.sha256) throw new Error(`artifact changed: ${artifact.path}; rebuild required`);
+  }
+  for (const language of new Set(manifest.artifacts.filter(item => item.launch).map(item => item.language))) {
+    const tool = manifest.tools[language];
+    if (hashFile(tool.path) !== tool.sha256) throw new Error(`runtime launcher changed: ${tool.path}; rebuild required`);
   }
   if (manifest.artifacts.length !== cases.length * languages.length) throw new Error('incomplete build manifest');
   return manifest;
@@ -167,11 +208,11 @@ function requireSuccess(sample, context) {
   }
 }
 
-/** Resolve one language's executable from the frozen build record. */
-function artifactFor(manifest, name, language) {
+/** Resolve the real process and fixed arguments without adding a wrapper process. */
+export function artifactFor(manifest, name, language) {
   const artifact = manifest.artifacts.find(item => item.case === name && item.language === language);
   if (!artifact) throw new Error(`missing implementation: ${name}/${language}`);
-  return join(root, artifact.path);
+  return artifact.launch ?? { command: join(root, artifact.path), args: [] };
 }
 
 /** Check boundary cases, independent expected results and malformed text input. */
@@ -181,7 +222,8 @@ async function verify(manifest, output, selected = cases, timeout = 120) {
   const checks = selected.flatMap(name => definitions[name].checks(output).map(check => ({ ...check, name })));
   const results = [];
   for (const check of checks) for (const language of languages) {
-    const sample = await measure(artifactFor(manifest, check.name, language), check.args, join(output, `${check.name}-${check.id}-${language}`), timeout);
+    const program = artifactFor(manifest, check.name, language);
+    const sample = await measure(program.command, [...program.args, ...check.args], join(output, `${check.name}-${check.id}-${language}`), timeout);
     if (check.invalid) {
       if (sample.interruption || sample.signal || sample.exit_code <= 0 || sample.exit_code === 127 || sample.sampler_exit === 125) throw new Error(`${check.name}/${language} did not reject malformed input correctly`);
     } else {
@@ -242,7 +284,8 @@ async function run(config) {
     for (let round = 0; round < config.warmup + config.rounds; round++) {
       const phase = round < config.warmup ? 'warmup' : 'measure';
       for (const [position, language] of languageOrder(round).entries()) {
-        const sample = await measure(artifactFor(manifest, name, language), args, join(directory, 'samples', `${name}-${round}-${language}`), config.timeout);
+        const program = artifactFor(manifest, name, language);
+        const sample = await measure(program.command, [...program.args, ...args], join(directory, 'samples', `${name}-${round}-${language}`), config.timeout);
         requireSuccess(sample, `${name}/${language}`);
         validateOutput(sample.stdout, input.expected, input.tolerance);
         const record = { case: name, language, phase, round, position, wall_ns: sample.wall_ns, peak_rss_bytes: sample.peak_rss_bytes, stdout: sample.stdout, stderr: sample.stderr,
@@ -268,9 +311,11 @@ export function report(directory) {
   directory = resolve(directory);
   const runRecord = readJson(join(directory, 'run.json'));
   const manifest = readJson(join(directory, 'build.json'));
+  // Old archives retain their original configuration set and sampling order.
+  const configurations = manifest.languages ?? [...new Set(manifest.artifacts?.map(item => item.language) ?? languages)];
   if (!runRecord.completed_at) throw new Error('run is incomplete; no final comparison report is available');
   const samples = readFileSync(join(directory, 'samples.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
-  if (samples.length !== runRecord.config.cases.length * languages.length * (runRecord.config.warmup + runRecord.config.rounds)) {
+  if (samples.length !== runRecord.config.cases.length * configurations.length * (runRecord.config.warmup + runRecord.config.rounds)) {
     throw new Error('incomplete or unexpected sample matrix');
   }
   const rows = [];
@@ -279,22 +324,22 @@ export function report(directory) {
   for (const name of runRecord.config.cases) {
     const expectedCount = runRecord.config.warmup + runRecord.config.rounds;
     const caseSamples = samples.filter(sample => sample.case === name);
-    if (caseSamples.length !== languages.length * expectedCount) throw new Error(`incomplete sample matrix for ${name}`);
+    if (caseSamples.length !== configurations.length * expectedCount) throw new Error(`incomplete sample matrix for ${name}`);
     const medians = {};
-    for (const language of languages) {
+    for (const language of configurations) {
       const all = caseSamples.filter(sample => sample.language === language);
       if (all.length !== expectedCount || new Set(all.map(sample => sample.round)).size !== expectedCount) throw new Error(`incomplete/duplicate samples: ${name}/${language}`);
       for (const sample of all) {
         if (!Number.isInteger(sample.round) || sample.round < 0 || sample.round >= expectedCount ||
             sample.phase !== (sample.round < runRecord.config.warmup ? 'warmup' : 'measure') ||
-            languageOrder(sample.round)[sample.position] !== sample.language || !Number.isSafeInteger(sample.wall_ns) || sample.wall_ns <= 0 ||
+            languageOrder(sample.round, configurations)[sample.position] !== sample.language || !Number.isSafeInteger(sample.wall_ns) || sample.wall_ns <= 0 ||
             !Number.isSafeInteger(sample.peak_rss_bytes) || sample.peak_rss_bytes <= 0) throw new Error('invalid sample metadata');
         validateOutput(sample.stdout, runRecord.inputs[name].expected, runRecord.inputs[name].tolerance);
       }
       const selected = all.filter(sample => sample.phase === 'measure');
       medians[language] = quantile(selected.map(sample => sample.wall_ns / 1e6), 0.5);
     }
-    for (const language of languages) {
+    for (const language of configurations) {
       const selected = caseSamples.filter(sample => sample.language === language && sample.phase === 'measure');
       const times = selected.map(sample => sample.wall_ns / 1e6), memories = selected.map(sample => sample.peak_rss_bytes / 1024 ** 2);
       const row = { case: name, language, median_ms: medians[language], p25_ms: quantile(times, 0.25), p75_ms: quantile(times, 0.75),
@@ -308,7 +353,7 @@ export function report(directory) {
   const text = ['# 跨语言黑盒性能评测结果', '', `时间：${runRecord.started_at}；配置：${runRecord.config.profile}；预热 ${runRecord.config.warmup} 轮，正式 ${runRecord.config.rounds} 轮。`,
     `主机：${runRecord.host.cpu}，${runRecord.host.platform}/${runRecord.host.arch}，${runRecord.host.version}。`, '',
     '整程序启动到退出计时；输入读取和输出包含在内；单业务线程、正常运行时、预热文件缓存。相对值大于 1 表示比 C++ 用时更多。', '',
-    ...headings, '', '工具链：', '', ...languages.map(language => `- ${language}: ${manifest.tools[language].version.split('\n')[0]}`), '',
+    ...headings, '', '工具链：', '', ...configurations.map(language => `- ${language}: ${manifest.tools[language].version.split('\n')[0]}`), '',
     '小于 100 ms 的项目更容易受启动开销和调度噪声影响：' + (rows.filter(row => row.short_run).map(row => `${row.case}/${row.language}`).join('、') || '无') + '。',
     'RSS 是每个新进程的峰值，包含运行时与加载依赖。结果仅代表本次环境和工作负载，不单独归因于 ARC、GC 或某个编译器内部机制。',
     '原始数据见 samples.jsonl，参数和输入校验值见 run.json，构建参数与哈希见 build.json。', ''].join('\n');
