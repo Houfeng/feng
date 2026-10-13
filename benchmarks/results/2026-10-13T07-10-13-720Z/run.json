@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "id": "2026-10-13T07-10-13-720Z",
+  "started_at": "2026-10-13T07:10:13.720Z",
+  "config": {
+    "profile": "standard",
+    "rounds": 7,
+    "warmup": 2,
+    "timeout": 120,
+    "cases": [
+      "nbody",
+      "binary-trees",
+      "text-scan"
+    ]
+  },
+  "host": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "release": "27.0.0",
+    "version": "Darwin Kernel Version 27.0.0: Tue Aug 11 21:05:48 PDT 2026; root:xnu-13432.1.9~1/RELEASE_ARM64_T6041",
+    "cpu": "Apple M4 Pro",
+    "logical_cpus": 12,
+    "total_memory_bytes": 51539607552,
+    "node": "v22.14.0",
+    "load_average": [
+      2.4033203125,
+      3.60400390625,
+      3.7666015625
+    ]
+  },
+  "inputs": {
+    "nbody": {
+      "args": [
+        "20000000"
+      ],
+      "expected": [
+        -0.16907516382852447,
+        -0.1690316645525591
+      ],
+      "units": 20000000,
+      "unit": "steps/s",
+      "tolerance": 1e-8,
+      "size": 20000000
+    },
+    "binary-trees": {
+      "args": [
+        "16"
+      ],
+      "expected": [
+        262143,
+        4,
+        65536,
+        2031616,
+        6,
+        16384,
+        2080768,
+        8,
+        4096,
+        2093056,
+        10,
+        1024,
+        2096128,
+        12,
+        256,
+        2096896,
+        14,
+        64,
+        2097088,
+        16,
+        16,
+        2097136,
+        131071
+      ],
+      "units": 14985902,
+      "unit": "nodes/s",
+      "tolerance": 0,
+      "size": 16
+    },
+    "text-scan": {
+      "args": [
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/runs/2026-10-13T07-10-13-720Z/text-32000000.txt"
+      ],
+      "expected": [
+        32000000,
+        10666667,
+        10666666,
+        159984000000
+      ],
+      "units": 256000000,
+      "unit": "bytes/s",
+      "tolerance": 0,
+      "sha256": "9fac96966a4f9f1c7cb1584d94adbf010145c8d183182e05408d679c3a4d524c",
+      "size": 32000000
+    }
+  },
+  "completed_at": "2026-10-13T07:11:35.348Z",
+  "final_load_average": [
+    6.21728515625,
+    4.80810546875,
+    4.2275390625
+  ]
+}
