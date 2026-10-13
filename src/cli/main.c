@@ -68,6 +68,8 @@ void feng_cli_print_usage(const char *program, FILE *stream) {
         stream, "Project root", "  %s build      [<path>]", program);
     feng_cli_print_usage_line(
         stream, "Release mode", "%*s[--release]", project_indent, "");
+    feng_cli_print_usage_line(
+        stream, "LTO mode", "%*s[--lto=off|thin]", project_indent, "");
     feng_cli_print_usage_line(stream,
                               "Target platform",
                               "%*s[--platform=<platform>]...",
@@ -86,6 +88,8 @@ void feng_cli_print_usage(const char *program, FILE *stream) {
     feng_cli_print_usage_line(
         stream, "Release mode", "%*s[--release]", project_indent, "");
     feng_cli_print_usage_line(
+        stream, "LTO mode", "%*s[--lto=off|thin]", project_indent, "");
+    feng_cli_print_usage_line(
         stream, "Keep IR", "%*s[--keep-ir]", project_indent, "");
     feng_cli_print_usage_line(
         stream, "Program arguments", "%*s[-- <args>...]", project_indent, "");
@@ -93,6 +97,8 @@ void feng_cli_print_usage(const char *program, FILE *stream) {
         stream, "Project root", "  %s clean      [<path>]", program);
     feng_cli_print_usage_line(
         stream, "Project root", "  %s pack       [<path>]", program);
+    feng_cli_print_usage_line(
+        stream, "LTO mode", "%*s[--lto=off|thin]", project_indent, "");
     feng_cli_print_usage_line(stream,
                               "Target platform",
                               "%*s[--platform=<platform>]...",
@@ -131,6 +137,8 @@ void feng_cli_print_usage(const char *program, FILE *stream) {
         stream, "Artifact name", "%*s[--name=<artifact>]", compile_indent, "");
     feng_cli_print_usage_line(
         stream, "Release mode", "%*s[--release]", compile_indent, "");
+    feng_cli_print_usage_line(
+        stream, "LTO (release: thin, debug: off)", "%*s[--lto=off|thin]", compile_indent, "");
     feng_cli_print_usage_line(
         stream, "Keep IR", "%*s[--keep-ir]", compile_indent, "");
     feng_cli_print_usage_line(

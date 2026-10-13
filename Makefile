@@ -191,15 +191,15 @@ RUNTIME_PLATFORM_INPUTS_READY := $(shell \
 	printf '%s' "$$ready")
 endif
 
-# Define isolated runtime objects and one runtime archive for each platform
-# supported by the current build environment.
+# Compile Feng runtime members as ThinLTO bitcode; keep bundled unwind members
+# native in the same archive for each supported platform.
 define DEFINE_RUNTIME_PLATFORM
 RUNTIME_OBJS_$(1) := $$(patsubst src/runtime/%.c,$$(OBJ_DIR)/runtime/$(1)/%.o,$$(RUNTIME_SRCS))
 RUNTIME_UNWIND_$(1) := extlib/$(1)/$$(STATIC_LIB_PREFIX)feng_unwind$$(STATIC_LIB_EXT)
 
-$$(OBJ_DIR)/runtime/$(1)/%.o: src/runtime/%.c | runtime-platform-inputs
+$$(OBJ_DIR)/runtime/$(1)/%.o: src/runtime/%.c Makefile | runtime-platform-inputs
 	@mkdir -p $$(dir $$@)
-	$$(RUNTIME_CC) $$(CPPFLAGS) $$(HOST_CPPFLAGS) $$(CFLAGS) $$(RUNTIME_FLAGS_$(1)) $$(DEPFLAGS) -c $$< -o $$@
+	$$(RUNTIME_CC) $$(CPPFLAGS) $$(HOST_CPPFLAGS) $$(CFLAGS) $$(RUNTIME_FLAGS_$(1)) -flto=thin $$(DEPFLAGS) -c $$< -o $$@
 
 $$(LIB_DIR)/$(1)/$$(STATIC_LIB_PREFIX)feng_runtime$$(STATIC_LIB_EXT): $$(RUNTIME_OBJS_$(1)) $$(RUNTIME_UNWIND_$(1)) | toolchain-layout
 	@mkdir -p $$(dir $$@)

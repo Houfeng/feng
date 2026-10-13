@@ -59,7 +59,7 @@ FengCliParseResult feng_cli_legacy_compile_parse(const char *program,
  * Accepted forms:
  *   feng <file> [<file>...] --target=<bin|lib>
  *        [--platform=<platform>] [--sysroot=<path>] [--out=<dir>]
- *        [--name=<artifact>] [--release] [--keep-ir]
+ *        [--name=<artifact>] [--release] [--lto=off|thin] [--keep-ir]
  *        [--pkg=<.fb路径>|--pkg <.fb路径>]...
  *        [--lib=<库路径或系统库名>|--lib <库路径或系统库名>]...
  *
@@ -81,6 +81,7 @@ FengCliParseResult feng_cli_direct_options_parse(const char *program,
     out->target = FENG_COMPILE_TARGET_BIN;
     out->out_dir = "./build";
     out->release = false;
+    out->lto = FENG_CLI_LTO_UNSPECIFIED;
     out->keep_intermediate = false;
     out->artifact_name = NULL;
     out->platform = NULL;
@@ -189,6 +190,16 @@ FengCliParseResult feng_cli_direct_options_parse(const char *program,
         }
         if (strcmp(arg, "--release") == 0) {
             out->release = true;
+            continue;
+        }
+        if (strncmp(arg, "--lto=", 6) == 0 || strcmp(arg, "--lto") == 0) {
+            if (!feng_cli_parse_lto_option(arg, &out->lto)) {
+                free(link_libs);
+                free(package_paths);
+                free(inputs);
+                feng_cli_print_usage(program, stderr);
+                return FENG_CLI_PARSE_ERROR;
+            }
             continue;
         }
         if (strcmp(arg, "--keep-ir") == 0) {

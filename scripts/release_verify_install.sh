@@ -90,6 +90,7 @@ verify_runtime_archive() {
   local archive_tool="$3"
   local object_path="${WORK_ROOT}/runtime-${platform}.o"
   local member
+  local triple triple_pattern
   local member_count=0
 
   [[ -f "${archive_path}" ]] ||
@@ -108,9 +109,27 @@ verify_runtime_archive() {
     esac
     "${archive_tool}" p "${archive_path}" "${member}" > "${object_path}" ||
       die "failed to read ${member} from installed runtime ${platform}"
-    verify_platform_file \
-      "${object_path}" "${platform}" \
-      "installed runtime archive member ${member}"
+    if [[ "$(file -b "${object_path}")" == *LLVM*bitcode* ]]; then
+      # Read the stored target with a host tool; do not retarget or compile the IR.
+      require_cmd llvm-dis
+      triple="$(llvm-dis "${object_path}" -o - |
+        sed -n 's/^target triple = "\([^"]*\)"$/\1/p')" ||
+        die "failed to decode runtime member ${member}; use a compatible llvm-dis"
+      case "${platform}" in
+        macos-arm64) triple_pattern='arm64-apple-macosx([0-9]+(\.[0-9]+){0,2})?' ;;
+        linux-x64-gnu) triple_pattern='x86_64-unknown-linux-gnu' ;;
+        linux-x64-musl) triple_pattern='x86_64-unknown-linux-musl' ;;
+        linux-arm64-gnu) triple_pattern='aarch64-unknown-linux-gnu' ;;
+        linux-arm64-musl) triple_pattern='aarch64-unknown-linux-musl' ;;
+        *) die "unsupported runtime platform: ${platform}" ;;
+      esac
+      [[ "${triple}" =~ ^${triple_pattern}$ ]] ||
+        die "runtime member ${member} has unexpected target for ${platform}: ${triple:-<missing>}"
+    else
+      verify_platform_file \
+        "${object_path}" "${platform}" \
+        "installed runtime archive member ${member}"
+    fi
     member_count=$((member_count + 1))
   done < <("${archive_tool}" t "${archive_path}")
   [[ "${member_count}" -gt 0 ]] ||

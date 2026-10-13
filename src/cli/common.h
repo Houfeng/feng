@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdio.h>
 
+#include "cli/cli.h"
 #include "lexer/token.h"
 #include "parser/parser.h"
 #include "semantic/semantic.h"
@@ -124,6 +125,9 @@ void feng_cli_print_diagnostic(FILE *stream,
                                size_t source_length);
 
 bool feng_cli_parse_target_option(const char *arg, FengCompileTarget *out_target);
+
+/* Parse one explicit --lto=off|thin option without resolving mode defaults. */
+bool feng_cli_parse_lto_option(const char *arg, FengCliLtoMode *out_lto);
 
 typedef struct FengCliLoadedSource {
     const char *path;

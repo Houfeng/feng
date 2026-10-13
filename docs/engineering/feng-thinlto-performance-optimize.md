@@ -1,11 +1,11 @@
 # Feng ThinLTO 性能优化方案
 
-> **状态：待人工 Review，尚未实施。日期：2026-10-13。**
+> **状态：已批准实施，代码变更待人工 Review。日期：2026-10-13。**
 >
 > 本文整理 runtime、lib、bin 的 ThinLTO 方案、已完成的隔离实验及正式交付条件。
 > 三态选项、项目命令透传、直编层解析默认值、runtime 单格式分发及最小改动要求
-> 已由人工确认；其余实施细节待 Review。
-> 当前编译器尚未实施本文的新选项和默认规则。
+> 已由人工确认。按本轮要求，先完成主规范与必要代码变更，人工 Review 后再补用例、
+> 重建制品并执行回归和性能验证；本文实验数据不代表正式实现已验收。
 
 ## 1. 目标与范围
 
@@ -34,7 +34,7 @@
 其状态。此前 [text-scan 优化](feng-text-scan-performance-optimize.md) 的 std.fs 实现
 及 runtime 头文件支持作为现有基线保留。
 
-Review 通过后，新增规则先收敛到主规范，工程文档仅保留实现与验证记录：
+新增规则收敛到以下主规范，本文保留实施依据与验证记录：
 
 | 内容 | 主规范或现有依据 |
 | --- | --- |
@@ -148,7 +148,7 @@ RSS 是运行基准程序时的进程驻留内存指标。这里由现有
 透传沿用现有项目层构造 `FengCliDirectOptions` 并调用 `feng_cli_direct_run` 的内部
 调用链，只补必要的选项传递，不为此改成拼接 shell 命令或启动新的直编进程。
 
-以下只是待实施的命令示例，当前 CLI 尚不支持：
+命令示例（正式实现尚待回归验证）：
 
 ```sh
 feng build --release              # 默认 ThinLTO
@@ -179,19 +179,24 @@ SDK-free 指编译该库不需要系统 SDK 头文件；它不要求使用 C 的
 
 ### 4.2 SDK-free 参数调整
 
-当前 macOS SDK-free lib 路径附加 `-ffreestanding` 和 `FENG_COMPILE_SDK_FREE`。
+变更前，macOS SDK-free lib 路径附加 `-ffreestanding` 和 `FENG_COMPILE_SDK_FREE`。
 前者同时影响 builtin、`__STDC_HOSTED__`、默认 unwind tables 及 `main` 处理，不能
 将移除它描述为只删除一个 LLVM 属性。参见 [Clang freestanding 说明](https://clang.llvm.org/docs/UsersManual.html#freestanding-builds)。
 
-SDK-free 分支应直接表达所需策略。以下参数来自已通过的实验组合，正式采用前仍须
-按 §7.1 逐项证明必要；组合有效不等于每一项新增参数都已证明必需：
+SDK-free 分支直接表达所需策略。正式参数以实验组合为起点，按 §7.1 排除冗余项；
+主规范见 [构建规范 §2.2](../specifications/feng-build.md#22-目标平台与工具链转换)，选择依据如下：
 
 1. 允许 hosted 模式下的标准库内建优化，不再由 Feng 自动添加 `-ffreestanding`
    或全局禁止 builtin 的参数；bin/lib 使用一致的 builtin 策略。
-2. 保留 `FENG_COMPILE_SDK_FREE` 及现有自包含声明。使用 `-nostdinc` 隔离系统头文件，
-   显式加入实际选中 Clang 的 resource include，继续加入既有 Feng 和插件 include。
+2. 保留 `FENG_COMPILE_SDK_FREE` 及现有自包含声明。正式实现使用 `-nostdlibinc`
+   隔离系统头文件并保留所选 Clang 的 resource include，继续加入既有 Feng 和插件
+   include。Clang 23.1.3 的 `-###` 已确认此选项只留下 resource headers；不需新增
+   resource 路径查询或重复维护工具定位。历史实验使用的是 `-nostdinc` 加显式 include。
 3. 保持原 SDK-free 路径的默认 unwind-table 策略，显式表达对应参数；保留
    `-fexceptions` 和已有异常插件处理，不能因 hosted 切换而改变异常清理行为。
+   Clang 23.1.3 对现有 macOS ARM64 目标的 `-###` 对照确认，仅需
+   `-fno-unwind-tables`；实验中的 `-fno-asynchronous-unwind-tables` 没有额外作用，
+   不纳入正式参数。
 4. 核对头文件依赖、宏及目标属性。实验中的 std 只依赖 22 个 Feng/插件/Clang 头文件，
    正式验证还需覆盖普通库和 Linux host 交叉编译 macOS 库。
 
@@ -313,20 +318,23 @@ Debug 构建仍有 bitcode 链接成本，不能宣传成“整个链接完全�
 - [x] 确认内部未指定/off/thin 三态、按构建模式解析默认值及最小改动要求。
 - [x] 确认 build/pack/run 向直编层透传三态，由直编层统一解析实际值。
 - [x] 确认 Debug 未指定时为 off，runtime 开启 ThinLTO 并以单一格式分发。
-- [ ] 将批准的 CLI 行为写入 CLI 主规范，将编译、链接、SDK-free 与调试规则写入
+- [x] 将批准的 CLI 行为写入 CLI 主规范，将编译、链接、SDK-free 与调试规则写入
   构建主规范；包及发行文档只补充自身负责的制品约束，避免重复定义。
 
-### 阶段二 实现与补齐测试
+### 阶段二 最小实现与人工 Review
 
-- [ ] 按 §7.1 逐项证明改动必要性，排除等效参数、无关重构及不必要的脚本变更。
-- [ ] 实现项目及本地依赖向直编层透传 LTO 三态，由直编层统一解析实际值。
-- [ ] 调整 SDK-free 参数，验证允许 builtin 与不依赖 SDK 可以同时成立。
-- [ ] 为 Feng runtime 制品启用 ThinLTO，重建 std 及必要发行库。
+- [x] 按 §7.1 记录本轮代码改动必要性，排除等效参数及无关重构。
+- [x] 实现项目及本地依赖向直编层透传 LTO 三态，由直编层统一解析实际值。
+- [x] 调整 SDK-free 参数；正式头文件依赖与行为验证留在下一阶段。
+- [x] 为 Feng runtime 构建规则启用 ThinLTO，保留原生 libunwind 成员。
+- [x] 确认并适配发行脚本对 runtime bitcode 成员的校验方式，使用校验环境中的工具。
+- [ ] 人工 Review 代码；通过后再补用例、重建制品和执行回归，不提前进入测试阶段。
+
+### 阶段三 补齐测试、全量验证与性能验收
+
+- [ ] 重建 runtime、std 及必要发行库。
 - [ ] 按第 7 节补齐用例，核实插件产物、真实 bitcode 成员及混合链接。
 - [ ] 验证默认 Debug 及显式 ThinLTO Debug，不改变现有调试契约。
-
-### 阶段三 全量验证与性能验收
-
 - [ ] 在 Linux 容器及 macOS 完成全量 `make test`；macOS 回归在沙箱外运行，
   安全软件授权与正式计时分开，有中断则记录并重新完成受影响验证。
 - [ ] 完成目标平台、SDK-free 交叉编译及正常发行安装矩阵；缺失环境明确记录，
@@ -353,3 +361,37 @@ Debug 构建仍有 bitcode 链接成本，不能宣传成“整个链接完全�
 §2.1 的 RSS 差值属于待核实的运行内存观测，需复测并定位来源；它与链接时间成本
 是两个指标。构建峰值内存、制品体积和完整 Debug 行为同样保留为验证事项。
 已确认的设计不因记录在本文而视为已实施或已通过回归。
+
+## 10. 本轮实现与 Review 记录（2026-10-13）
+
+本轮实现已确认的编译选项、参数链及必要的发行校验适配；测试、制品重建和性能验收尚未进行。
+
+| 变更位置 | 必要性 |
+| --- | --- |
+| `cli.h`、`common.*` | 用一个枚举保留三态，用同一解析函数限定显式值，避免各命令独立解释默认值 |
+| `compile/options.*`、`direct.c`、`driver.h` | 将 CLI 状态送到后端；不传该字段会丢失显式 off/thin |
+| `compile/driver.c` | 在 bin/lib 共用参数函数中决定是否加 `-flto=thin`；SDK-free 的必要参数与排除项见 §4.2 |
+| `project/build.c`、`run.c`、`pack.c`、`compile.c`、`common.h` | 沿原有内部调用链传递选项，pack 固定 Release 时仍保留显式值 |
+| `deps/manager.*` | 让递归本地依赖使用同一 LTO 状态；已存在的二进制包不重编 |
+| `main.c` | 现有帮助入口需显示四种编译入口支持的新选项 |
+| `Makefile` | 仅平台 runtime 对象增加 ThinLTO；补充 Makefile 前置依赖，避免更新编译规则后继续使用旧的原生对象 |
+| `release_component.sh`、`release_assemble.sh`、`release_verify_install.sh` | 现有 Mach-O/ELF 检查会拒绝 bitcode；使用本机工具读取原始 triple，保留平台检查 |
+| `.github/workflows/release.yml` | 组装任务原本未安装 LLVM，复用既有安装步骤取得 `llvm-dis`；其余校验任务已具备该工具 |
+| CLI、构建、包及发行主规范 | 分别定义选项、后端行为与自身负责的制品边界 |
+
+静态检查：修改的 C 文件使用现有 Clang 23.1.3、macOS SDK 和原有警告等级通过
+`-fsyntax-only`；三个发行校验脚本通过 `bash -n`，工作流通过 YAML 语法解析，
+`git diff --check` 通过。`-###` 对照确认：删除 freestanding 后
+默认新增同步 unwind tables，增加 `-fno-unwind-tables` 可恢复原策略；
+`-nostdlibinc` 保留 resource headers 并排除隐式系统头路径。它们不能替代后续实际
+编译、链接、语言行为、调试及性能回归。
+
+发行校验的工具边界已按人工要求收敛：`llvm-dis` 使用本机／CI 安装版本，不加入
+发行包，不修改裁剪清单或正常编译工具选择。规则统一见
+[发行与安装 §4](feng-release-and-install.md#4-压缩包目录结构)。此前提出增加随包工具
+并非必要，未实施该方案。
+
+已用本机现有 LLVM 23.1.3 `llvm-dis` 只读检查此前实验的 `feng_array.o`，原始 triple
+为 `arm64-apple-macosx27.0.0`。可行方式是由 `llvm-dis` 解码，再由发行脚本核对
+triple；并非工具自身按 Feng 平台名作出判断。此检查不编译或执行制品，也不替代
+后续运行验证。工具职责见 [LLVM 官方说明](https://llvm.org/docs/CommandGuide/llvm-dis.html)。

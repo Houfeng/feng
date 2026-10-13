@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "cli/cli.h"
 #include "cli/project/manifest.h"
 
 typedef struct FengCliDepsResolved {
@@ -40,12 +41,13 @@ bool feng_cli_deps_resolve_for_manifest(const char *program,
                                         FengCliDepsResolved *out_resolved,
                                         FengCliProjectError *out_error);
 
-/* Resolve dependencies while materializing local projects for one target. */
+/* Materialize local dependencies with the caller's target, mode and LTO choice. */
 bool feng_cli_deps_resolve_for_manifest_platform(
     const char *program,
     const char *manifest_path,
     bool force_remote,
     bool release,
+    FengCliLtoMode lto,
     const char *platform,
     const char *sysroot,
     FengCliDepsResolved *out_resolved,

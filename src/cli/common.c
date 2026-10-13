@@ -751,6 +751,23 @@ bool feng_cli_parse_target_option(const char *arg, FengCompileTarget *out_target
     return false;
 }
 
+/* Share the explicit LTO values and diagnostics across compilation commands. */
+bool feng_cli_parse_lto_option(const char *arg, FengCliLtoMode *out_lto) {
+    if (arg == NULL || out_lto == NULL) {
+        return false;
+    }
+    if (strcmp(arg, "--lto=off") == 0) {
+        *out_lto = FENG_CLI_LTO_OFF;
+        return true;
+    }
+    if (strcmp(arg, "--lto=thin") == 0) {
+        *out_lto = FENG_CLI_LTO_THIN;
+        return true;
+    }
+    fprintf(stderr, "invalid LTO option '%s' (expected --lto=off or --lto=thin)\n", arg);
+    return false;
+}
+
 const FengCliLoadedSource *feng_cli_find_loaded_source(const FengCliLoadedSource *sources,
                                                        size_t source_count,
                                                        const char *path) {

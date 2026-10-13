@@ -1951,8 +1951,9 @@ static char *locate_macos_target_sdk(char **out_error_message) {
 }
 #endif
 
-/* Apply optimization and target section granularity to both bin and lib C. */
+/* Resolve LTO defaults and apply shared bin/lib optimization and section flags. */
 static bool argv_push_mode_flags(ArgVec *av, bool release,
+                                 FengCliLtoMode lto,
                                  const char *target_platform) {
     if (!argv_push(av, release ? "-O2" : "-O0")) {
         return false;
@@ -1961,6 +1962,11 @@ static bool argv_push_mode_flags(ArgVec *av, bool release,
         return false;
     }
     if (release && !argv_push(av, "-DNDEBUG")) {
+        return false;
+    }
+    if ((lto == FENG_CLI_LTO_THIN ||
+         (lto == FENG_CLI_LTO_UNSPECIFIED && release)) &&
+        !argv_push(av, "-flto=thin")) {
         return false;
     }
     /* ELF GC works at section granularity; Mach-O already has symbol subsections. */
@@ -2001,7 +2007,10 @@ static bool argv_push_target_platform_flags(ArgVec *av,
     free(target_flag);
     if (feng_platform_is_macos(target_platform)) {
         if (target_sysroot == NULL) {
-            if (ok && !argv_push(av, "-ffreestanding")) {
+            /* Keep SDK headers out without disabling builtin optimization.
+             * Preserve the former freestanding unwind-table defaults. */
+            if (ok && (!argv_push(av, "-nostdlibinc") ||
+                       !argv_push(av, "-fno-unwind-tables"))) {
                 ok = false;
             }
             if (ok && !argv_push(av, "-DFENG_COMPILE_SDK_FREE")) {
@@ -2351,7 +2360,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                                                    target_clang,
                                                    target_sysroot,
                                                    true)) { ok = false; }
-        if (ok && !argv_push_mode_flags(&av, opts->release, target_platform)) { ok = false; }
+        if (ok && !argv_push_mode_flags(&av, opts->release, opts->lto, target_platform)) { ok = false; }
         if (ok && !argv_push(&av, "-Wall")) { ok = false; }
         if (ok && !argv_push(&av, "-Wextra")) { ok = false; }
         /* Generated C may emit fit-helper functions that are not exercised
@@ -2435,7 +2444,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                                                        target_clang,
                                                        target_sysroot,
                                                        false)) { ok = false; }
-            if (ok && !argv_push_mode_flags(&av, opts->release, target_platform)) { ok = false; }
+            if (ok && !argv_push_mode_flags(&av, opts->release, opts->lto, target_platform)) { ok = false; }
             if (ok && !argv_push(&av, "-Wall")) { ok = false; }
             if (ok && !argv_push(&av, "-Wextra")) { ok = false; }
             /* See bin path above: silence unused-function noise from

@@ -23,6 +23,7 @@ typedef struct PackOptions {
     const char **platforms;
     size_t platform_count;
     const char *sysroot;
+    FengCliLtoMode lto;
 } PackOptions;
 
 /* Owned recursive list of regular-file paths relative to one root. */
@@ -37,7 +38,7 @@ static void print_usage(const char *program, FILE *stream) {
     if (stream == stderr) fprintf(stream, "\n");
     fprintf(stream, "Usage:\n");
     fprintf(stream,
-            "  %s pack [<path>] [--platform=<platform>]... "
+            "  %s pack [<path>] [--lto=off|thin] [--platform=<platform>]... "
             "[--sysroot=<path>]\n",
             program);
 }
@@ -115,6 +116,14 @@ static FengCliParseResult parse_args(const char *program,
             print_usage(program, stdout);
             pack_options_dispose(out_options);
             return FENG_CLI_PARSE_HELP;
+        }
+        if (strncmp(arg, "--lto=", 6U) == 0 || strcmp(arg, "--lto") == 0) {
+            if (!feng_cli_parse_lto_option(arg, &out_options->lto)) {
+                print_usage(program, stderr);
+                pack_options_dispose(out_options);
+                return FENG_CLI_PARSE_ERROR;
+            }
+            continue;
         }
         if (strncmp(arg, "--platform=", 11U) == 0) {
             const char *platform = arg + 11U;
@@ -664,6 +673,7 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
                                              selection.platforms[index],
                                              options.sysroot,
                                              true,
+                                             options.lto,
                                              false,
                                              &project_error);
         if (rc != 0) {

@@ -21,6 +21,13 @@ typedef enum FengCliParseResult {
 	FENG_CLI_PARSE_ERROR
 } FengCliParseResult;
 
+/* Preserve an omitted LTO option until the direct driver resolves build mode. */
+typedef enum FengCliLtoMode {
+    FENG_CLI_LTO_UNSPECIFIED = 0,
+    FENG_CLI_LTO_OFF,
+    FENG_CLI_LTO_THIN
+} FengCliLtoMode;
+
 void feng_cli_print_usage(const char *program, FILE *stream);
 
 int feng_cli_tool_main(const char *program, int argc, char **argv);

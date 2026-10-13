@@ -18,7 +18,7 @@ Feng 将"编译"与"构建"明确分为两个独立层次:
 编译器接受以下输入:
 
 ```bash
-feng <源文件列表> --target=<目标> [--platform=<platform>] [--sysroot=<路径>] [--out=<输出目录>] [--release] [--pkg <.fb路径>]... [--lib <库路径>]...
+feng <源文件列表> --target=<目标> [--platform=<platform>] [--sysroot=<路径>] [--out=<输出目录>] [--release] [--lto=off|thin] [--pkg <.fb路径>]... [--lib <库路径>]...
 ```
 
 - `<源文件列表>`: 需要编译的 `.ff` 源文件,可使用 glob 展开
@@ -29,6 +29,14 @@ feng <源文件列表> --target=<目标> [--platform=<platform>] [--sysroot=<路
 - `--release`: 使用发布模式编译; 未指定时使用调试友好的构建模式。调试友好构建会保留主机编译器的 `-O0` / `-g` 路径,并额外生成稳定 `#line` 与当前产物对应的 `.fd` 调试 sidecar; 项目级 `build` 与 `run` 的发布模式行为最终透传到该参数
 - `--pkg <.fb路径>`: 直接指定依赖包的 `.fb` 文件路径,可重复出现
 - `--lib <库路径>`: 直接指定额外链接的原生库路径或系统库名,可重复出现
+- `--lto=off|thin`: 选项与默认值由 [CLI 规范 §2.4](feng-cli.md#24-顶层直编补充选项) 定义。
+
+LTO 三态沿项目构建与递归本地依赖的既有内部调用链原样传递，统一在直编后端参数层
+结合 Release/Debug 模式解析。启用时，bin/lib 的生成 C 编译增加 `-flto=thin`；关闭时
+不添加该参数。Release 保留 `-O2`，Debug 保留 `-O0 -g` 和原有 `.fd` 生成与合并规则。
+LLD 继续接受原生对象和 bitcode 混合输入，因此当前 bin 关闭 LTO 不妨碍使用 ThinLTO
+依赖库或 runtime；已有二进制包不因本次选项而重编。显式 Debug ThinLTO 仍保留调试
+信息，但已优化的预编译依赖不能恢复成未优化的源码单步行为。
 
 编译器不接受包名、版本号或搜索路径,不读取任何 `feng.fm`,也不解析依赖树。一次核心编译只生成一个目标平台的制品,无论 `--target` 是 `bin` 还是 `lib`；它只在调用方给定的 `--out` 根下建立本次编译需要的目录,不理解 `<项目输出根>/<platform>` 约定,也不负责多平台循环或 `.fb` 聚合。对 `--pkg` 指定的 `.fb`,编译器只直接读取其中的公开 `.ft` 与目标平台正式库文件（如 `.a`、`.lib`、`.so`、`.dylib`、`.dll`）; `.o` / `.obj` 不属于 `.fb` 的稳定分发接口。调试 sidecar `.fd` 只属于本地构建产物,不从 `.fb` 读取,也不进入 `.fb` 分发包。
 
@@ -54,9 +62,15 @@ sysroot 规则:
 
 - 一次核心编译只能选择一个有效 sysroot，不得叠加多个 `-isysroot` / `--sysroot` 并依赖参数覆盖顺序。显式 `--sysroot` 只覆盖当前完整平台的默认 sysroot 路径，不改变平台标识、target triple 或 GNU / musl 选择。项目级 `feng build --sysroot=<路径>` 只允许最终目标平台集合恰好包含一个平台；多个平台需要不同 sysroot 时必须分多次单平台构建。
 - `target=bin` 的 macOS native 最终链接使用 `-isysroot <macOS SDK>`。未显式传入 `--sysroot` 时,通过 `xcrun --sdk macosx --show-sdk-path` 获取 SDK 路径；macOS SDK 不随 Feng 分发,用户必须安装 Xcode 或 Xcode Command Line Tools。
-- `target=lib --platform=macos-arm64` 默认走 SDK-free 路径：生成 C 只使用 Feng / LLVM 合法分发的自包含编译头闭包，Clang 只执行 Mach-O 对象编译，随后由 bundled `llvm-ar` / `llvm-ranlib` 归档，不进入最终链接。用户显式传入 `--sysroot=<路径>` 时转换为 Clang `-isysroot <路径>`；Feng 不下载、复制或判断该 sysroot 的授权来源。
+- `target=lib --platform=macos-arm64` 默认走 SDK-free 路径：生成 C 只使用 Feng / LLVM 合法分发的自包含编译头闭包，Clang 只编译目标平台对象（启用 ThinLTO 时为 bitcode），随后由 bundled `llvm-ar` / `llvm-ranlib` 归档，不进入最终链接。用户显式传入 `--sysroot=<路径>` 时转换为 Clang `-isysroot <路径>`；Feng 不下载、复制或判断该 sysroot 的授权来源。
 - Linux GNU 与 musl 平台在 native 和交叉编译场景使用完全相同的目标规则：未显式指定 `--sysroot` 时都使用完整平台对应的 bundled sysroot，不消费 host `/usr/include`、`/usr/lib` 或 host glibc。host 只决定当前运行哪一份 Feng / Clang 可执行文件，不改变目标产物。
 - `linux-*-gnu` 默认动态链接 bundled glibc ABI；`linux-*-musl target=bin` 默认静态链接，保证生成程序可在不提供 musl 动态加载器的 Linux 环境运行。显式 sysroot 仍必须与所选完整平台匹配，Feng 不通过扫描路径自动判断其 ABI。
+
+SDK-free 库保留 `FENG_COMPILE_SDK_FREE` 自包含声明，使用 `-nostdlibinc` 排除系统
+头文件搜索并保留所选 Clang 自带的 resource headers；不使用 `-ffreestanding`，使
+bin/lib 一致允许内建库函数优化。通过 `-fno-unwind-tables` 保持原 SDK-free 的默认
+unwind-table 策略，现有 `-fexceptions` 和异常插件继续生效。runtime 的 SDK 依赖及 Linux sysroot
+规则不变，且此调整不受 LTO 开关影响。
 
 Linux GNU / musl 目标参数：
 
@@ -141,6 +155,10 @@ runtime 链接边界:
 
 - `target=bin`: 编译器固定补入目标平台对应的 runtime 静态库。
 - `target=lib`: 编译器只生成对象并归档,不链接 runtime,也不在此阶段闭合最终原生依赖。
+
+发行 runtime 的 Feng C 实现统一以 ThinLTO 编译，保留内建函数优化；同一静态归档内
+继续包含既有原生 libunwind 成员，不再提供另一套原生 runtime。归档仍绑定具体目标
+平台，bitcode 不意味着跨平台通用；发行布局见 [发行与安装](../engineering/feng-release-and-install.md)。
 
 编译器私有的 runtime contract helper 若存在,统一由这套 runtime 库提供,不再单独产出 intrinsic 静态库。在 Feng 层（如标准库）显式调用这类 helper 时,使用 `@runtime extern func`,不通过公开 C ABI 注解声明内部 helper。
 

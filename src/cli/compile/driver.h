@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "cli/cli.h"
 #include "semantic/semantic.h"
 
 /*
@@ -53,6 +54,7 @@ typedef struct FengCliDriverOptions {
     const char *const *link_libs;
     size_t link_lib_count;
     bool release;
+    FengCliLtoMode lto;
     bool keep_intermediate;
 } FengCliDriverOptions;
 

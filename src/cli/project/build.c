@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cli/common.h"
 #include "cli/project/common.h"
 #include "platform/platform.h"
 
@@ -15,6 +16,7 @@ typedef struct BuildOptions {
     size_t platform_count;
     const char *sysroot;
     bool release;
+    FengCliLtoMode lto;
     bool keep_ir;
 } BuildOptions;
 
@@ -23,7 +25,7 @@ static void print_usage(const char *program, FILE *stream) {
     if (stream == stderr) fprintf(stream, "\n");
     fprintf(stream, "Usage:\n");
     fprintf(stream,
-            "  %s build [<path>] [--release] [--keep-ir] "
+            "  %s build [<path>] [--release] [--lto=off|thin] [--keep-ir] "
             "[--platform=<platform>]... [--sysroot=<path>]\n",
             program);
 }
@@ -64,6 +66,14 @@ static FengCliParseResult parse_args(const char *program,
         }
         if (strcmp(arg, "--release") == 0) {
             out_options->release = true;
+            continue;
+        }
+        if (strncmp(arg, "--lto=", 6U) == 0 || strcmp(arg, "--lto") == 0) {
+            if (!feng_cli_parse_lto_option(arg, &out_options->lto)) {
+                print_usage(program, stderr);
+                build_options_dispose(out_options);
+                return FENG_CLI_PARSE_ERROR;
+            }
             continue;
         }
         if (strcmp(arg, "--keep-ir") == 0) {
@@ -151,6 +161,7 @@ int feng_cli_project_build_main(const char *program, int argc, char **argv) {
                                              selection.platforms[index],
                                              options.sysroot,
                                              options.release,
+                                             options.lto,
                                              options.keep_ir,
                                              &error);
         if (rc != 0) {

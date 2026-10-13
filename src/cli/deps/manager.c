@@ -34,6 +34,7 @@ typedef struct ResolvedNode {
     FengCliDepsResolved subtree;
 } ResolvedNode;
 
+/* Shared build choices and resolved nodes for one dependency traversal. */
 typedef struct ResolveState {
     const char *program;
     const char *platform;
@@ -41,6 +42,7 @@ typedef struct ResolveState {
     bool force_remote;
     bool materialize_local_projects;
     bool release;
+    FengCliLtoMode lto;
     char *cache_root;
     char *global_registry;
     bool global_registry_loaded;
@@ -1853,11 +1855,13 @@ bool feng_cli_deps_normalize_direct_dependencies(const char *manifest_path,
     return true;
 }
 
+/* Build a local library without resolving or overriding its caller's LTO choice. */
 static bool build_local_project_bundle(const char *program,
                                        const char *manifest_path,
                                        const char *platform,
                                        const char *sysroot,
                                        bool release,
+                                       FengCliLtoMode lto,
                                        const FengCliDepsResolved *dependencies,
                                        char **out_bundle_path,
                                        char **out_debug_fd_path,
@@ -1912,6 +1916,7 @@ static bool build_local_project_bundle(const char *program,
                                                               platform,
                                                               sysroot,
                                                               release,
+                                                              lto,
                                                               false,
                                                               dependencies->package_count,
                                                               (const char *const *)dependencies->package_paths,
@@ -2230,6 +2235,7 @@ static bool resolve_project_dependencies(ResolveState *state,
                                                     state->platform,
                                                     state->sysroot,
                                                     state->release,
+                                                    state->lto,
                                                     &state->nodes[child_slot].subtree,
                                                     &state->nodes[child_slot].bundle_path,
                                                     &state->nodes[child_slot].debug_fd_path,
@@ -2436,11 +2442,13 @@ static bool resolve_bundle_node(ResolveState *state,
     return true;
 }
 
+/* Resolve a manifest graph with one consistent set of local-build options. */
 static bool resolve_root_manifest(const char *program,
                                   const char *manifest_path,
                                   bool force_remote,
                                   bool materialize_local_projects,
                                   bool release,
+                                  FengCliLtoMode lto,
                                   const char *platform,
                                   const char *sysroot,
                                   FengCliDepsResolved *out_resolved,
@@ -2456,6 +2464,7 @@ static bool resolve_root_manifest(const char *program,
     state.force_remote = force_remote;
     state.materialize_local_projects = materialize_local_projects;
     state.release = release;
+    state.lto = lto;
 
     if (!read_project_manifest_from_disk(manifest_path, &manifest, out_error)) {
         return false;
@@ -2480,6 +2489,7 @@ bool feng_cli_deps_install_for_manifest(const char *program,
                                     force_remote,
                                     false,
                                     false,
+                                    FENG_CLI_LTO_UNSPECIFIED,
                                     NULL,
                                     NULL,
                                     &resolved,
@@ -2519,6 +2529,7 @@ bool feng_cli_deps_resolve_for_manifest(const char *program,
                                force_remote,
                                true,
                                release,
+                               FENG_CLI_LTO_UNSPECIFIED,
                                host_platform,
                                NULL,
                                out_resolved,
@@ -2527,11 +2538,13 @@ bool feng_cli_deps_resolve_for_manifest(const char *program,
     return ok;
 }
 
+/* Preserve the explicit target and LTO state for project build/run/pack. */
 bool feng_cli_deps_resolve_for_manifest_platform(
     const char *program,
     const char *manifest_path,
     bool force_remote,
     bool release,
+    FengCliLtoMode lto,
     const char *platform,
     const char *sysroot,
     FengCliDepsResolved *out_resolved,
@@ -2551,6 +2564,7 @@ bool feng_cli_deps_resolve_for_manifest_platform(
                                  force_remote,
                                  true,
                                  release,
+                                 lto,
                                  platform,
                                  sysroot,
                                  out_resolved,

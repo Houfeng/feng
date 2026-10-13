@@ -242,7 +242,9 @@ jobs:
         run: >-
           apt-get update &&
           apt-get install -y --no-install-recommends
-          binutils ca-certificates file gh git unzip zip
+          binutils ca-certificates curl file gh git unzip zip
+
+      - *install_llvm_23
 
       - name: Checkout
         uses: actions/checkout@v6

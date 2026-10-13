@@ -14,7 +14,7 @@
 基础编译
 
 ```bash
-feng <源文件列表> --target=<目标> [--platform=<platform>] [--sysroot=<路径>] [--out=<输出目录>] [--name=<产物名>] [--release] [--keep-ir] [--pkg=<.fb路径>|--pkg <.fb路径>]... [--lib <库路径>]...
+feng <源文件列表> --target=<目标> [--platform=<platform>] [--sysroot=<路径>] [--out=<输出目录>] [--name=<产物名>] [--release] [--lto=off|thin] [--keep-ir] [--pkg=<.fb路径>|--pkg <.fb路径>]... [--lib <库路径>]...
 ```
 
 ```text
@@ -134,6 +134,7 @@ feng dap [--stdio]
 - `--keep-ir`: 固定保留本次直编的中间 IR 产物。当前实现会把生成的 C 文件保留在 `<out>/ir/c/` 下面，便于编译器开发与问题排查；未指定时，构建开始前会先清理该直编输出根中的旧 `ir/c` 产物，前端 / 语义 / codegen 失败不会留下陈旧 C 文件，只有目标 C 编译阶段失败时才保留本次生成的 C 代码用于排查；成功构建后仍会把已变空的 `ir/c` 与 `ir` 一并清理掉。
 - `--pkg=<.fb路径>` / `--pkg <.fb路径>`: 注册一个外部 `.fb` 依赖包,可重复出现。直编模式只接受具体 `.fb` 路径,不接受包名、版本号或搜索路径,也不解析依赖树。
 - `--release`: 作为统一顶层选项保留；是否真正生效由对应构建路径决定。
+- `--lto=off|thin`: 控制本次生成代码是否使用 ThinLTO，适用于直编、`build`、`run`、`pack`。内部保留未指定、`off`、`thin` 三态；未指定时由直编层按模式决定：Release 使用 `thin`，Debug 使用 `off`。显式值优先，不接受空值或其他值。该选项不限制已有依赖库的对象格式；`off` 仍可链接含 bitcode 的库。编译与透传规则见 [构建规范](feng-build.md#21-接受参数)。
 
 ## 3 全局选项
 
@@ -241,7 +242,7 @@ open func hello(name: string) {
 用法:
 
 ```text
-feng build [<path>] [--release] [--platform=<platform>]... [--sysroot=<路径>]
+feng build [<path>] [--release] [--lto=off|thin] [--platform=<platform>]... [--sysroot=<路径>]
 ```
 
 选项:
@@ -253,7 +254,7 @@ feng build [<path>] [--release] [--platform=<platform>]... [--sysroot=<路径>]
 
 说明:
 
-- `build` 从 `feng.fm` 中读取源文件列表、编译目标、输出路径等配置；除项目级 `--release`、`--platform` 与单目标 `--sysroot` 外，不接受编译器级别的细粒度选项。
+- `build` 从 `feng.fm` 中读取源文件列表、编译目标、输出路径等配置；`--lto` 按 §2.4 向当前项目及递归本地依赖的直编层透传。除项目级 `--release`、`--lto`、`--platform` 与单目标 `--sysroot` 外，不接受编译器级别的细粒度选项。
 - `build` 总是先对同一 `feng.fm` 执行 `feng deps install`;默认情况下,已安装的依赖不会重新安装。
 - `build` 负责解析依赖树并展平为 `--pkg <.fb路径>` 列表,再调用核心编译器。
 - `build` 按本节“项目平台选择统一规则”取得目标平台集合。每次直编只传一个 `--platform`，并将 `<项目输出根>/<platform>` 作为该次直编的 `--out`。项目构建层再把原生依赖与普通资源 staging 到同一平台目录；同一目标平台集合继续传递给递归本地 `target: "lib"` 依赖。
@@ -269,7 +270,7 @@ feng build [<path>] [--release] [--platform=<platform>]... [--sysroot=<路径>]
 用法:
 
 ```text
-feng run [<path>] [--release] [-- <program-args>...]
+feng run [<path>] [--release] [--lto=off|thin] [-- <program-args>...]
 ```
 
 选项:
@@ -280,7 +281,7 @@ feng run [<path>] [--release] [-- <program-args>...]
 说明:
 
 - `run` 的平台选择与清单校验以本节“项目平台选择统一规则”为准。校验通过后，它复用项目构建主链，只对归一化后的 host 平台执行一次构建；构建成功后运行 `<项目输出根>/<host-platform>/bin/` 下的 host 可执行文件，`<path>` 和 `--release` 均透传给该构建阶段。
-- `--` 之后的参数直接透传给目标程序。
+- `--lto` 按 §2.4 向当前项目及递归本地依赖的直编层透传；`--` 之后的参数直接透传给目标程序。
 - 若当前项目是 `lib`,应给出明确诊断。
 - host 平台不可用、项目依赖缺少 host 平台制品或最终产物不能在当前 host 运行时，必须给出明确诊断，不得选择其他目标平台尝试运行。
 
@@ -331,7 +332,7 @@ feng clean [<path>]
 用法:
 
 ```text
-feng pack [<path>] [--platform=<platform>]... [--sysroot=<路径>]
+feng pack [<path>] [--lto=off|thin] [--platform=<platform>]... [--sysroot=<路径>]
 ```
 
 选项:
@@ -343,6 +344,7 @@ feng pack [<path>] [--platform=<platform>]... [--sysroot=<路径>]
 说明:
 
 - `pack` 按本节“项目平台选择统一规则”取得目标平台集合，复用项目构建流程并固定执行 release 构建；全部目标平台构建成功后才生成 `.fb`。`pack` 不接受 `--release`。
+- `--lto` 按 §2.4 向内部构建和直编层透传；打包时重新构建不会覆盖显式值。
 - `<path>` 用于读取项目 `feng.fm`、输出根、包名和版本；`--platform` 选择本次必须构建并写入 `.fb` 的平台。
 - 若项目的 `target` 不是 `lib`,报错退出。
 - `pack` 从每个 `<项目输出根>/<platform>/` 提取 `mod/`、`lib/`、`extlib/` 与 `assets/`：各平台 `mod/` 的公开语义事实和普通 `assets/` 内容必须一致,校验后各提取一套写入 `.fb/mod/` 与配置的资源目录；`lib/` 和 `extlib/` 则按目标平台分别写入 `.fb/lib/<platform>/` 与 `.fb/extlib/<platform>/`。分发包 `feng.fm.platform` 必须与实际写入的平台集合完全一致。任一请求平台构件缺失或校验失败时不得生成部分平台 `.fb`。

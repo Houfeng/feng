@@ -43,11 +43,13 @@ void feng_cli_project_print_error(FILE *stream, const FengCliProjectError *error
 
 bool feng_cli_project_remove_tree(const char *path, char **out_error_message);
 
+/* Forward project options and flattened dependencies to direct compilation. */
 int feng_cli_project_invoke_direct_compile_with_packages(const char *program,
                                                          const FengCliProjectContext *context,
                                                          const char *platform,
                                                          const char *sysroot,
                                                          bool release,
+                                                         FengCliLtoMode lto,
                                                          bool keep_intermediate,
                                                          size_t package_count,
                                                          const char *const *package_paths,
@@ -61,11 +63,13 @@ int feng_cli_project_invoke_direct_compile(const char *program,
                                            bool release,
                                            bool keep_intermediate);
 
+/* Propagate the same build mode and unresolved LTO choice to local dependencies. */
 bool feng_cli_project_resolve_build_dependencies(const char *program,
                                                  const FengCliProjectContext *context,
                                                  const char *platform,
                                                  const char *sysroot,
                                                  bool release,
+                                                 FengCliLtoMode lto,
                                                  FengCliDepsResolved *out_resolved,
                                                  FengCliProjectError *out_error);
 
@@ -97,12 +101,14 @@ bool feng_cli_project_stage_assets(const FengCliProjectContext *context,
                                    const char *platform,
                                    FengCliProjectError *out_error);
 
+/* Compile one project using its already-resolved dependency graph. */
 int feng_cli_project_compile_prepared(const char *program,
                                       const FengCliProjectContext *context,
                                       const FengCliDepsResolved *resolved,
                                       const char *platform,
                                       const char *sysroot,
                                       bool release,
+                                      FengCliLtoMode lto,
                                       bool keep_intermediate);
 
 /* Resolve dependencies, compile, and stage assets for one selected platform. */
@@ -111,6 +117,7 @@ int feng_cli_project_build_platform(const char *program,
                                     const char *platform,
                                     const char *sysroot,
                                     bool release,
+                                    FengCliLtoMode lto,
                                     bool keep_intermediate,
                                     FengCliProjectError *out_error);
 

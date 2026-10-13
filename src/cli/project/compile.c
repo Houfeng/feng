@@ -8,11 +8,13 @@
 #include "cli/deps/manager.h"
 #include "cli/project/common.h"
 
+/* Preserve project options while entering the shared direct compiler. */
 int feng_cli_project_invoke_direct_compile_with_packages(const char *program,
                                                          const FengCliProjectContext *context,
                                                          const char *platform,
                                                          const char *sysroot,
                                                          bool release,
+                                                         FengCliLtoMode lto,
                                                          bool keep_intermediate,
                                                          size_t package_count,
                                                          const char *const *package_paths,
@@ -65,6 +67,7 @@ int feng_cli_project_invoke_direct_compile_with_packages(const char *program,
     options.target = context->manifest.target;
     options.out_dir = platform_out_root;
     options.release = release;
+    options.lto = lto;
     options.keep_intermediate = keep_intermediate;
     options.artifact_name = context->manifest.name;
     options.platform = platform;
@@ -94,6 +97,7 @@ cleanup:
     return rc;
 }
 
+/* Compile without packages using the direct driver's LTO default. */
 int feng_cli_project_invoke_direct_compile(const char *program,
                                            const FengCliProjectContext *context,
                                            const char *platform,
@@ -105,6 +109,7 @@ int feng_cli_project_invoke_direct_compile(const char *program,
                                                                 platform,
                                                                 sysroot,
                                                                 release,
+                                                                FENG_CLI_LTO_UNSPECIFIED,
                                                                 keep_intermediate,
                                                                 0U,
                                                                 NULL,
@@ -112,11 +117,13 @@ int feng_cli_project_invoke_direct_compile(const char *program,
                                                                 NULL);
 }
 
+/* Carry the current mode and LTO choice through recursive local builds. */
 bool feng_cli_project_resolve_build_dependencies(const char *program,
                                                  const FengCliProjectContext *context,
                                                  const char *platform,
                                                  const char *sysroot,
                                                  bool release,
+                                                 FengCliLtoMode lto,
                                                  FengCliDepsResolved *out_resolved,
                                                  FengCliProjectError *out_error) {
     if (context == NULL || out_resolved == NULL) {
@@ -137,24 +144,28 @@ bool feng_cli_project_resolve_build_dependencies(const char *program,
         context->manifest_path,
         false,
         release,
+        lto,
         platform,
         sysroot,
         out_resolved,
         out_error);
 }
 
+/* Compile with the previously flattened package and debug-sidecar inputs. */
 int feng_cli_project_compile_prepared(const char *program,
                                       const FengCliProjectContext *context,
                                       const FengCliDepsResolved *resolved,
                                       const char *platform,
                                       const char *sysroot,
                                       bool release,
+                                      FengCliLtoMode lto,
                                       bool keep_intermediate) {
     return feng_cli_project_invoke_direct_compile_with_packages(program,
                                                                 context,
                                                                 platform,
                                                                 sysroot,
                                                                 release,
+                                                                lto,
                                                                 keep_intermediate,
                                                                 resolved->package_count,
                                                                 (const char *const *)resolved->package_paths,
@@ -162,11 +173,13 @@ int feng_cli_project_compile_prepared(const char *program,
                                                                 (const char *const *)resolved->debug_fd_paths);
 }
 
+/* Build one target and its local dependencies with the same unresolved options. */
 int feng_cli_project_build_platform(const char *program,
                                     const FengCliProjectContext *context,
                                     const char *platform,
                                     const char *sysroot,
                                     bool release,
+                                    FengCliLtoMode lto,
                                     bool keep_intermediate,
                                     FengCliProjectError *out_error) {
     FengCliDepsResolved resolved = {0};
@@ -177,6 +190,7 @@ int feng_cli_project_build_platform(const char *program,
                                                      platform,
                                                      sysroot,
                                                      release,
+                                                     lto,
                                                      &resolved,
                                                      out_error)) {
         return 1;
@@ -187,6 +201,7 @@ int feng_cli_project_build_platform(const char *program,
                                            platform,
                                            sysroot,
                                            release,
+                                           lto,
                                            keep_intermediate);
     feng_cli_deps_resolved_dispose(&resolved);
     if (rc == 0 && !feng_cli_project_stage_assets(context, platform, out_error)) {
