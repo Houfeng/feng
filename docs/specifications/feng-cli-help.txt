@@ -7,6 +7,7 @@ Project:
                   [--target=bin|lib]         Project type
   feng build      [<path>]                   Project root
                   [--release]                Release mode
+                  [--lto=off|thin]           Link-time optimization
                   [--platform=<platform>]... Target platform
                   [--sysroot=<path>]         Target sysroot
                   [--keep-ir]                Keep IR
@@ -14,10 +15,12 @@ Project:
                   [--format=text|json]       Input format
   feng run        [<path>]                   Project root
                   [--release]                Release mode
+                  [--lto=off|thin]           Link-time optimization
                   [--keep-ir]                Keep IR
                   [-- <args>...]             Program arguments
   feng clean      [<path>]                   Project root
   feng pack       [<path>]                   Project root
+                  [--lto=off|thin]           Link-time optimization
                   [--platform=<platform>]... Target platform
                   [--sysroot=<path>]         Target sysroot
 
@@ -36,6 +39,7 @@ Compilation:
                   [--out=<dir>]              Output directory
                   [--name=<artifact>]        Artifact name
                   [--release]                Release mode
+                  [--lto=off|thin]           Link-time optimization
                   [--keep-ir]                Keep IR
                   [--pkg=<fb-path>]...       Package list
                   [--lib=<lib-path>]...      Library list

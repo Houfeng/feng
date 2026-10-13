@@ -69,7 +69,7 @@ void feng_cli_print_usage(const char *program, FILE *stream) {
     feng_cli_print_usage_line(
         stream, "Release mode", "%*s[--release]", project_indent, "");
     feng_cli_print_usage_line(
-        stream, "LTO mode", "%*s[--lto=off|thin]", project_indent, "");
+        stream, "Link-time optimization", "%*s[--lto=off|thin]", project_indent, "");
     feng_cli_print_usage_line(stream,
                               "Target platform",
                               "%*s[--platform=<platform>]...",
@@ -88,7 +88,7 @@ void feng_cli_print_usage(const char *program, FILE *stream) {
     feng_cli_print_usage_line(
         stream, "Release mode", "%*s[--release]", project_indent, "");
     feng_cli_print_usage_line(
-        stream, "LTO mode", "%*s[--lto=off|thin]", project_indent, "");
+        stream, "Link-time optimization", "%*s[--lto=off|thin]", project_indent, "");
     feng_cli_print_usage_line(
         stream, "Keep IR", "%*s[--keep-ir]", project_indent, "");
     feng_cli_print_usage_line(
@@ -98,7 +98,7 @@ void feng_cli_print_usage(const char *program, FILE *stream) {
     feng_cli_print_usage_line(
         stream, "Project root", "  %s pack       [<path>]", program);
     feng_cli_print_usage_line(
-        stream, "LTO mode", "%*s[--lto=off|thin]", project_indent, "");
+        stream, "Link-time optimization", "%*s[--lto=off|thin]", project_indent, "");
     feng_cli_print_usage_line(stream,
                               "Target platform",
                               "%*s[--platform=<platform>]...",
@@ -138,7 +138,7 @@ void feng_cli_print_usage(const char *program, FILE *stream) {
     feng_cli_print_usage_line(
         stream, "Release mode", "%*s[--release]", compile_indent, "");
     feng_cli_print_usage_line(
-        stream, "LTO (release: thin, debug: off)", "%*s[--lto=off|thin]", compile_indent, "");
+        stream, "Link-time optimization", "%*s[--lto=off|thin]", compile_indent, "");
     feng_cli_print_usage_line(
         stream, "Keep IR", "%*s[--keep-ir]", compile_indent, "");
     feng_cli_print_usage_line(
