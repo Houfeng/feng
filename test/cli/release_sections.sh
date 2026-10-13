@@ -22,9 +22,9 @@ SH
 chmod +x "$work/compiler"
 
 cat > "$work/library.c" <<'C'
-int section_used_data = 7;
-int section_unused_data = 11;
-/* Keep a mutable data reference so optimization cannot replace it by a constant. */
+volatile int section_used_data = 7;
+volatile int section_unused_data = 11;
+/* Keep an actual data read so ThinLTO cannot replace it by a constant. */
 int section_used(void) { return section_used_data; }
 /* A second consumer must still be able to select this public archive entry. */
 int section_unused(void) { return section_unused_data; }

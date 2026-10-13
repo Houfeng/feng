@@ -5191,7 +5191,7 @@ static void test_project_build_help_writes_stdout_and_returns_success(void) {
     ASSERT(rc == 0);
     ASSERT(strstr(stdout_text,
                   "Usage:\n"
-                  "  feng build [<path>] [--release] [--keep-ir] "
+                  "  feng build [<path>] [--release] [--lto=off|thin] [--keep-ir] "
                   "[--platform=<platform>]... [--sysroot=<path>]\n") != NULL);
     ASSERT(stderr_text[0] == '\0');
 
@@ -5214,7 +5214,7 @@ static void test_project_pack_help_writes_stdout_and_returns_success(void) {
     ASSERT(rc == 0);
     ASSERT(strstr(stdout_text,
                   "Usage:\n"
-                  "  feng pack [<path>] [--platform=<platform>]... "
+                  "  feng pack [<path>] [--lto=off|thin] [--platform=<platform>]... "
                   "[--sysroot=<path>]\n") != NULL);
     ASSERT(stderr_text[0] == '\0');
 
