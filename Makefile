@@ -226,7 +226,7 @@ all cli runtime: | check-clang
 # successful check expands to no recipe, preserving Make's no-op reporting.
 define CHECK_CLANG_VERSION
 $(eval CLANG_CHECK_ERROR := $(shell \
-	compiler="$(1)"; required_version=23.1.3; \
+	compiler="$(1)"; required_version='>= 23.1.3 and < 24.0.0'; \
 	compiler_path=$$(command -v "$$compiler") || { \
 		echo "$$compiler $$required_version is required; command not found in PATH"; \
 		exit; \
@@ -235,7 +235,8 @@ $(eval CLANG_CHECK_ERROR := $(shell \
 		echo "cannot read $$compiler version: $$compiler_path"; \
 		exit; \
 	}; \
-	if [ "$$compiler_version" != "$$required_version" ]; then \
+	if ! printf '%s\n' "$$compiler_version" | awk -F. \
+		'/^[0-9]+\.[0-9]+\.[0-9]+$$/ && $$1 == 23 && ($$2 > 1 || ($$2 == 1 && $$3 >= 3)) { ok = 1 } END { exit !(ok && NR == 1) }'; then \
 		echo "$$compiler $$required_version is required, found $$compiler_version ($$compiler_path)"; \
 	fi))
 $(if $(CLANG_CHECK_ERROR),$(error $(CLANG_CHECK_ERROR)))
@@ -329,6 +330,7 @@ incremental-build-test: all
 release-scripts-test: all
 	./scripts/run_release_scripts.sh
 	./scripts/run_install_explicit_version.sh
+	bash test/cli/host_clang_version.sh
 
 release-finalize-macos-test:
 	./scripts/run_release_finalize_macos.sh

@@ -5,8 +5,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLATFORM=""
 PATH_OUTPUT=""
 PATH_OUTPUT_SET=false
-MACOS_HOST_CLANG_VERSION="23.1.3"
-LINUX_HOST_CLANG_VERSION="23.1.3"
 
 # Print the supported CI environment validation invocation.
 usage() {
@@ -28,6 +26,20 @@ die() {
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 ||
     die "missing required command: $1"
+}
+
+# Accept supported host patch releases without changing compiler selection.
+check_compiler_version() {
+  local compiler="$1" compiler_path version
+  compiler_path="$(command -v "${compiler}")" ||
+    die "missing required command: ${compiler}"
+  version="$("${compiler_path}" -dumpversion 2>/dev/null)" ||
+    die "cannot read ${compiler} version: ${compiler_path}"
+  printf '%s\n' "${version}" | awk -F. '
+    /^[0-9]+\.[0-9]+\.[0-9]+$/ &&
+    $1 == 23 && ($2 > 1 || ($2 == 1 && $3 >= 3)) { ok = 1 }
+    END { exit !(ok && NR == 1) }
+  ' || die "${compiler} must be >= 23.1.3 and < 24.0.0; found ${version} (${compiler_path})"
 }
 
 while [[ "$#" -gt 0 ]]; do
@@ -88,11 +100,9 @@ case "${PLATFORM}" in
       die "macOS 26.2 SDK is required"
     [[ "$(command -v clang)" -ef "${LLVM_PREFIX}/bin/clang" ]] ||
       die "clang must resolve to Homebrew llvm@23"
-    [[ "$(clang -dumpversion)" == "${MACOS_HOST_CLANG_VERSION}" ]] ||
-      die "Homebrew Clang ${MACOS_HOST_CLANG_VERSION} is required, found $(clang -dumpversion)"
     require_cmd cc
-    [[ "$(cc -dumpversion)" == "${MACOS_HOST_CLANG_VERSION}" ]] ||
-      die "cc version ${MACOS_HOST_CLANG_VERSION} is required, found $(cc -dumpversion)"
+    check_compiler_version clang
+    check_compiler_version cc
     ;;
   linux-x64-gnu|linux-arm64-gnu)
     require_cmd ar
@@ -103,10 +113,8 @@ case "${PLATFORM}" in
     source /etc/os-release
     [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "26.04" ]] ||
       die "Ubuntu 26.04 is required, found ${ID:-unknown} ${VERSION_ID:-unknown}"
-    [[ "$(clang -dumpversion)" == "${LINUX_HOST_CLANG_VERSION}" ]] ||
-      die "Clang ${LINUX_HOST_CLANG_VERSION} is required, found $(clang -dumpversion)"
-    [[ "$(cc -dumpversion)" == "${LINUX_HOST_CLANG_VERSION}" ]] ||
-      die "cc version ${LINUX_HOST_CLANG_VERSION} is required, found $(cc -dumpversion)"
+    check_compiler_version clang
+    check_compiler_version cc
     ;;
   *)
     die "unsupported CI platform: ${PLATFORM}"

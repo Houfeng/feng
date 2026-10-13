@@ -341,7 +341,8 @@ sysroot 或新增交叉 SDK 管理，使用人工已授权的 Apple Container。
    校验 LLVM 版本、完整性和 host，记录构建配置；不隐式安装或切换系统工具链。
 2. 在工程 `build/` 或 `temp/` 内构建插件，运行独立测试；不在临时系统目录执行产物。
 3. 分别用该 host 的 bundled Clang 和 sanitizer 测试使用的宿主 Clang 加载、转换并执行
-   夹具。二者均须为 23.1.3，但版本号相同不能代替 LLVM C++ ABI、导出符号和依赖检查；
+   夹具。维护入口的两套 Clang 均为 23.1.3，但版本号相同不能代替 LLVM C++ ABI、
+   导出符号和依赖检查；
    也不要求 `clang` 与 `cc` 指向同一文件。
 4. 全部验证通过后，将动态库、头文件和许可证安装到对应预构建目录。产物不得引用
    维护者本机的临时 SDK 绝对路径；在预期使用环境验证其加载依赖。
@@ -367,7 +368,7 @@ Feng 用户发行包的安装路径与组装由[工具链接入方案](./feng-ll
 
 - Apple 原生对照使用 Apple Clang、Apple ld 及其配套编译资源；不将其结果作为
   LLVM 23.1.3 插件的加载或行为验收结果。
-- LLVM 插件构建及使用方验收使用 LLVM 23.1.3 Clang、同版本 LLD 和配套编译资源；
+- LLVM 插件构建及维护入口验收使用 LLVM 23.1.3 Clang、同版本 LLD 和配套编译资源；
   显式选择并记录实际链接器，不能只检查 Clang 版本后沿用默认 Apple ld。
 - LLVM sanitizer 验证使用完整 LLVM SDK 的配套 sanitizer 资源；发行场景使用已剪裁
   的 bundled 工具链，不要求其提供 sanitizer runtime。macOS 目标 SDK 与系统库的
@@ -375,6 +376,10 @@ Feng 用户发行包的安装路径与组装由[工具链接入方案](./feng-ll
   其路径与编译器、链接器、sanitizer 资源分别记录。
 - 本文此前的 LLVM Clang＋Apple ld／ld-classic 实验仅保留为历史定位证据，不能
   代替上述配套工具链的正式验收；已有失败不因重新分组而记为通过。
+
+常规构建与 CI 的宿主编译器版本范围以
+[分发与安装方案 §6.2](./feng-release-and-install.md#62-原生构件-matrix) 为准；
+预编译插件与宿主补丁版本的兼容性由完整回归验证，不改变维护入口的 SDK 版本。
 
 ### 7.2 UBSan 专用预构建 LLD
 
