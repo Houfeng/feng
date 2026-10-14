@@ -2516,6 +2516,44 @@ static bool proxy_replace_json_span(const char *json,
     return true;
 }
 
+/* Forward a validated launch with stable default frame names, preserving explicit formats. */
+static bool proxy_forward_launch_request(int backend_stdin_fd,
+                                         const FengDapMessage *message,
+                                         int error_fd) {
+    const char *context = "failed to forward launch request to lldb-dap";
+    const char *arguments_start;
+    const char *arguments_end;
+    const char *format_start;
+    const char *format_end;
+    char *rewritten = NULL;
+    size_t insert_offset;
+    bool ok;
+
+    if (!proxy_json_find_object_member(message->payload, message->payload_length,
+                                       "arguments", &arguments_start, &arguments_end) ||
+        arguments_end <= arguments_start || *arguments_start != '{' ||
+        arguments_end[-1] != '}') {
+        proxy_report_error(error_fd, context, "launch arguments must be an object");
+        return false;
+    }
+    if (proxy_json_find_object_member(arguments_start,
+                                       (size_t)(arguments_end - arguments_start),
+                                       "customFrameFormat", &format_start, &format_end)) {
+        return proxy_write_framed_message(backend_stdin_fd, message, error_fd, context);
+    }
+    /* Validation guarantees a nonempty arguments object containing program. */
+    insert_offset = (size_t)(arguments_end - message->payload - 1);
+    ok = proxy_replace_json_span(message->payload, message->payload_length,
+                                  insert_offset, insert_offset,
+                                  ",\"customFrameFormat\":\"${function.name-without-args}\"",
+                                  &rewritten, error_fd, context);
+    if (ok) {
+        ok = proxy_write_message(backend_stdin_fd, rewritten, error_fd, context);
+    }
+    free(rewritten);
+    return ok;
+}
+
 /* Parse one unsigned integer from an already-located JSON value span. */
 static bool proxy_json_parse_u64_range(const char *value_start,
                                        const char *value_end,
@@ -7932,11 +7970,7 @@ static int proxy_run_session(FengDapBackendResolver backend_resolver,
             !proxy_consume_backend_initialize_response(&backend_reader,
                                                        error_fd,
                                                        &error_detail) ||
-            !proxy_write_all(child_stdin[1],
-                             (const unsigned char *)request.frame,
-                             request.frame_length,
-                             error_fd,
-                             "failed to forward launch request to lldb-dap")) {
+            !proxy_forward_launch_request(child_stdin[1], &request, error_fd)) {
             proxy_send_request_failure_response(output_fd,
                                                 "launch",
                                                 request_seq,

@@ -31597,6 +31597,988 @@ static void test_fs_bulk_read_faults(void) {
     puts("std.fs native faults: hints, growth, short reads, streams and descriptor cleanup passed");
 }
 
+/* Owned workspace and compiler override shared only by the new LTO cases. */
+typedef struct ThinLtoTestWorkspace {
+    char *root;
+    char *host;
+    char *log;
+    char *wrapper;
+    char *saved_cc;
+} ThinLtoTestWorkspace;
+
+/* Keep generated inputs under temp and retain the previously selected tool. */
+static ThinLtoTestWorkspace thin_lto_test_workspace(void) {
+    char pattern[] = "temp/feng_cli_thinlto_XXXXXX";
+    ThinLtoTestWorkspace work = {0};
+    ASSERT(mkdtemp(pattern) != NULL);
+    work.root = realpath(pattern, NULL);
+    ASSERT(work.root != NULL);
+    ASSERT(feng_platform_detect_host_platform(&work.host, NULL));
+    work.log = path_join(work.root, "compiler.log");
+    work.wrapper = create_logging_cc_wrapper(work.root, work.log);
+    if (getenv("FENG_CC") != NULL) work.saved_cc = dup_cstr(getenv("FENG_CC"));
+    ASSERT(setenv("FENG_CC", work.wrapper, 1) == 0);
+    write_text_file(work.log, "");
+    return work;
+}
+
+/* Restore the environment before deleting the logging compiler's directory. */
+static void thin_lto_test_dispose(ThinLtoTestWorkspace *work) {
+    char *error = NULL;
+    if (work->saved_cc != NULL) ASSERT(setenv("FENG_CC", work->saved_cc, 1) == 0);
+    else ASSERT(unsetenv("FENG_CC") == 0);
+    ASSERT(feng_cli_project_remove_tree(work->root, &error));
+    free(error);
+    free(work->saved_cc);
+    free(work->wrapper);
+    free(work->log);
+    free(work->host);
+    free(work->root);
+}
+
+/* Check every actual compile command, including recursively built libraries. */
+static void thin_lto_test_flags(ThinLtoTestWorkspace *work, int commands,
+                                 bool release, bool thin) {
+    char *text = read_text_file(work->log);
+    ASSERT(count_occurrences(text, "__CMD__") == commands);
+    ASSERT(count_logged_arguments(text, "-flto=thin") == (thin ? commands : 0));
+    ASSERT(count_logged_arguments(text, "-O2") == (release ? commands : 0));
+    ASSERT(count_logged_arguments(text, "-O0") == (release ? 0 : commands));
+    ASSERT(count_logged_arguments(text, "-g") == (release ? 0 : commands));
+    ASSERT(count_logged_arguments(text, "-ffreestanding") == 0);
+    ASSERT(count_logged_arguments(text, "-fno-builtin") == 0);
+    free(text);
+}
+
+/* Inspect an archive's real member, accepting LLVM's raw and wrapped formats. */
+static char *thin_lto_test_member(ThinLtoTestWorkspace *work, const char *archive,
+                                  const char *member, bool thin, const char *target) {
+    char *object = path_join(work->root, "member.o");
+    char *ir = path_join(work->root, "member.ll");
+    char *quoted_archive = quote_shell_argument(archive);
+    char *quoted_member = quote_shell_argument(member);
+    char *quoted_object = quote_shell_argument(object);
+    char *quoted_ir = quote_shell_argument(ir);
+    const FengCliHostToolStrategy strategy = {
+        "static archiver", "FENG_AR", "toolchain/llvm/bin/llvm-ar", "AR", "ar"
+    };
+    char *archiver = feng_cli_resolve_host_tool(NULL, &strategy, NULL);
+    char *quoted_archiver;
+    char *command;
+    char *text = NULL;
+    unsigned char magic[4];
+    FILE *file;
+
+    ASSERT(archiver != NULL);
+    quoted_archiver = quote_shell_argument(archiver);
+    command = dup_printf("%s p %s %s > %s", quoted_archiver, quoted_archive,
+                         quoted_member, quoted_object);
+    run_command_or_die(command);
+    free(command);
+    file = fopen(object, "rb");
+    ASSERT(file != NULL && fread(magic, 1U, sizeof(magic), file) == sizeof(magic));
+    ASSERT(fclose(file) == 0);
+    if (thin) {
+        ASSERT(memcmp(magic, "BC\xc0\xde", 4U) == 0 ||
+               memcmp(magic, "\xde\xc0\x17\x0b", 4U) == 0);
+        /* llvm-dis belongs to the development LLVM installation, not the bundle. */
+        command = dup_printf("llvm-dis %s -o %s", quoted_object, quoted_ir);
+        run_command_or_die(command);
+        free(command);
+        text = read_text_file(ir);
+        /* The global restriction is distinct from legitimate per-function
+         * nobuiltin attributes, for example ASan's allocator declarations. */
+        ASSERT(strstr(text, "\"no-builtins\"") == NULL);
+        if (target != NULL) {
+            char *triple = dup_printf("target triple = \"%s", feng_platform_clang_target(target));
+            ASSERT(strstr(text, triple) != NULL);
+            free(triple);
+        }
+    } else {
+        ASSERT(memcmp(magic, "\x7f" "ELF", 4U) == 0 ||
+               memcmp(magic, "\xcf\xfa\xed\xfe", 4U) == 0);
+    }
+    free(quoted_archiver);
+    free(archiver);
+    free(quoted_ir);
+    free(quoted_object);
+    free(quoted_member);
+    free(quoted_archive);
+    free(ir);
+    free(object);
+    return text;
+}
+
+/* Validate debug metadata against the binary actually produced by this build. */
+static void thin_lto_test_debug_fingerprint(const char *binary) {
+    char *fd = dup_printf("%s.fd", binary);
+    char *error = NULL;
+    FengDebugArtifact artifact = {0};
+    ASSERT(feng_debug_read_fd(fd, &artifact, &error));
+    ASSERT(error == NULL && artifact.info.frame_count > 0U);
+    ASSERT(artifact.binary_fingerprint == feng_debug_fnv1a64_file(binary, &error));
+    ASSERT(error == NULL);
+    feng_debug_artifact_dispose(&artifact);
+    free(fd);
+}
+
+/* Top-level direct mode has no package context; verify its native debug units. */
+static void thin_lto_test_native_debug(ThinLtoTestWorkspace *work,
+                                       const char *artifact, const char *function) {
+    char *input;
+    char *output = path_join(work->root, "native-debug.txt");
+    char *quoted_input;
+    char *quoted_output = quote_shell_argument(output);
+    char *command;
+    char *text;
+#if defined(__APPLE__)
+    input = path_ends_with(artifact, ".o") ? dup_cstr(artifact) : dup_printf("%s.dSYM", artifact);
+    quoted_input = quote_shell_argument(input);
+    command = dup_printf("xcrun dwarfdump --debug-info %s > %s", quoted_input, quoted_output);
+#else
+    input = dup_cstr(artifact);
+    quoted_input = quote_shell_argument(input);
+    command = dup_printf("llvm-dwarfdump --debug-info %s > %s", quoted_input, quoted_output);
+#endif
+    run_command_or_die(command);
+    text = read_text_file(output);
+    ASSERT(strstr(text, "DW_TAG_compile_unit") != NULL);
+    ASSERT(strstr(text, "DW_TAG_subprogram") != NULL);
+    ASSERT(strstr(text, function) != NULL);
+    free(text);
+    free(command);
+    free(quoted_output);
+    free(quoted_input);
+    free(input);
+    free(output);
+}
+
+/* Keep one project's source and manifest together; callers own its root path. */
+static char *thin_lto_test_project(ThinLtoTestWorkspace *work, const char *name,
+                                   const char *target, const char *source,
+                                   const char *dependencies) {
+    char *root = path_join(work->root, name);
+    char *src = path_join(root, "src");
+    char *path = path_join(src, "main.ff");
+    char *manifest = path_join(root, "feng.fm");
+    char *text = dup_printf("[package]\nname: \"%s\"\nversion: \"0.1.0\"\n"
+        "target: \"%s\"\nsrc: \"src/\"\nout: \"build/\"\n%s",
+        name, target, dependencies != NULL ? dependencies : "");
+    mkdir_p(src);
+    write_text_file(path, source);
+    write_text_file(manifest, text);
+    free(text);
+    free(manifest);
+    free(path);
+    free(src);
+    return root;
+}
+
+/* Check shared value diagnostics before any command loads a project or source. */
+static void test_thin_lto_option_diagnostics(void) {
+    static const char *invalid[] = {
+        "--lto", "--lto=", "--lto=full", "--lto=THIN", "--lto=none", "--lto=thin-extra"
+    };
+    const CliEntryFn commands[] = {
+        feng_cli_direct_main, feng_cli_project_build_main,
+        feng_cli_project_pack_main, feng_cli_project_run_main
+    };
+    for (size_t entry = 0U; entry < sizeof(commands) / sizeof(commands[0]); ++entry) {
+        for (size_t value = 0U; value < sizeof(invalid) / sizeof(invalid[0]); ++value) {
+            char *argv[] = {"temp/no_lto_input_exists", (char *)invalid[value]};
+            int rc = -1;
+            char *errors = NULL;
+            char *output = run_cli_entry_capture_stdout_and_stderr(
+                commands[entry], 2, argv, &rc, &errors);
+            ASSERT(rc != 0 && strcmp(output, "") == 0);
+            ASSERT(strstr(errors, "invalid LTO option") != NULL);
+            ASSERT(strstr(errors, invalid[value]) != NULL);
+            ASSERT(strstr(errors, "expected --lto=off or --lto=thin") != NULL);
+            free(errors);
+            free(output);
+        }
+    }
+    puts("ThinLTO options: four commands reject six invalid or missing values");
+}
+
+/* Exercise every public direct-compilation mode and inspect actual artifacts. */
+static void test_thin_lto_direct_mode_matrix(void) {
+    ThinLtoTestWorkspace work = thin_lto_test_workspace();
+    const char *values[] = {NULL, "--lto=off", "--lto=thin"};
+    char *source = path_join(work.root, "main.ff");
+    for (size_t target = 0U; target < 2U; ++target) {
+        write_text_file(source, target == 0U
+            ? "module test.cli.ltomode;\n@cdecl(\"libc\")\n"
+              "extern func puts(text: string*): i32;\n"
+              "func main(args: string[]) { puts(&\"lto-direct-ok\"); }\n"
+            : "open module test.cli.ltomode;\n"
+              "open func answer(): int { return 42; }\n");
+        for (size_t release = 0U; release < 2U; ++release) {
+            for (size_t mode = 0U; mode < 3U; ++mode) {
+                bool thin = mode == 2U || (mode == 0U && release != 0U);
+                char *out = dup_printf("%s/direct-%zu-%zu-%zu", work.root, target, release, mode);
+                char *out_option = make_out_option(out);
+                char *argv[8] = {source, target == 0U ? "--target=bin" : "--target=lib",
+                                "--name=probe", out_option, "--keep-ir"};
+                int argc = 5;
+                FengCliDirectOptions options = {0};
+                if (release != 0U) argv[argc++] = "--release";
+                if (values[mode] != NULL) argv[argc++] = (char *)values[mode];
+                ASSERT(feng_cli_direct_options_parse("feng", argc, argv, &options) == FENG_CLI_PARSE_OK);
+                ASSERT(options.lto == (mode == 0U ? FENG_CLI_LTO_UNSPECIFIED :
+                                       mode == 1U ? FENG_CLI_LTO_OFF : FENG_CLI_LTO_THIN));
+                ASSERT(options.release == (release != 0U));
+                feng_cli_direct_options_dispose(&options);
+                write_text_file(work.log, "");
+                ASSERT(run_direct_for_host(argc, argv) == 0);
+                thin_lto_test_flags(&work, 1, release != 0U, thin);
+                if (target == 0U) {
+                    char *binary = path_join(out, "bin/probe");
+                    char *text = run_binary_capture_stdout_or_die(binary);
+                    ASSERT(strcmp(text, "lto-direct-ok\n") == 0);
+                    if (release == 0U) thin_lto_test_native_debug(&work, binary, "main");
+                    else {
+                        char *fd = dup_printf("%s.fd", binary);
+                        ASSERT(!path_exists(fd));
+                        free(fd);
+                    }
+                    free(text);
+                    free(binary);
+                } else {
+                    char *library = host_static_library_output_path(out, "probe");
+                    char *ir = thin_lto_test_member(&work, library, "feng.o", thin, work.host);
+                    if (release == 0U) {
+                        if (thin) ASSERT(strstr(ir, "!DICompileUnit") != NULL);
+                        else {
+                            char *object = path_join(work.root, "member.o");
+                            thin_lto_test_native_debug(&work, object, "answer");
+                            free(object);
+                        }
+                    }
+                    free(ir);
+                    free(library);
+                }
+                free(out_option);
+                free(out);
+            }
+        }
+    }
+    free(source);
+    thin_lto_test_dispose(&work);
+    puts("ThinLTO direct: bin/lib, Debug/Release and three option states verified");
+}
+
+/* Extract the library shipped in a bundle, rather than inspect a loose copy. */
+static void thin_lto_test_bundle_member(ThinLtoTestWorkspace *work,
+                                        const char *bundle, const char *name, bool thin) {
+    FengZipReader reader = {0};
+    char *error = NULL;
+    char *entry = host_bundle_static_library_entry_path(work->host, name);
+    char *archive = path_join(work->root, "packed.a");
+    ASSERT(feng_zip_reader_open(bundle, &reader, &error));
+    ASSERT(feng_zip_reader_extract(&reader, entry, archive, &error));
+    ASSERT(error == NULL);
+    free(thin_lto_test_member(work, archive, "feng.o", thin, work->host));
+    feng_zip_reader_dispose(&reader);
+    free(archive);
+    free(entry);
+}
+
+/* Rebuild the same dependency graph for every mode, including pack's Release. */
+static void test_thin_lto_project_dependency_matrix(void) {
+    ThinLtoTestWorkspace work = thin_lto_test_workspace();
+    const char *values[] = {NULL, "--lto=off", "--lto=thin"};
+    const CliEntryFn entries[] = {feng_cli_project_build_main, feng_cli_project_run_main};
+    char *leaf = thin_lto_test_project(&work, "lto_leaf", "lib",
+        "open module test.cli.ltoleaf;\nopen func leafValue(): int { return 40; }\n", NULL);
+    char *middle = thin_lto_test_project(&work, "lto_middle", "lib",
+        "open module test.cli.ltomiddle;\nimport test.cli.ltoleaf;\n"
+        "open func middleValue(): int { return leafValue() + 1; }\n",
+        "[dependencies]\nlto_leaf: \"../lto_leaf\"\n");
+    char *app = thin_lto_test_project(&work, "lto_app", "bin",
+        "module test.cli.ltoapp;\nimport test.cli.ltomiddle;\n"
+        "@cdecl(\"libc\")\nextern func puts(text: string*): i32;\n"
+        "@cdecl(\"libc\")\nextern func exit(code: i32): void;\n"
+        "func main(args: string[]) {\n"
+        "  if middleValue() != 41 { exit(1); }\n"
+        "  puts(&\"lto-project-ok\");\n}\n",
+        "[dependencies]\nlto_middle: \"../lto_middle\"\n");
+    char *top = thin_lto_test_project(&work, "lto_top", "lib",
+        "open module test.cli.ltotop;\nimport test.cli.ltomiddle;\n"
+        "open func topValue(): int { return middleValue() + 1; }\n",
+        "[dependencies]\nlto_middle: \"../lto_middle\"\n");
+    char *binary = project_host_build_path(app, "bin/lto_app");
+    char *leaf_library = project_host_build_path(leaf, "lib/liblto_leaf.a");
+    char *middle_library = project_host_build_path(middle, "lib/liblto_middle.a");
+    char *bundle = path_join(top, "build/pkg/lto_top-0.1.0.fb");
+
+    for (size_t entry = 0U; entry < 2U; ++entry) {
+        for (size_t release = 0U; release < 2U; ++release) {
+            for (size_t mode = 0U; mode < 3U; ++mode) {
+                bool thin = mode == 2U || (mode == 0U && release != 0U);
+                char *argv[3] = {app};
+                int argc = 1, rc = -1;
+                char *errors = NULL;
+                char *output;
+                if (release != 0U) argv[argc++] = "--release";
+                if (values[mode] != NULL) argv[argc++] = (char *)values[mode];
+                write_text_file(work.log, "");
+                output = run_cli_entry_capture_stdout_and_stderr(entries[entry], argc, argv, &rc, &errors);
+                if (rc != 0) fprintf(stderr, "%s\n%s", output, errors);
+                ASSERT(rc == 0);
+                if (entry == 1U) ASSERT(strstr(output, "lto-project-ok\n") != NULL);
+                free(output);
+                free(errors);
+                thin_lto_test_flags(&work, 3, release != 0U, thin);
+                free(thin_lto_test_member(&work, leaf_library, "feng.o", thin, work.host));
+                free(thin_lto_test_member(&work, middle_library, "feng.o", thin, work.host));
+                output = run_binary_capture_stdout_or_die(binary);
+                ASSERT(strcmp(output, "lto-project-ok\n") == 0);
+                free(output);
+                if (release == 0U) thin_lto_test_debug_fingerprint(binary);
+            }
+        }
+    }
+    for (size_t mode = 0U; mode < 3U; ++mode) {
+        char *argv[2] = {top};
+        int argc = 1;
+        if (values[mode] != NULL) argv[argc++] = (char *)values[mode];
+        write_text_file(work.log, "");
+        ASSERT(feng_cli_project_pack_main("feng", argc, argv) == 0);
+        thin_lto_test_flags(&work, 3, true, mode != 1U);
+        free(thin_lto_test_member(&work, leaf_library, "feng.o", mode != 1U, work.host));
+        free(thin_lto_test_member(&work, middle_library, "feng.o", mode != 1U, work.host));
+        thin_lto_test_bundle_member(&work, bundle, "lto_top", mode != 1U);
+    }
+    free(bundle);
+    free(middle_library);
+    free(leaf_library);
+    free(binary);
+    free(top);
+    free(app);
+    free(middle);
+    free(leaf);
+    thin_lto_test_dispose(&work);
+    puts("ThinLTO projects: build/run/pack, two dependency levels and mode switches verified");
+}
+
+/* Link relocated source-hidden packages with every native/bitcode combination. */
+static void test_thin_lto_source_hidden_mixed_packages(void) {
+    ThinLtoTestWorkspace work = thin_lto_test_workspace();
+    char *source = path_join(work.root, "consumer.ff");
+    char *output = path_join(work.root, "consumer-build");
+    char *out_option = make_out_option(output);
+    char *binary = path_join(output, "bin/consumer");
+    char *packages = path_join(work.root, "relocated-packages");
+    char *a_bundle = path_join(packages, "alpha.fb");
+    char *b_bundle = path_join(packages, "beta.fb");
+    char *a_option = make_pkg_option(a_bundle);
+    char *b_option = make_pkg_option(b_bundle);
+    mkdir_p(packages);
+    write_text_file(source,
+        "module test.cli.ltomixed;\nimport test.cli.ltoalpha;\nimport test.cli.ltobeta;\n"
+        "@cdecl(\"libc\")\nextern func puts(text: string*): i32;\n"
+        "@cdecl(\"libc\")\nextern func exit(code: i32): void;\n"
+        "func main(args: string[]) {\n"
+        "  let first = reader(); let second = reader();\n"
+        "  if alpha() != 42 || beta() != 13 || identity<int>(5) != 5\n"
+        "     || first != second || first(40) != 42 { exit(1); }\n"
+        "  puts(&\"lto-mixed-ok\");\n}\n");
+    for (size_t combination = 0U; combination < 4U; ++combination) {
+        char *alpha = thin_lto_test_project(&work, "lto_alpha", "lib",
+            "open module test.cli.ltoalpha;\n"
+            "open spec LtoReader(value: int): int;\n"
+            "func privateValue(value: int): int { return value + 2; }\n"
+            "open func alpha(): int { return privateValue(40); }\n"
+            "open func reader(): LtoReader { return privateValue; }\n"
+            "open func identity<T>(value: T): T { return value; }\n", NULL);
+        char *beta = thin_lto_test_project(&work, "lto_beta", "lib",
+            "open module test.cli.ltobeta;\n"
+            "open func beta(): int { return 13; }\n", NULL);
+        char *a_source_bundle = path_join(alpha, "build/pkg/lto_alpha-0.1.0.fb");
+        char *b_source_bundle = path_join(beta, "build/pkg/lto_beta-0.1.0.fb");
+        char *a_args[] = {alpha, (combination & 1U) != 0U ? "--lto=thin" : "--lto=off"};
+        char *b_args[] = {beta, (combination & 2U) != 0U ? "--lto=thin" : "--lto=off"};
+        char *error = NULL;
+        ASSERT(feng_cli_project_pack_main("feng", 2, a_args) == 0);
+        ASSERT(feng_cli_project_pack_main("feng", 2, b_args) == 0);
+        thin_lto_test_bundle_member(&work, a_source_bundle, "lto_alpha", (combination & 1U) != 0U);
+        thin_lto_test_bundle_member(&work, b_source_bundle, "lto_beta", (combination & 2U) != 0U);
+        copy_file_or_die(a_source_bundle, a_bundle);
+        copy_file_or_die(b_source_bundle, b_bundle);
+        ASSERT(feng_cli_project_remove_tree(alpha, &error));
+        ASSERT(feng_cli_project_remove_tree(beta, &error));
+        ASSERT(error == NULL);
+        for (size_t thin = 0U; thin < 2U; ++thin) {
+            char *argv[] = {source, "--target=bin", "--release", "--name=consumer",
+                out_option, a_option, b_option, thin != 0U ? "--lto=thin" : "--lto=off"};
+            char *text;
+            write_text_file(work.log, "");
+            ASSERT(run_direct_for_host(8, argv) == 0);
+            thin_lto_test_flags(&work, 1, true, thin != 0U);
+            text = run_binary_capture_stdout_or_die(binary);
+            ASSERT(strcmp(text, "lto-mixed-ok\n") == 0);
+            free(text);
+        }
+        free(b_source_bundle);
+        free(a_source_bundle);
+        free(beta);
+        free(alpha);
+    }
+    free(b_option);
+    free(a_option);
+    free(b_bundle);
+    free(a_bundle);
+    free(packages);
+    free(binary);
+    free(out_option);
+    free(output);
+    free(source);
+    thin_lto_test_dispose(&work);
+    puts("ThinLTO mixed packages: eight links preserve results, callable identity and private dependencies");
+}
+
+/* Reuse the recorded compiler arguments to collect the actual include closure. */
+static char *thin_lto_test_dependencies(ThinLtoTestWorkspace *work) {
+    char *log = read_text_file(work->log);
+    char *copy = dup_cstr(log);
+    char *command = quote_shell_argument(work->wrapper);
+    char *state = NULL;
+    char *output = path_join(work->root, "includes.i");
+    char *quoted_output = quote_shell_argument(output);
+    char *line = strtok_r(copy, "\n", &state);
+    char *text;
+    ASSERT(count_occurrences(log, "__CMD__") == 1);
+    ASSERT(line != NULL && strcmp(line, "__CMD__") == 0);
+    while ((line = strtok_r(NULL, "\n", &state)) != NULL) {
+        /* Dependency collection replaces compilation, avoiding an unused action. */
+        if (strcmp(line, "-c") == 0) continue;
+        char *quoted = quote_shell_argument(line);
+        char *next = dup_printf("%s %s", command, quoted);
+        free(quoted);
+        free(command);
+        command = next;
+    }
+    /* Preprocessor line markers identify real included files. Dependency
+     * reports and -H also contain driver metadata unrelated to C headers. */
+    char *complete = dup_printf("%s -E -o %s", command, quoted_output);
+    run_command_or_die(complete);
+    text = read_text_file(output);
+    free(complete);
+    free(quoted_output);
+    free(output);
+    free(command);
+    free(copy);
+    free(log);
+    return text;
+}
+
+/* Preserve hosted builtins while checking SDK-free and explicit sysroot paths. */
+static void test_thin_lto_sdk_free_target_matrix(void) {
+    static const char *targets[] = {
+        "macos-arm64", "linux-x64-gnu", "linux-x64-musl", "linux-arm64-gnu", "linux-arm64-musl"
+    };
+    ThinLtoTestWorkspace work = thin_lto_test_workspace();
+    char *source = path_join(work.root, "feng.c");
+    char *library = path_join(work.root, "libsdk.a");
+    for (size_t target = 0U; target < 5U; ++target) {
+        for (size_t thin = 0U; thin < 2U; ++thin) {
+            FengCliDriverOptions options = {
+                .program_path = "build/bin/feng", .platform = targets[target],
+                .target = FENG_COMPILE_TARGET_LIB, .c_path = source, .out_path = library,
+                .release = true, .lto = thin != 0U ? FENG_CLI_LTO_THIN : FENG_CLI_LTO_OFF,
+                .keep_intermediate = true
+            };
+            char *log;
+            char *dependencies;
+            write_text_file(source,
+                "#include \"feng_generated.h\"\n#include \"feng_runtime.h\"\n"
+                "#if !__STDC_HOSTED__\n#error hosted compilation required\n#endif\n"
+                "size_t lto_sdk_size(void) { return sizeof(uintptr_t); }\n");
+            write_text_file(work.log, "");
+            ASSERT(feng_cli_compile_driver_invoke(&options) == 0);
+            thin_lto_test_flags(&work, 1, true, thin != 0U);
+            free(thin_lto_test_member(&work, library, "feng.o", thin != 0U, targets[target]));
+            log = read_text_file(work.log);
+            ASSERT(count_logged_arguments(log, "-fexceptions") == 1);
+            ASSERT(count_logged_arguments(log, "-DFENG_COMPILE_SDK_FREE") == (target == 0U ? 1 : 0));
+            ASSERT(count_logged_arguments(log, "-nostdlibinc") == (target == 0U ? 1 : 0));
+            ASSERT(count_logged_arguments(log, "-isysroot") == 0);
+            free(log);
+            dependencies = thin_lto_test_dependencies(&work);
+            ASSERT(strstr(dependencies, "feng_generated.h") != NULL);
+            ASSERT(strstr(dependencies, "feng_runtime.h") != NULL);
+            if (target == 0U) {
+                ASSERT(strstr(dependencies, "/SDKs/") == NULL);
+                ASSERT(strstr(dependencies, "/usr/include/") == NULL);
+            }
+            free(dependencies);
+        }
+    }
+    /* A target SDK must be selected explicitly; its own header proves it was used. */
+    char *sdk = path_join(work.root, "macos-sdk");
+    char *include = path_join(sdk, "usr/include");
+    char *header = path_join(include, "lto_system.h");
+    mkdir_p(include);
+    write_text_file(header, "/* Explicit target SDK sentinel. */\n#define LTO_SYSROOT_VALUE 42\n");
+    for (size_t thin = 0U; thin < 2U; ++thin) {
+        FengCliDriverOptions options = {
+            .program_path = "build/bin/feng", .platform = "macos-arm64", .sysroot = sdk,
+            .target = FENG_COMPILE_TARGET_LIB, .c_path = source, .out_path = library,
+            .release = true, .lto = thin != 0U ? FENG_CLI_LTO_THIN : FENG_CLI_LTO_OFF,
+            .keep_intermediate = true
+        };
+        char *log;
+        write_text_file(source,
+            "#include <lto_system.h>\nint lto_sdk_value(void) { return LTO_SYSROOT_VALUE; }\n");
+        write_text_file(work.log, "");
+        ASSERT(feng_cli_compile_driver_invoke(&options) == 0);
+        thin_lto_test_flags(&work, 1, true, thin != 0U);
+        free(thin_lto_test_member(&work, library, "feng.o", thin != 0U, "macos-arm64"));
+        log = read_text_file(work.log);
+        ASSERT(count_logged_arguments(log, "-isysroot") == 1);
+        ASSERT(count_logged_arguments(log, sdk) == 1);
+        ASSERT(count_logged_arguments(log, "-DFENG_COMPILE_SDK_FREE") == 0);
+        ASSERT(count_logged_arguments(log, "-nostdlibinc") == 0);
+        free(log);
+        log = thin_lto_test_dependencies(&work);
+        ASSERT(strstr(log, header) != NULL);
+        free(log);
+    }
+    free(header);
+    free(include);
+    free(sdk);
+    free(library);
+    free(source);
+    thin_lto_test_dispose(&work);
+    puts("ThinLTO SDK-free: five targets, include closure, builtins and explicit sysroot verified");
+}
+
+/* Find the attribute group attached to a definition, not a call-site attribute. */
+static const char *thin_lto_test_function_attributes(const char *ir, const char *name) {
+    char *needle = dup_printf("@%s(", name);
+    const char *position = ir;
+    while ((position = strstr(position, needle)) != NULL) {
+        const char *line = position;
+        while (line > ir && line[-1] != '\n') --line;
+        if (strncmp(line, "define ", 7U) == 0) {
+            const char *end = strchr(position, '\n');
+            const char *group = strchr(position, '#');
+            char *number_end;
+            char *key;
+            const char *attributes;
+            ASSERT(group != NULL && group < end);
+            long number = strtol(group + 1, &number_end, 10);
+            ASSERT(number_end > group + 1);
+            key = dup_printf("attributes #%ld = {", number);
+            attributes = strstr(ir, key);
+            free(key);
+            free(needle);
+            ASSERT(attributes != NULL);
+            return attributes;
+        }
+        position += strlen(needle);
+    }
+    free(needle);
+    ASSERT(false);
+    return NULL;
+}
+
+/* Verify the shipped runtime archive, including the exception attribute regression. */
+static void test_thin_lto_runtime_archive(void) {
+    ThinLtoTestWorkspace work = thin_lto_test_workspace();
+    char *archive = dup_printf("build/lib/%s/libfeng_runtime.a", work.host);
+    char *listing = path_join(work.root, "runtime-members.txt");
+    char *quoted_archive = quote_shell_argument(archive);
+    char *quoted_listing = quote_shell_argument(listing);
+    char *command = dup_printf("build/toolchain/llvm/bin/llvm-ar t %s > %s", quoted_archive, quoted_listing);
+    char *members;
+    char *state = NULL;
+    size_t feng_members = 0U, native_members = 0U;
+    run_command_or_die(command);
+    members = read_text_file(listing);
+    for (char *member = strtok_r(members, "\n", &state); member != NULL;
+         member = strtok_r(NULL, "\n", &state)) {
+        bool thin = strncmp(member, "feng_", 5U) == 0;
+        char *ir = thin_lto_test_member(&work, archive, member, thin, work.host);
+        if (thin) ++feng_members;
+        else ++native_members;
+        if (strcmp(member, "feng_exception.o") == 0) {
+            const char *functions[] = {"feng_throw", "feng_rethrow"};
+            for (size_t index = 0U; index < 2U; ++index) {
+                const char *attributes = thin_lto_test_function_attributes(ir, functions[index]);
+                const char *end = strchr(attributes, '\n');
+                const char *nounwind = strstr(attributes, "nounwind");
+                const char *noreturn = strstr(attributes, "noreturn");
+                ASSERT(end != NULL && (nounwind == NULL || nounwind >= end));
+                ASSERT(noreturn != NULL && noreturn < end);
+            }
+        }
+        free(ir);
+    }
+    ASSERT(feng_members > 0U && native_members > 0U);
+    free(members);
+    free(command);
+    free(quoted_listing);
+    free(quoted_archive);
+    free(listing);
+    free(archive);
+    thin_lto_test_dispose(&work);
+    puts("ThinLTO runtime: real bitcode, native unwind members and propagating throw attributes verified");
+}
+
+/* Static musl binaries can also run on the matching GNU Linux architecture. */
+static bool thin_lto_test_can_run(const char *host, const char *target) {
+    const char *host_triple = feng_platform_clang_target(host);
+    const char *target_triple = feng_platform_clang_target(target);
+    size_t architecture = strcspn(host_triple, "-");
+    return strcmp(host, target) == 0 ||
+        (feng_platform_is_linux(host) && feng_platform_is_linux(target) &&
+         architecture == strcspn(target_triple, "-") &&
+         strncmp(host_triple, target_triple, architecture) == 0);
+}
+
+/* Link GNU/musl programs with current native and ThinLTO code, then run locally. */
+static void test_thin_lto_linux_abi_matrix(void) {
+    static const char *targets[] = {
+        "linux-x64-gnu", "linux-x64-musl", "linux-arm64-gnu", "linux-arm64-musl"
+    };
+    ThinLtoTestWorkspace work = thin_lto_test_workspace();
+    char *source = path_join(work.root, "abi.ff");
+    const char *sanitizers = getenv("FENG_CC_FLAGS");
+    bool instrumented = sanitizers != NULL && strstr(sanitizers, "-fsanitize=") != NULL;
+    size_t links = 0U, executions = 0U;
+    write_text_file(source,
+        "module test.cli.ltoabi;\n"
+        "@cdecl(\"libc\")\nextern func puts(text: string*): i32;\n"
+        "@cdecl(\"libc\")\nextern func exit(code: i32): void;\n"
+        "var drops: int = 0;\n"
+        "type AbiBox {\n  let value: int;\n  func ~AbiBox() { drops += 1; }\n}\n"
+        "func boxedValue(): int {\n  let numbers = [2, 3, 4];\n"
+        "  let box = AbiBox { value: numbers[0] + numbers[1] + numbers[2] };\n"
+        "  return box.value;\n}\n"
+        "func raise(): void { throw \"lto-abi\"; }\n"
+        "func main(args: string[]) {\n  var caught = false;\n"
+        "  if boxedValue() != 9 || drops != 1 { exit(1); }\n"
+        "  try raise() catch error: string { caught = error == \"lto-abi\"; }\n"
+        "  if !caught { exit(2); }\n  puts(&\"lto-abi-ok\");\n}\n");
+    for (size_t target = 0U; target < 4U; ++target) {
+        /* Development builds provide GNU/musl runtimes for the host architecture.
+         * Each architecture runs this scenario in its own full-regression job. */
+        if (!thin_lto_test_can_run(work.host, targets[target])) continue;
+        /* Cross-target sanitizer runtimes are not distributed. Host coverage
+         * stays instrumented; normal-phase cross links cover the other targets. */
+        if (instrumented && strcmp(work.host, targets[target]) != 0) continue;
+        for (size_t thin = 0U; thin < 2U; ++thin) {
+            char *output = dup_printf("%s/%s-%zu", work.root, targets[target], thin);
+            char *out_option = make_out_option(output);
+            char *platform_option = dup_printf("--platform=%s", targets[target]);
+            char *binary = path_join(output, "bin/abi");
+            char *argv[] = {source, "--target=bin", "--release", "--name=abi",
+                out_option, platform_option, thin != 0U ? "--lto=thin" : "--lto=off"};
+            ASSERT(feng_cli_direct_main("feng", 7, argv) == 0);
+            ++links;
+            if (thin_lto_test_can_run(work.host, targets[target])) {
+                char *text = run_binary_capture_stdout_or_die(binary);
+                ASSERT(strcmp(text, "lto-abi-ok\n") == 0);
+                free(text);
+                ++executions;
+            }
+            free(binary);
+            free(platform_option);
+            free(out_option);
+            free(output);
+        }
+    }
+    if (feng_platform_is_linux(work.host)) ASSERT(executions > 0U);
+    if (feng_platform_is_linux(work.host))
+        printf("ThinLTO Linux ABI: %zu GNU/musl links and %zu local array, ARC and exception executions\n", links, executions);
+    else puts("ThinLTO Linux ABI: native executions are covered by the Linux regression jobs");
+    free(source);
+    thin_lto_test_dispose(&work);
+}
+
+/* Check the user caller at a dependency stop and its absence after unwinding. */
+static void thin_lto_test_stack(DapTestSession *session, long thread,
+                                 const char *app_source, bool unwound) {
+    char *arguments = dup_printf("{\"threadId\":%ld}", thread);
+    char *response = dap_test_request(session, "stackTrace", arguments);
+    DapTestJson frames = dap_test_json_get(dap_test_body(response), "stackFrames");
+    size_t mains = 0U;
+    for (size_t index = 0U;; ++index) {
+        DapTestJson frame = dap_test_json_at(frames, index);
+        if (frame.begin == NULL) break;
+        if (dap_test_json_string_is(dap_test_json_get(frame, "name"), "main")) {
+            ASSERT(dap_test_json_string_is(dap_test_json_get(dap_test_json_get(frame, "source"), "path"), app_source));
+            ++mains;
+        }
+        if (unwound) ASSERT(!dap_test_json_string_is(dap_test_json_get(frame, "name"), "fail"));
+    }
+    ASSERT(mains == 1U);
+    free(response);
+    free(arguments);
+}
+
+/* Default-native and explicit-ThinLTO Debug share the complete real DAP scenario. */
+static void test_thin_lto_dap_dependencies(void) {
+    static const char *dep_source_text =
+        "open module test.cli.ltodebugdep;\n"
+        "open func increment(value: int): int { // breakpoint: dep_entry\n"
+        "  let i = value + 1;\n"
+        "  return i; // breakpoint: dep_return\n}\n"
+        "open func fail(): void {\n"
+        "  let tag = \"thin-lto-debug\";\n"
+        "  throw tag; // breakpoint: dep_throw\n}\n";
+    static const char *app_source_text =
+        "module test.cli.ltodebugapp;\nimport test.cli.ltodebugdep;\nimport test.cli.ltopublished;\n"
+        "@cdecl(\"libc\")\nextern func puts(text: string*): i32;\n"
+        "@cdecl(\"libc\")\nextern func exit(code: i32): void;\n"
+        "func main(args: string[]) {\n"
+        "  var i = 40;\n"
+        "  let result = increment(i); // breakpoint: app_call\n"
+        "  i = result; // breakpoint: app_after\n"
+        "  let saved = published(i); // breakpoint: app_precompiled\n"
+        "  if saved != 141 { exit(1); } // breakpoint: app_ready\n"
+        "  try fail() catch error: string {\n"
+        "    if error != \"thin-lto-debug\" { exit(2); }\n"
+        "    i += 1; // breakpoint: app_catch\n"
+        "  }\n"
+        "  if i != 42 { exit(3); }\n"
+        "  puts(&\"lto-dap-ok\");\n}\n";
+    ThinLtoTestWorkspace work = thin_lto_test_workspace();
+    char *published = thin_lto_test_project(&work, "lto_published", "lib",
+        "open module test.cli.ltopublished;\n"
+        "open func published(value: int): int { return value + 100; }\n", NULL);
+    char *published_bundle = path_join(published, "build/pkg/lto_published-0.1.0.fb");
+    char *packages = path_join(work.root, "packages");
+    char *bundle = path_join(packages, "published.fb");
+    char *dep = thin_lto_test_project(&work, "lto_dap_dep", "lib", dep_source_text, NULL);
+    char *app = thin_lto_test_project(&work, "lto_dap_app", "bin", app_source_text,
+        "[dependencies]\nlto_dap_dep: \"../lto_dap_dep\"\n"
+        "lto_published: \"../packages/published.fb\"\n");
+    char *source = path_join(app, "src/main.ff");
+    char *dep_source = path_join(dep, "src/main.ff");
+    char *binary = project_host_build_path(app, "bin/lto_dap_app");
+    char *repo = getcwd(NULL, 0);
+    char *backend;
+    char *escaped_source = json_escape_text(source);
+    char *escaped_dep_source = json_escape_text(dep_source);
+    char *error = NULL;
+    char *pack_args[] = {published, "--lto=thin"};
+    ASSERT(repo != NULL);
+    backend = path_join(repo, "build/toolchain/llvm/bin/lldb-dap");
+    ASSERT(feng_cli_path_is_executable(backend));
+    ASSERT(feng_cli_project_pack_main("feng", 2, pack_args) == 0);
+    thin_lto_test_bundle_member(&work, published_bundle, "lto_published", true);
+    mkdir_p(packages);
+    copy_file_or_die(published_bundle, bundle);
+    ASSERT(feng_cli_project_remove_tree(published, &error));
+    ASSERT(error == NULL);
+
+    for (size_t thin = 0U; thin < 2U; ++thin) {
+        char *argv[] = {app, "--lto=thin"};
+        char *log = dup_printf("%s/dap-%zu.log", work.root, thin);
+        char *arguments;
+        char *response;
+        DapTestSession session;
+        DapTestStepLocation location;
+        int launch;
+        unsigned int call_line = dap_test_breakpoint_line(app_source_text, "app_call");
+        unsigned int return_line = dap_test_breakpoint_line(dep_source_text, "dep_return");
+        write_text_file(work.log, "");
+        ASSERT(feng_cli_project_build_main("feng", thin != 0U ? 2 : 1, argv) == 0);
+        thin_lto_test_flags(&work, 2, false, thin != 0U);
+        thin_lto_test_debug_fingerprint(binary);
+        dap_test_start(&session, work.root, backend, log);
+        free(dap_test_request(&session, "initialize",
+            "{\"adapterID\":\"feng\",\"linesStartAt1\":true,\"columnsStartAt1\":true}"));
+        launch = dap_test_launch_native(&session, binary, work.root, 0);
+        free(dap_test_wait(&session, 0, "initialized", NULL));
+        arguments = dup_printf("{\"source\":{\"path\":\"%s\"},\"breakpoints\":[{\"line\":%u},{\"line\":%u}]}",
+            escaped_source, call_line, dap_test_breakpoint_line(app_source_text, "app_catch"));
+        response = dap_test_request(&session, "setBreakpoints", arguments);
+        for (size_t index = 0U; index < 2U; ++index) {
+            DapTestJson breakpoint = dap_test_json_at(dap_test_json_get(dap_test_body(response), "breakpoints"), index);
+            dap_test_json_require_true(dap_test_json_get(breakpoint, "verified"));
+        }
+        free(response);
+        free(arguments);
+        arguments = dup_printf("{\"source\":{\"path\":\"%s\"},\"breakpoints\":[{\"line\":%u}]}",
+            escaped_dep_source, dap_test_breakpoint_line(dep_source_text, "dep_throw"));
+        response = dap_test_request(&session, "setBreakpoints", arguments);
+        dap_test_json_require_true(dap_test_json_get(dap_test_json_at(
+            dap_test_json_get(dap_test_body(response), "breakpoints"), 0U), "verified"));
+        free(response);
+        free(arguments);
+        free(dap_test_request(&session, "configurationDone", "{}"));
+        free(dap_test_response(&session, launch));
+
+        location = dap_test_step_location(&session, "breakpoint", source, "main");
+        ASSERT(location.line == call_line);
+        dap_test_expect_counter(&session, location.frame_id, 40U);
+        arguments = dup_printf("{\"threadId\":%ld}", location.thread_id);
+        free(dap_test_request(&session, "stepIn", arguments));
+        location = dap_test_step_location(&session, "step", dep_source, "increment");
+        for (size_t step = 0U; location.line != return_line; ++step) {
+            ASSERT(step < 4U);
+            ASSERT(location.line >= dap_test_breakpoint_line(dep_source_text, "dep_entry") &&
+                   location.line < return_line);
+            free(dap_test_request(&session, "next", arguments));
+            location = dap_test_step_location(&session, "step", dep_source, "increment");
+        }
+        dap_test_expect_counter(&session, location.frame_id, 41U);
+        thin_lto_test_stack(&session, location.thread_id, source, false);
+        free(dap_test_request(&session, "stepOut", arguments));
+        location = dap_test_step_location(&session, "step", source, "main");
+        if (location.line == call_line) {
+            free(dap_test_request(&session, "next", arguments));
+            location = dap_test_step_location(&session, "step", source, "main");
+        }
+        ASSERT(location.line == dap_test_breakpoint_line(app_source_text, "app_after"));
+        DapTestExpectedValue values[] = {{"i", "40", "int64_t", true}, {"result", "41", "int64_t", true}};
+        dap_test_expect_values(&session, location.frame_id, values, 2U);
+        free(dap_test_request(&session, "next", arguments));
+        location = dap_test_step_location(&session, "step", source, "main");
+        ASSERT(location.line == dap_test_breakpoint_line(app_source_text, "app_precompiled"));
+        dap_test_expect_counter(&session, location.frame_id, 41U);
+        free(dap_test_request(&session, "next", arguments));
+        location = dap_test_step_location(&session, "step", source, "main");
+        ASSERT(location.line == dap_test_breakpoint_line(app_source_text, "app_ready"));
+        DapTestExpectedValue saved = {"saved", "141", "int64_t", true};
+        dap_test_expect_values(&session, location.frame_id, &saved, 1U);
+        free(dap_test_request(&session, "continue", arguments));
+        location = dap_test_step_location(&session, "breakpoint", dep_source, "fail");
+        ASSERT(location.line == dap_test_breakpoint_line(dep_source_text, "dep_throw"));
+        thin_lto_test_stack(&session, location.thread_id, source, false);
+        free(dap_test_request(&session, "continue", arguments));
+        location = dap_test_step_location(&session, "breakpoint", source, "main");
+        ASSERT(location.line == dap_test_breakpoint_line(app_source_text, "app_catch"));
+        dap_test_expect_counter(&session, location.frame_id, 41U);
+        thin_lto_test_stack(&session, location.thread_id, source, true);
+        free(dap_test_request(&session, "continue", arguments));
+        free(arguments);
+        response = dap_test_wait(&session, 0, "terminated", "stopped");
+        {
+            const char *cursor = response;
+            ASSERT(dap_test_json_string_is(dap_test_json_get(dap_test_json_next(&cursor), "event"), "terminated"));
+        }
+        free(response);
+        response = dap_test_wait(&session, 0, "exited", NULL);
+        ASSERT(dap_test_json_integer(dap_test_json_get(dap_test_body(response), "exitCode")) == 0);
+        free(response);
+        dap_test_finish(&session);
+        free(log);
+    }
+    free(escaped_dep_source);
+    free(escaped_source);
+    free(backend);
+    free(repo);
+    free(binary);
+    free(dep_source);
+    free(source);
+    free(app);
+    free(dep);
+    free(bundle);
+    free(packages);
+    free(published_bundle);
+    free(published);
+    thin_lto_test_dispose(&work);
+    puts("ThinLTO Debug DAP: source steps, dependency frames, locals/watch, exception unwind and bitcode packages verified");
+}
+
+/* Verify launch defaults and byte-for-byte preservation of explicit frame formats. */
+static void test_dap_launch_frame_format_defaults(void) {
+    static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x71U};
+    static const char *const kFormatMembers[] = {
+        "",
+        ",\"customFrameFormat\":\"${function.name}\"",
+        ",\"customFrameFormat\":\"\"",
+        ",\"custom\\u0046rameFormat\":\"${function.name}\"",
+        ",\"customFrameFormat\":\"quoted \\\"name\\\" \\\\ ${function.name}\\n\"",
+        ",\"customFrameFormat\":null",
+        ",\"customFrameFormat\":42",
+    };
+    static const char *kLaunchTemplate =
+        "{\n\"seq\":2,\"arguments\":{\"env\":{\"customFrameFormat\":\"nested\"},"
+        "\"args\":[\"a\\\"b\",\"c\\\\d\",\"雪\"],\"program\":\"%s\"%s \n%s},"
+        "\"type\":\"request\",\"command\":\"launch\",\"extra\":{\"enabled\":true}}\n";
+    char template_path[] = "temp/feng_cli_dap_frame_format_XXXXXX";
+    char *workspace = mkdtemp(template_path);
+    char *binary;
+    char *sidecar;
+    char *backend;
+    char *requests;
+    char *escaped_binary;
+    char *initialize;
+    char *backend_initialize;
+    char *script;
+    char *error = NULL;
+    FengCodegenMapingInfo info = {0};
+    char *argv[] = {"--stdio"};
+
+    ASSERT(workspace != NULL);
+    binary = path_join(workspace, "demo.bin");
+    sidecar = dup_printf("%s.fd", binary);
+    backend = path_join(workspace, "lldb-dap");
+    requests = path_join(workspace, "requests.txt");
+    write_binary_file(binary, kBinaryBytes, sizeof(kBinaryBytes));
+    feng_codegen_maping_info_init(&info);
+    ASSERT(feng_debug_write_fd(sidecar, binary, NULL, 0U, &info, &error));
+    ASSERT(error == NULL);
+    escaped_binary = json_escape_text(binary);
+    initialize = build_dap_message_text(
+        "{\"seq\":1,\"type\":\"request\",\"command\":\"initialize\","
+        "\"arguments\":{\"adapterID\":\"feng\"}}");
+    backend_initialize = build_dap_message_text(
+        "{\"seq\":1,\"type\":\"response\",\"request_seq\":1,\"success\":true,"
+        "\"command\":\"initialize\",\"body\":{}}");
+    script = dup_printf("#!/bin/sh\nprintf '%%b' '%s'\ncat > \"%s\"\n",
+                         backend_initialize, requests);
+    write_executable_text_file(backend, script);
+
+    for (size_t index = 0U; index < sizeof(kFormatMembers) / sizeof(kFormatMembers[0]); ++index) {
+        char *launch_json = dup_printf(kLaunchTemplate, escaped_binary, kFormatMembers[index], "");
+        char *expected_json = dup_printf(kLaunchTemplate, escaped_binary, kFormatMembers[index],
+            index == 0U ? ",\"customFrameFormat\":\"${function.name-without-args}\"" : "");
+        char *launch = build_dap_message_text(launch_json);
+        char *expected_launch = build_dap_message_text(expected_json);
+        char *input = dup_printf("%s%s", initialize, launch);
+        char *expected = dup_printf("%s%s", initialize, expected_launch);
+        char *stderr_text = NULL;
+        char *stdout_text;
+        char *received;
+        int rc;
+
+        stdout_text = run_dap_capture_stdout_with_path(1, argv, input, getenv("PATH"),
+                                                      backend, &rc, &stderr_text);
+        ASSERT(rc == 0);
+        ASSERT(stderr_text[0] == '\0');
+        received = read_text_file(requests);
+        ASSERT(strcmp(received, expected) == 0);
+        free(received);
+        free(stdout_text);
+        free(stderr_text);
+        free(expected);
+        free(input);
+        free(expected_launch);
+        free(launch);
+        free(expected_json);
+        free(launch_json);
+    }
+    free(script);
+    free(backend_initialize);
+    free(initialize);
+    free(escaped_binary);
+    free(requests);
+    free(backend);
+    free(sidecar);
+    free(binary);
+    feng_codegen_maping_info_dispose(&info);
+    ASSERT(feng_cli_project_remove_tree(workspace, &error));
+    free(error);
+    puts("DAP launch frame format: default, explicit, empty, escaped and nested fields verified");
+}
+
 #include "dap_callable.inc"
 #include "dap_union.inc"
 #include "throw_constraint.inc"
@@ -31624,6 +32606,15 @@ int main(void) {
     test_fs_bulk_read_faults();
     test_bundle_ft_diagnostic_lifetime();
     test_debug_link_lto_object_lifetime();
+    test_dap_launch_frame_format_defaults();
+    test_thin_lto_option_diagnostics();
+    test_thin_lto_direct_mode_matrix();
+    test_thin_lto_project_dependency_matrix();
+    test_thin_lto_source_hidden_mixed_packages();
+    test_thin_lto_sdk_free_target_matrix();
+    test_thin_lto_runtime_archive();
+    test_thin_lto_linux_abi_matrix();
+    test_thin_lto_dap_dependencies();
     test_main_argv_lifetime();
     test_binary_operand_lifetime();
     test_tuple_initializer_lifetime();
