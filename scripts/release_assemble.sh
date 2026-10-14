@@ -308,6 +308,7 @@ verify_llvm_toolchain() {
     "clang"
     "lld"
     "ld.lld"
+    "ld64.lld"
     "llvm-ar"
     "llvm-ranlib"
     "lldb"
@@ -316,7 +317,7 @@ verify_llvm_toolchain() {
   )
 
   case "${host_platform}" in
-    macos-arm64) tools+=("debugserver" "ld64.lld") ;;
+    macos-arm64) tools+=("debugserver") ;;
     linux-*) tools+=("lldb-server") ;;
   esac
   require_dir "${llvm_root}/bin"

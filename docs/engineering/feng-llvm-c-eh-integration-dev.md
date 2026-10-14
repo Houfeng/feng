@@ -102,10 +102,11 @@ macOS bundled LLVM 补齐 `ld64.lld -> lld` 标准入口，剪裁与发行校验
 
 ### 4.1 使用范围与参数边界
 
-使用已提交的 `toolchain/test_tools/lld/macos-arm64/bin/ld64.lld`，只在 macOS UBSan 测试
-链接阶段启用，排除已知 Mach-O 展开信息错误对测试的干扰；UBSan 插桩仍由 Clang 负责。
+使用已提交的 `toolchain/llvm/macos-arm64/bin/ld64.lld`，与普通测试、发行包共用
+补丁 LLD，排除已知 Mach-O 展开信息错误；维护规则见 [LLD 说明](../../third_party/lld/README.md)。UBSan 插桩仍由 Clang 负责。
 Release 插件本身保持不带 sanitizer 插桩；被编译程序是否启用 UBSan
-由测试配置决定，两者不混用。补丁 LLD 不替换 bundled LLD，也不进入 Feng 发行包。
+由测试配置决定，两者不混用。2026-10-13 起统一使用 bundled 补丁 LLD；下述历史
+验收中“原版／测试专用”的区分仅描述当时制品。
 
 UBSan 的 `FENG_CC` 参数传入 `make check-clang` 所检查命令的绝对路径，避免测试
 启动登录 shell 后重设 `PATH`，把同名 `clang` 重新解析为 Apple Clang 等其他版本。
@@ -123,10 +124,10 @@ UBSan 的 `FENG_CC` 参数传入 `make check-clang` 所检查命令的绝对路�
 也不能正确表示包含空格的链接器路径。
 
 使用 Clang 已有的 `COMPILER_PATH`，仅在 macOS UBSan 测试命令的环境中指向仓库
-`toolchain/test_tools/lld/macos-arm64/bin` 的绝对路径。Clang 在 `-fuse-ld=lld` 下从该目录
+`toolchain/llvm/macos-arm64/bin` 的绝对路径。Clang 在 `-fuse-ld=lld` 下从该目录
 找到 `ld64.lld`；环境由 Feng 的子进程继承，无需新增 `FENG_LD` 或 driver 测试选项。
 测试配置须先验证补丁文件的可执行性、版本，并确认实际选择的链接器；不能依赖缺失目录
-下的 Clang 回退。普通阶段不新增该环境覆盖，生成 C 使用 bundled Clang 及其原版
+下的 Clang 回退。普通阶段不新增该环境覆盖，生成 C 使用 bundled Clang 及同一补丁
 LLD。既有参数记录包装器保留包装前的编译器选择：普通为 bundled，UBSan 为已指定的
 host Clang，不再固定转发给 `cc`；日志格式和用例断言不变。
 
@@ -142,8 +143,8 @@ sanitizer、减少用例或换成发行包的不完整 sanitizer 资源取得成
 
 ### 4.2 本地和 CI
 
-本地复用 `toolchain/test_tools/` 中的预构建工具。工具链发布脚本归档整个 `toolchain/`，
-现有下载脚本恢复该目录；测试工具因此共用已有预构建 Release 与恢复步骤，普通 CI
+本地复用 `toolchain/llvm/<host>/` 中的预构建工具。工具链发布脚本归档整个 `toolchain/`，
+现有下载脚本恢复该目录；测试与发行共用已有预构建 Release 与恢复步骤，普通 CI
 不再单独下载测试工具的 LFS 实体文件。发布工具链预构建归档时仍需恢复 LFS 内容。
 不新增发布／下载脚本，不在 CI 源码重建 LLD；macOS 测试前继续检查补丁版本、
 可执行性与实际链接器选择。构建记录的存放规则见[插件开发方案 §7](./c-ir-llvm-exception-plugin-dev.md#7-手工构建与分发流程)，测试不依赖预构建目录中的记录文件。

@@ -1,0 +1,47 @@
+--- a/lld/MachO/InputFiles.cpp
++++ b/lld/MachO/InputFiles.cpp
+@@ -1197,7 +1197,9 @@
+       if (auto *sym = cast_or_null<Defined>(r.referent.dyn_cast<Symbol *>())) {
+         // Check whether the symbol defined in this file is the prevailing one.
+         // Skip if it is e.g. a weak def that didn't prevail.
+-        if (sym->getFile() != this) {
++        // LTO preserves the bitcode file as the symbol's diagnostic origin;
++        // unwind records belong to the generated native object instead.
++        if (sym->getObjectFile() != this) {
+           ++it;
+           continue;
+         }
+@@ -1541,7 +1543,9 @@
+       ehRelocator.makePcRel(funcAddrOff, funcSym, target->p2WordSize);
+     }
+     // The symbol has been coalesced, or already has a compact unwind entry.
+-    if (!funcSym || funcSym->getFile() != this || funcSym->unwindEntry()) {
++    // Compare the physical object owner, not the original bitcode provenance.
++    if (!funcSym || funcSym->getObjectFile() != this ||
++        funcSym->unwindEntry()) {
+       // We must prune unused FDEs for correctness, so we cannot rely on
+       // -dead_strip being enabled.
+       isec->live = false;
+--- a/lld/MachO/UnwindInfoSection.cpp
++++ b/lld/MachO/UnwindInfoSection.cpp
+@@ -211,7 +211,9 @@
+         // GOT entries. However, we still need to canonicalize the personality
+         // pointers (like prepareRelocations() does for CU entries) in order
+         // to avoid overflowing the 3-personality limit.
+-        FDE &fde = cast<ObjFile>(d->getFile())->fdes[d->unwindEntry()];
++        // The canonical unwind record owns this lookup, including after ICF.
++        FDE &fde =
++            cast<ObjFile>(d->unwindEntry()->getFile())->fdes[d->unwindEntry()];
+         fde.personality = canonicalizePersonality(fde.personality);
+       }
+     }
+@@ -369,7 +371,8 @@
+               ? d->unwindEntry()->outSecOff
+               : 0;
+       cu.encoding = target->modeDwarfEncoding | dwarfOffsetHint;
+-      const FDE &fde = cast<ObjFile>(d->getFile())->fdes[d->unwindEntry()];
++      const FDE &fde =
++          cast<ObjFile>(d->unwindEntry()->getFile())->fdes[d->unwindEntry()];
+       cu.functionLength = fde.funcLength;
+       // Omit the DWARF personality from compact-unwind entry so that we
+       // don't need to encode it.

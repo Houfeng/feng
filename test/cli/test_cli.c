@@ -22,6 +22,7 @@
 #include "cli/cli.h"
 #include "cli/common.h"
 #include "cli/compile/options.h"
+#include "cli/compile/driver.h"
 #include "cli/deps/manager.h"
 #include "cli/frontend.h"
 #include "cli/lsp/server.h"
@@ -21903,6 +21904,217 @@ static void test_direct_g21_array_runtime_rejects_invalid_lengths_and_indexes(vo
     }
 }
 
+/* Extract the exact linker directory argument without splitting its path. */
+static char *debug_lto_logged_directory(const char *log_text) {
+    const char *marker = "-Xlinker\n-object_path_lto\n-Xlinker\n";
+    const char *start = strstr(log_text, marker);
+    const char *end;
+
+    ASSERT(start != NULL);
+    start += strlen(marker);
+    end = strchr(start, '\n');
+    ASSERT(end != NULL && end > start && end - start <= INT_MAX);
+    return dup_printf("%.*s", (int)(end - start), start);
+}
+
+/* Preserve bitcode debug units through real links, then clean their objects. */
+static void test_debug_link_lto_object_lifetime(void) {
+    /* Cover mode selection, intermediate retention and host-tool failure. */
+    const struct {
+        FengCompileTarget target;
+        FengCliLtoMode lto;
+        bool release;
+        bool keep;
+        bool fail;
+    } cases[] = {
+        {FENG_COMPILE_TARGET_BIN, FENG_CLI_LTO_UNSPECIFIED, false, false, false},
+        {FENG_COMPILE_TARGET_BIN, FENG_CLI_LTO_OFF, false, true, false},
+        {FENG_COMPILE_TARGET_BIN, FENG_CLI_LTO_THIN, false, false, false},
+        {FENG_COMPILE_TARGET_BIN, FENG_CLI_LTO_THIN, false, true, false},
+        {FENG_COMPILE_TARGET_BIN, FENG_CLI_LTO_OFF, true, false, false},
+        {FENG_COMPILE_TARGET_BIN, FENG_CLI_LTO_THIN, true, false, false},
+        {FENG_COMPILE_TARGET_LIB, FENG_CLI_LTO_THIN, false, true, false},
+        {FENG_COMPILE_TARGET_LIB, FENG_CLI_LTO_THIN, true, false, false},
+        {FENG_COMPILE_TARGET_BIN, FENG_CLI_LTO_OFF, false, true, true}
+    };
+    const FengCliHostToolStrategy cc_strategy = {
+        "C compiler", "FENG_CC", "toolchain/llvm/bin/clang", "CC", "cc"
+    };
+    const FengCliHostToolStrategy ar_strategy = {
+        "static archiver", "FENG_AR", "toolchain/llvm/bin/llvm-ar", "AR", "ar"
+    };
+    char template_path[] = "temp/feng_cli_lto_objects_XXXXXX";
+    char *workspace_dir = mkdtemp(template_path);
+    char *host = NULL;
+    char *remove_error = NULL;
+    char *compiler = feng_cli_resolve_host_tool(NULL, &cc_strategy, NULL);
+    char *archiver = feng_cli_resolve_host_tool(NULL, &ar_strategy, NULL);
+    char *quoted_compiler;
+    char *quoted_archiver;
+    char *archive_path;
+    char *quoted_archive;
+    char *cc_log_path;
+    char *cc_wrapper_path;
+    char *output_root;
+    char *ir_dir;
+    char *c_path;
+    char *binary_path;
+    char *library_path;
+    char *last_directory = NULL;
+    char *saved_cc = getenv("FENG_CC") != NULL ? dup_cstr(getenv("FENG_CC")) : NULL;
+
+    ASSERT(workspace_dir != NULL && compiler != NULL && archiver != NULL);
+    ASSERT(feng_platform_detect_host_platform(&host, NULL));
+    quoted_compiler = quote_shell_argument(compiler);
+    quoted_archiver = quote_shell_argument(archiver);
+    archive_path = path_join(workspace_dir, "libdebug_lto.a");
+    quoted_archive = quote_shell_argument(archive_path);
+    for (unsigned i = 0U; i < 2U; ++i) {
+        char *source = dup_printf("%s/lto_%c.c", workspace_dir, 'a' + i);
+        char *object = dup_printf("%s/lto_%c.o", workspace_dir, 'a' + i);
+        char *text = dup_printf("/* Independently compiled debug unit. */\n"
+            "int feng_debug_lto_%c(int value) {\n"
+            "  volatile int stored = value; return stored + 2;\n}\n", 'a' + i);
+        char *quoted_source = quote_shell_argument(source);
+        char *quoted_object = quote_shell_argument(object);
+        char *command;
+
+        write_text_file(source, text);
+        command = dup_printf("%s -g -O1 -fexceptions -flto=thin -c %s -o %s",
+                             quoted_compiler, quoted_source, quoted_object);
+        run_command_or_die(command);
+        free(command);
+        command = dup_printf("%s rcs %s %s", quoted_archiver,
+                             quoted_archive, quoted_object);
+        run_command_or_die(command);
+        free(command);
+        free(quoted_object);
+        free(quoted_source);
+        free(text);
+        free(object);
+        free(source);
+    }
+    cc_log_path = path_join(workspace_dir, "compiler.log");
+    cc_wrapper_path = create_logging_cc_wrapper(workspace_dir, cc_log_path);
+    ASSERT(setenv("FENG_CC", cc_wrapper_path, 1) == 0);
+    output_root = path_join(workspace_dir, "output space,comma");
+    ir_dir = path_join(output_root, "ir/c");
+    c_path = path_join(ir_dir, "feng.c");
+    binary_path = path_join(output_root, "probe");
+    library_path = path_join(output_root, "libprobe.a");
+
+    for (size_t i = 0U; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        const char *libraries[] = {archive_path};
+        FengCliDriverOptions options = {
+            .program_path = "build/bin/feng",
+            .platform = host,
+            .target = cases[i].target,
+            .c_path = c_path,
+            .out_path = cases[i].target == FENG_COMPILE_TARGET_BIN
+                ? binary_path : library_path,
+            .link_libs = libraries,
+            .link_lib_count = 1U,
+            .release = cases[i].release,
+            .lto = cases[i].lto,
+            .keep_intermediate = cases[i].keep
+        };
+        FILE *errors = temp_file();
+        int saved_stderr;
+        int rc;
+        char *stderr_text;
+        char *log_text;
+        bool needs_directory = feng_platform_is_macos(host) &&
+            cases[i].target == FENG_COMPILE_TARGET_BIN && !cases[i].release;
+
+        mkdir_p(ir_dir);
+        write_text_file(c_path, cases[i].fail
+            ? "void feng_debug_lto_missing(void);\n"
+              "int main(void) { feng_debug_lto_missing(); return 0; }\n"
+            : "int feng_debug_lto_a(int); int feng_debug_lto_b(int);\n"
+              "int main(void) { return feng_debug_lto_a(1) + feng_debug_lto_b(2); }\n");
+        write_text_file(cc_log_path, "");
+        ASSERT(fflush(stderr) == 0);
+        saved_stderr = dup(STDERR_FILENO);
+        ASSERT(saved_stderr >= 0 && dup2(fileno(errors), STDERR_FILENO) >= 0);
+        rc = feng_cli_compile_driver_invoke(&options);
+        ASSERT(fflush(stderr) == 0 && dup2(saved_stderr, STDERR_FILENO) >= 0);
+        close(saved_stderr);
+        stderr_text = read_text_stream(errors);
+        fclose(errors);
+        if ((rc == 0) == cases[i].fail) {
+            fprintf(stderr, "%s", stderr_text);
+        }
+        ASSERT((rc != 0) == cases[i].fail);
+        if (cases[i].fail) {
+            ASSERT(strstr(stderr_text, "undefined symbol") != NULL);
+            ASSERT(strstr(stderr_text, "feng_debug_lto_missing") != NULL);
+        }
+        ASSERT(strstr(stderr_text, "skipping debug map object") == NULL);
+        ASSERT(path_exists(c_path) == (cases[i].keep || cases[i].fail));
+        log_text = read_text_file(cc_log_path);
+        ASSERT(count_logged_arguments(log_text, "-object_path_lto") ==
+               (needs_directory ? 1 : 0));
+        if (needs_directory) {
+            char *directory = debug_lto_logged_directory(log_text);
+            ASSERT(directory[0] == '/');
+            ASSERT(strstr(directory, "/output space,comma/ir/c/lto-") != NULL);
+            ASSERT(!path_exists(directory));
+            ASSERT(last_directory == NULL || strcmp(last_directory, directory) != 0);
+            free(last_directory);
+            last_directory = directory;
+#if defined(__APPLE__)
+            if (!cases[i].fail) {
+                char *quoted_binary = quote_shell_argument(binary_path);
+                char *dump_path = path_join(workspace_dir, "dwarf.txt");
+                char *quoted_dump = quote_shell_argument(dump_path);
+                char *command = dup_printf(
+                    "xcrun dwarfdump --debug-info %s.dSYM > %s",
+                    quoted_binary, quoted_dump);
+                char *dump_text;
+                run_command_or_die(command);
+                dump_text = read_text_file(dump_path);
+                ASSERT(strstr(dump_text, "feng_debug_lto_a") != NULL);
+                ASSERT(strstr(dump_text, "feng_debug_lto_b") != NULL);
+                free(dump_text);
+                free(command);
+                command = dup_printf("xcrun dwarfdump --verify %s.dSYM > %s",
+                                     quoted_binary, quoted_dump);
+                run_command_or_die(command);
+                free(command);
+                free(quoted_dump);
+                free(dump_path);
+                free(quoted_binary);
+            }
+#endif
+        }
+        free(log_text);
+        free(stderr_text);
+    }
+    if (saved_cc != NULL) {
+        ASSERT(setenv("FENG_CC", saved_cc, 1) == 0);
+    } else {
+        ASSERT(unsetenv("FENG_CC") == 0);
+    }
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(saved_cc);
+    free(last_directory);
+    free(library_path);
+    free(binary_path);
+    free(c_path);
+    free(ir_dir);
+    free(output_root);
+    free(cc_wrapper_path);
+    free(cc_log_path);
+    free(quoted_archive);
+    free(archive_path);
+    free(quoted_archiver);
+    free(quoted_compiler);
+    free(archiver);
+    free(compiler);
+    free(host);
+}
+
 static void test_project_build_default_uses_debug_friendly_flags(void) {
     char template_path[] = "temp/feng_cli_build_debug_flags_XXXXXX";
     char *workspace_dir;
@@ -22079,7 +22291,8 @@ static void test_project_build_release_cleans_binary_symbols(void) {
         library_symbols = read_binary_symbols_or_die(library_path, symbols_path);
         binary_symbols = read_binary_symbols_or_die(binary_path, symbols_path);
         ASSERT(strstr(library_symbols, "cleanupValue__from__") != NULL);
-        ASSERT(binary_file_contains_text(library_path, "release-cleanup-unused"));
+        /* Bitcode need not preserve string literals as searchable raw bytes. */
+        ASSERT(strstr(library_symbols, "cleanupUnused__from__") != NULL);
         ASSERT(binary_file_contains_text(binary_path, "release-cleanup-live"));
         if (release) {
             ASSERT(strstr(binary_symbols, "cleanupValue__from__") == NULL);
@@ -31410,6 +31623,7 @@ int main(void) {
     test_runtime_inline_distribution();
     test_fs_bulk_read_faults();
     test_bundle_ft_diagnostic_lifetime();
+    test_debug_link_lto_object_lifetime();
     test_main_argv_lifetime();
     test_binary_operand_lifetime();
     test_tuple_initializer_lifetime();

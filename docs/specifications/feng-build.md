@@ -38,6 +38,13 @@ LLD 继续接受原生对象和 bitcode 混合输入，因此当前 bin 关闭 L
 依赖库或 runtime；已有二进制包不因本次选项而重编。显式 Debug ThinLTO 仍保留调试
 信息，但已优化的预编译依赖不能恢复成未优化的源码单步行为。
 
+macOS `target=bin` 的 Debug 链接显式传入 `-object_path_lto`，使已有 bitcode 依赖
+生成的机器码对象具有独立的调试映射路径；该规则同时覆盖本次代码的 LTO 未指定、
+`off` 和 `thin`。目录在本次 `ir/c/` 工作目录下以 `mkdtemp` 创建，并以绝对路径通过
+独立的 `-Xlinker` 参数传递，保留路径中的空格与逗号。目录保留到 Clang 完成链接及
+`dsymutil` 后，在成功与失败路径统一清理；这些对象仅为链接临时文件，不改变
+`--keep-ir` 的保留范围。正常 Release 链接和 `target=lib` 不额外添加该参数。
+
 编译器不接受包名、版本号或搜索路径,不读取任何 `feng.fm`,也不解析依赖树。一次核心编译只生成一个目标平台的制品,无论 `--target` 是 `bin` 还是 `lib`；它只在调用方给定的 `--out` 根下建立本次编译需要的目录,不理解 `<项目输出根>/<platform>` 约定,也不负责多平台循环或 `.fb` 聚合。对 `--pkg` 指定的 `.fb`,编译器只直接读取其中的公开 `.ft` 与目标平台正式库文件（如 `.a`、`.lib`、`.so`、`.dylib`、`.dll`）; `.o` / `.obj` 不属于 `.fb` 的稳定分发接口。调试 sidecar `.fd` 只属于本地构建产物,不从 `.fb` 读取,也不进入 `.fb` 分发包。
 
 ### 2.2 目标平台与工具链转换
@@ -159,6 +166,10 @@ runtime 链接边界:
 发行 runtime 的 Feng C 实现统一以 ThinLTO 编译，保留内建函数优化；同一静态归档内
 继续包含既有原生 libunwind 成员，不再提供另一套原生 runtime。归档仍绑定具体目标
 平台，bitcode 不意味着跨平台通用；发行布局见 [发行与安装](../engineering/feng-release-and-install.md)。
+
+runtime 的 Feng C 实现必须使用 `-fexceptions` 编译，使抛出、重抛及可能调用 Feng
+回调的实现保留异常展开语义，避免 ThinLTO 使用 C 默认编译产生的错误 `nounwind`
+属性删除调用方的异常处理。已审计的 `FENG_RUNTIME_NOTHROW` 契约继续保留。
 
 编译器私有的 runtime contract helper 若存在,统一由这套 runtime 库提供,不再单独产出 intrinsic 静态库。在 Feng 层（如标准库）显式调用这类 helper 时,使用 `@runtime extern func`,不通过公开 C ABI 注解声明内部 helper。
 

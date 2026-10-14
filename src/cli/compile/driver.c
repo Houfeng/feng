@@ -1978,6 +1978,50 @@ static bool argv_push_mode_flags(ArgVec *av, bool release,
     return true;
 }
 
+/* Keep distinct native LTO objects available until Clang finishes dsymutil. */
+static bool argv_push_debug_link_flags(ArgVec *av, const char *target_platform,
+                                      bool release, const char *c_path,
+                                      char **out_lto_object_dir,
+                                      char **out_error_message) {
+    char *directory;
+    char *absolute_directory;
+
+    if (release || !feng_platform_is_macos(target_platform)) {
+        return true;
+    }
+    directory = replace_with_sibling_filename(c_path, "lto-XXXXXX");
+    if (directory == NULL) {
+        return set_errorf(out_error_message,
+                          "out of memory composing LTO object directory");
+    }
+    if (mkdtemp(directory) == NULL) {
+        int saved_errno = errno;
+
+        set_errorf(out_error_message, "cannot create LTO object directory: %s",
+                   strerror(saved_errno));
+        free(directory);
+        return false;
+    }
+    /* Transfer ownership before further allocations so failure also cleans up. */
+    *out_lto_object_dir = directory;
+    absolute_directory = realpath(directory, NULL);
+    if (absolute_directory == NULL) {
+        return set_errorf(out_error_message,
+                          "cannot resolve LTO object directory: %s",
+                          strerror(errno));
+    }
+    free(directory);
+    *out_lto_object_dir = absolute_directory;
+    if (!argv_push(av, "-Xlinker") ||
+        !argv_push(av, "-object_path_lto") ||
+        !argv_push(av, "-Xlinker") ||
+        !argv_push(av, absolute_directory)) {
+        return set_errorf(out_error_message,
+                          "out of memory building LTO object arguments");
+    }
+    return true;
+}
+
 /* Apply the target linker's cleanup policy only to release executables. */
 static bool argv_push_release_executable_flags(ArgVec *av,
                                                const char *target_platform) {
@@ -2238,6 +2282,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     int rc = 0;
     char *include_flag = NULL;
     char *object_path = NULL;
+    char *lto_object_dir = NULL;
     char *cc = NULL;
     char *ar = NULL;
     char *ranlib = NULL;
@@ -2361,6 +2406,14 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                                                    target_sysroot,
                                                    true)) { ok = false; }
         if (ok && !argv_push_mode_flags(&av, opts->release, opts->lto, target_platform)) { ok = false; }
+        if (ok && !argv_push_debug_link_flags(&av, target_platform, opts->release,
+                                              opts->c_path, &lto_object_dir,
+                                              &tool_error)) {
+            fprintf(stderr, "error: cannot configure debug linker: %s\n",
+                    tool_error != NULL ? tool_error : "unknown error");
+            rc = 1;
+            goto cleanup;
+        }
         if (ok && !argv_push(&av, "-Wall")) { ok = false; }
         if (ok && !argv_push(&av, "-Wextra")) { ok = false; }
         /* Generated C may emit fit-helper functions that are not exercised
@@ -2524,6 +2577,8 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
 
 cleanup:
     argv_free(&av);
+    remove_tree(lto_object_dir);
+    free(lto_object_dir);
     for (size_t i = 0; i < lib_count; ++i) free(libs[i]);
     free(libs);
     free_string_array(bundle_extlib_satisfied_libs, bundle_extlib_satisfied_lib_count);

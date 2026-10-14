@@ -150,7 +150,7 @@ if [[ $host == macos-* ]]; then codesign --force --sign - "$plugin" >/dev/null 2
 if [[ $host == macos-* && ${#sanitizer_options[@]} != 0 ]]; then
     FENG_CC_FLAGS="${FENG_CC_FLAGS} -###" "$stage/bin/driver" bin "$host" 0 \
         "$work/program.c" "$work/link-probe" "$work/support.a" > "$work/link.txt" 2>&1
-    grep -F "\"$root/toolchain/test_tools/lld/$host/bin/ld64.lld\"" "$work/link.txt" >/dev/null
+    grep -F "\"$root/toolchain/llvm/$host/bin/ld64.lld\"" "$work/link.txt" >/dev/null
 fi
 
 # Exercise generated Feng C in the relocated installation, preserving its IR.

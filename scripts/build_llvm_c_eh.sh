@@ -1,19 +1,17 @@
 #!/usr/bin/env bash
-# Manual maintainer entry: build and validate every host, or one explicitly selected host.
+# Manual maintainer entry: build and validate the current native host.
 set -euo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo=$(cd -- "$script_dir/.." && pwd)
 sdk=
 platform=
 link_options=()
-forward_options=()
 
-# Keep ordinary builds out of this manual multi-host maintenance path.
+# Keep ordinary builds out of this manual host maintenance path.
 usage() {
     echo 'usage: scripts/build_llvm_c_eh.sh [--platform=HOST] [--llvm-root=PATH]'
-    echo 'HOST: macos-arm64, linux-arm64-gnu or linux-x64-gnu; omitted means all three.'
-    echo 'LLVM 23.1.3 SDK discovery is automatic; --llvm-root overrides one selected host.'
-    echo 'All-host maintenance uses macOS ARM64 and prepared Apple Container Linux environments.'
+    echo 'HOST: macos-arm64, linux-arm64-gnu or linux-x64-gnu; omitted means the current host.'
+    echo 'LLVM 23.1.3 SDK discovery is automatic; --llvm-root selects a path in the current environment.'
 }
 
 # Stop before installing an unvalidated or incompatible artifact.
@@ -53,7 +51,7 @@ for option in "$@"; do
             [[ -z "$sdk" ]] || die 'SDK specified twice'
             sdk=${option#*=}; [[ -n "$sdk" ]] || die 'empty SDK path';;
         --test-link-option=*)
-            link_options+=("--link-option=${option#*=}"); forward_options+=("$option");;
+            link_options+=("--link-option=${option#*=}");;
         -h|--help) usage; exit 0;;
         *) die "unknown option: $option";;
     esac
@@ -65,63 +63,10 @@ case "$(uname -s)/$(uname -m)" in
     *) die 'unsupported build host';;
 esac
 
-# Each child has its own errexit context; one failed host cannot hide another result.
-if [[ -z "$platform" ]]; then
-    [[ -z "$sdk" ]] || die '--llvm-root requires --platform; all-host SDKs are discovered separately'
-    [[ "$host" == macos-arm64 ]] || die 'all-host maintenance requires macOS ARM64; select --platform for a native Linux build'
-    failed=()
-    for selected in macos-arm64 linux-arm64-gnu linux-x64-gnu; do
-        echo "==> Building and validating $selected"
-        if bash "$script_dir/build_llvm_c_eh.sh" "--platform=$selected" ${forward_options[@]+"${forward_options[@]}"}; then
-            echo "==> PASS $selected"
-        else
-            failed+=("$selected")
-            echo "==> FAIL $selected" >&2
-        fi
-    done
-    if [[ ${#failed[@]} != 0 ]]; then die "hosts not delivered: ${failed[*]}"; fi
-    exit 0
-fi
+# Build and validate only the current native host.
+platform=${platform:-$host}
 case "$platform" in macos-arm64|linux-arm64-gnu|linux-x64-gnu) ;; *) die "unsupported platform: $platform";; esac
-
-# Reuse explicit, pre-provisioned Linux containers; never install tools implicitly.
-if [[ "$platform" != "$host" ]]; then
-    [[ "$host" == macos-arm64 && "$platform" == linux-*-gnu ]] || die "cannot build $platform from $host"
-    command -v container >/dev/null || die 'Apple Container is required for Linux hosts'
-    case "$platform" in
-        linux-arm64-gnu) container_name=llvm-c-eh-arm64; container_arch=arm64;;
-        linux-x64-gnu) container_name=llvm-c-eh-x64; container_arch=amd64;;
-    esac
-    inspection=$(container inspect "$container_name") || die "prepare Apple Container $container_name with LLVM 23.1.3 and this repository mounted at /work"
-    # Apple plutil reads the documented JSON inspection output without extra dependencies.
-    json_field() { printf '%s' "$inspection" | plutil -extract "$1" raw -o - -; }
-    [[ $(json_field 0.configuration.platform.os) == linux &&
-       $(json_field 0.configuration.platform.architecture) == "$container_arch" ]] || die "wrong architecture in $container_name"
-    mounted=false
-    index=0
-    while destination=$(json_field "0.configuration.mounts.$index.destination" 2>/dev/null); do
-        if [[ "$destination" == /work && $(json_field "0.configuration.mounts.$index.source") == "$repo" ]]; then mounted=true; fi
-        index=$((index + 1))
-    done
-    "$mounted" || die "$container_name must mount $repo at /work"
-    state=$(json_field 0.status.state)
-    [[ "$state" == running || "$state" == stopped ]] || die "$container_name is not ready: $state"
-    dispatch="$repo/build/llvm-c-eh/dispatch-$platform"
-    mkdir -p "$(dirname "$dispatch")"
-    mkdir "$dispatch" 2>/dev/null || die "another dispatch holds $dispatch"
-    started=false
-    # Restore only state owned by this invocation, even when compilation fails.
-    cleanup_container() {
-        if "$started"; then container stop "$container_name" >/dev/null; fi
-        rmdir "$dispatch"
-    }
-    trap cleanup_container EXIT
-    if [[ "$state" == stopped ]]; then container start "$container_name"; started=true; fi
-    if [[ -n "$sdk" ]]; then forward_options+=("--llvm-root=$sdk"); fi
-    container exec "$container_name" bash /work/scripts/build_llvm_c_eh.sh \
-        "--platform=$platform" ${forward_options[@]+"${forward_options[@]}"}
-    exit 0
-fi
+[[ "$platform" == "$host" ]] || die "--platform must match current host: $host"
 
 if [[ -z "$sdk" ]]; then sdk=$(find_sdk) || die 'complete LLVM 23.1.3 SDK not found; provide --llvm-root'; fi
 sdk=$(cd -- "$sdk" && pwd)
@@ -142,30 +87,21 @@ mkdir -- "$work/lock" 2>/dev/null || die "another build holds $work/lock"
 trap 'rmdir -- "$work/lock"' EXIT
 echo "==> $host SDK: $sdk"
 make_args=(-C "$source_dir" "LLVM_ROOT=$sdk" "BUILD_DIR=$work/build" 'CXXFLAGS=-O3 -DNDEBUG' LDFLAGS=)
-normal_link_options=(${link_options[@]+"${link_options[@]}"})
-sanitizer_link_options=(${link_options[@]+"${link_options[@]}"})
-# Keep the original linker for Release/ordinary coverage; only UBSan uses I04's fix.
-if [[ "$host" == macos-arm64 ]]; then
-    source "$repo/third_party/lld/source.env"
-    original_linker="$repo/toolchain/llvm/$host/bin/lld"
-    sanitizer_linker="$repo/toolchain/test_tools/lld/$host/bin/ld64.lld"
-    [[ -x "$original_linker" ]] || die 'missing original bundled LLD'
-    [[ -x "$sanitizer_linker" ]] || die 'missing UBSan test LLD; run scripts/build_test_lld.sh manually'
-    case $("$original_linker" -flavor darwin --version) in
-        "LLD 23.1.3"|"LLD 23.1.3 "*) ;;
-        *) die 'original LLD must be 23.1.3';;
-    esac
-    [[ $("$sanitizer_linker" --version) == "Feng UBSan test tools patch $LLD_PATCH_REVISION LLD 23.1.3" ]] ||
-        die 'UBSan test LLD does not match the approved version and patch'
-    mkdir -p "$work/tools"
-    ln -sf "$original_linker" "$work/tools/ld64.lld"
-    normal_linker="$work/tools/ld64.lld"
-    make_args+=("LDFLAGS=--ld-path=\"$normal_linker\"")
-    normal_link_options=("--link-option=--ld-path=$normal_linker" ${link_options[@]+"${link_options[@]}"})
-    sanitizer_link_options=("--link-option=--ld-path=$sanitizer_linker" ${link_options[@]+"${link_options[@]}"})
-    echo "==> ordinary linker: $("$normal_linker" --version)"
-    echo "==> UBSan linker: $("$sanitizer_linker" --version)"
-fi
+# Use the same host linker for plugin builds, ordinary tests and sanitizer tests.
+source "$repo/third_party/lld/source.env"
+normal_linker="$repo/toolchain/llvm/$host/bin/ld.lld"
+if [[ "$host" == macos-arm64 ]]; then normal_linker="$repo/toolchain/llvm/$host/bin/ld64.lld"; fi
+[[ -x "$normal_linker" ]] || die 'missing bundled LLD; run scripts/build_lld.sh manually'
+case $("$normal_linker" --version) in
+    "Feng patch $LLD_PATCH_REVISION LLD $LLD_VERSION"|"Feng patch $LLD_PATCH_REVISION LLD $LLD_VERSION "*) ;;
+    *) die 'bundled LLD does not match the maintained version and patch';;
+esac
+sanitizer_linker="$normal_linker"
+make_args+=("LDFLAGS=--ld-path=\"$normal_linker\"")
+normal_link_options=("--link-option=--ld-path=$normal_linker" ${link_options[@]+"${link_options[@]}"})
+sanitizer_link_options=("${normal_link_options[@]}")
+echo "==> linker: $("$normal_linker" --version)"
+
 make "${make_args[@]}" clean
 make "${make_args[@]}" all
 library="$work/build/llvm_c_eh.$extension"

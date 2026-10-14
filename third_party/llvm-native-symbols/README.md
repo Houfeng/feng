@@ -3,8 +3,10 @@
 独立的 macOS 原生函数符号名称还原插件。设计、边界及使用方式见
 [主开发文档](../../docs/engineering/feng-native-symbol-normalization-dev.md)。
 
-手工维护入口与 `llvm-c-eh` 一致；省略平台会尝试全部三个 host，指定平台时只处理
-该 host。SDK 自动发现，`--llvm-root` 可覆盖；不自动安装 SDK 或创建容器。
+手工维护入口与 [llvm-c-eh](../llvm-c-eh/README.md#独立构建) 一致，在当前 host
+构建、验证和安装。SDK 自动发现，`--llvm-root` 可覆盖。
+容器挂载和调用示例见 [LLD 维护说明](../lld/README.md)，执行命令改为
+`/work/scripts/build_llvm_native_symbols.sh`。
 
 ```sh
 scripts/build_llvm_native_symbols.sh

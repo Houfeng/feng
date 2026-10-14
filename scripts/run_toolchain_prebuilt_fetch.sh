@@ -49,11 +49,10 @@ create_toolchain() {
     printf '%s\n' "${platform}" \
       > "${root}/toolchain/sysroot/${platform}/usr/include/.platform"
   done
-  mkdir -p "${root}/toolchain/test_tools/lld/macos-arm64/bin"
   printf '#!/usr/bin/env sh\nexit 0\n' \
-    > "${root}/toolchain/test_tools/lld/macos-arm64/bin/lld"
-  chmod 0755 "${root}/toolchain/test_tools/lld/macos-arm64/bin/lld"
-  ln -s lld "${root}/toolchain/test_tools/lld/macos-arm64/bin/ld64.lld"
+    > "${root}/toolchain/llvm/macos-arm64/bin/lld"
+  chmod 0755 "${root}/toolchain/llvm/macos-arm64/bin/lld"
+  ln -s lld "${root}/toolchain/llvm/macos-arm64/bin/ld64.lld"
 }
 
 # Archive one fixture using the production prebuilt top-level layout.
@@ -186,13 +185,13 @@ FETCH_OUTPUT="$(run_fetch)"
   die "fetch script did not restore the host LLVM layout"
 [[ "$(readlink "${FIXTURE_ROOT}/toolchain/llvm/linux-x64-gnu/bin/llvm-ranlib")" == "llvm-ar" ]] ||
   die "fetch script did not preserve internal symbolic links"
-[[ -x "${FIXTURE_ROOT}/toolchain/test_tools/lld/macos-arm64/bin/lld" ]] ||
-  die "prebuilt archive did not restore executable test tools"
-[[ "$(readlink "${FIXTURE_ROOT}/toolchain/test_tools/lld/macos-arm64/bin/ld64.lld")" == "lld" ]] ||
-  die "prebuilt archive did not preserve the test linker alias"
-cmp -s "${VALID_SOURCE}/toolchain/test_tools/lld/macos-arm64/bin/lld" \
-  "${FIXTURE_ROOT}/toolchain/test_tools/lld/macos-arm64/bin/lld" ||
-  die "prebuilt restoration changed the test linker contents"
+[[ -x "${FIXTURE_ROOT}/toolchain/llvm/macos-arm64/bin/lld" ]] ||
+  die "prebuilt archive did not restore the executable linker"
+[[ "$(readlink "${FIXTURE_ROOT}/toolchain/llvm/macos-arm64/bin/ld64.lld")" == "lld" ]] ||
+  die "prebuilt archive did not preserve the linker alias"
+cmp -s "${VALID_SOURCE}/toolchain/llvm/macos-arm64/bin/lld" \
+  "${FIXTURE_ROOT}/toolchain/llvm/macos-arm64/bin/lld" ||
+  die "prebuilt restoration changed the linker contents"
 grep -Fq \
   'api repos/Houfeng/feng/git/matching-refs/tags/toolchain-prebuilt/' \
   "${MOCK_LOG}" ||

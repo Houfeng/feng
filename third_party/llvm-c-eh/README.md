@@ -21,7 +21,7 @@ make -C third_party/llvm-c-eh LLVM_ROOT="$LLVM_SDK" test-ubsan
 普通／UBSan 独立测试的 `--link-option=...` 参数，只传给链接命令。macOS 优先使用
 下面的维护入口，它会自动选择经过验证的配套链接器。
 
-预构建维护入口支持全部或单个平台，自动查找已安装的完整 SDK：
+预构建维护入口在当前 host 构建，自动查找已安装的完整 SDK：
 
 ```sh
 bash scripts/build_llvm_c_eh.sh
@@ -30,21 +30,19 @@ bash scripts/build_llvm_c_eh.sh --platform=linux-arm64-gnu
 bash scripts/build_llvm_c_eh.sh --platform=linux-x64-gnu --llvm-root=/usr/lib/llvm-23
 ```
 
-无参数时，以 macOS ARM64 为维护入口尝试全部三个 host，逐项报告结果；任一失败则
-最终返回非零，仅安装各自通过全部检查的产物。`--llvm-root` 是所选构建环境内的路径，
-与 `--platform` 一起使用；省略时查找 `llvm-config`、`llvm-config-23` 或已安装的
+省略 `--platform` 时构建当前 host；显式指定时必须与当前 host 一致。
+仅安装通过全部检查的产物。`--llvm-root` 是当前构建环境内的 SDK 路径；
+省略时查找 `llvm-config`、`llvm-config-23` 或已安装的
 Homebrew／Linux LLVM 23 目录，并校验精确版本及开发组件。
 
-Linux 可以直接在对应架构执行单平台命令。macOS 调度 Linux 时使用预先准备的本机
-Apple Container：`llvm-c-eh-arm64`（arm64）及 `llvm-c-eh-x64`（amd64），两者均须将
-当前仓库挂载到 `/work`，安装完整 LLVM 23.1.3 SDK、make 和 git。脚本检查架构和挂载，
-不自动创建容器或安装依赖；启动原本停止的容器，并在结束时恢复停止状态，原本运行的
-容器保持运行。x64 在 Apple Silicon 上使用 Rosetta，不能代替原生 x64 验收。
+三个 host 分别在对应 macOS／Linux 环境运行上述入口；脚本不感知容器。
+容器挂载和调用示例见 [LLD 维护说明](../lld/README.md)，准备环境时还须具备 make 和 git；
+执行命令改为 `/work/scripts/build_llvm_c_eh.sh`。
 
 普通构建不运行维护脚本。
 macOS 维护入口显式区分普通验证与 UBSan 验证所用链接器，规则见
 [开发方案 §7.3](../../../docs/engineering/c-ir-llvm-exception-plugin-dev.md#73-macos-插件产物补齐)。
-执行前须已有 `toolchain/test_tools/lld/macos-arm64/` 补丁 LLD；缺失时按
+执行前须已有 `toolchain/llvm/macos-arm64/bin/lld` 补丁 LLD；缺失时按
 [LLD 维护说明](../lld/README.md)手工预构建，插件脚本不会自动构建它。
 维护脚本将中间产物和验证日志保存在仓库 `build/llvm-c-eh/` 中。
 仓库全量回归会清理 `build/` 和根 `temp/`，须与独立插件验证顺序执行；需要保留的

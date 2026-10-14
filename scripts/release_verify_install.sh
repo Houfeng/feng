@@ -253,14 +253,12 @@ for platform in "${LINUX_PLATFORMS[@]}"; do
     die "installed compiler runtime root not found: ${platform}"
 done
 
-for tool in clang lld ld.lld llvm-ar llvm-ranlib lldb lldb-dap lldb-argdumper; do
+for tool in clang lld ld.lld ld64.lld llvm-ar llvm-ranlib lldb lldb-dap lldb-argdumper; do
   [[ -x "${LLVM_BIN}/${tool}" ]] ||
     die "installed LLVM tool is missing or not executable: ${tool}"
 done
 case "${HOST_PLATFORM}" in
   macos-arm64)
-    [[ -x "${LLVM_BIN}/ld64.lld" ]] ||
-      die "installed ld64.lld is missing or not executable"
     [[ -x "${LLVM_BIN}/debugserver" ]] ||
       die "installed debugserver is missing or not executable"
     ;;

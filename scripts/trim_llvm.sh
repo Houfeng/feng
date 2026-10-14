@@ -274,9 +274,7 @@ trim_clang() {
 trim_lld() {
   copy_executable lld
   ln -s lld "${STAGING_DIR}/bin/ld.lld"
-  if [[ "${PLATFORM}" == macos-* ]]; then
-    ln -s lld "${STAGING_DIR}/bin/ld64.lld"
-  fi
+  ln -s lld "${STAGING_DIR}/bin/ld64.lld"
 }
 
 # Copy LLVM's target-independent archive tool and ranlib entry.
@@ -504,7 +502,7 @@ write_metadata() {
 Included:
 - bin/clang
 - bin/lld and bin/ld.lld -> lld
-- bin/ld64.lld -> lld (macOS)
+- bin/ld64.lld -> lld (Mach-O targets on every host)
 - bin/llvm-ar and bin/llvm-ranlib -> llvm-ar
 - bin/lldb and bin/lldb-dap
 - bin/lldb-argdumper

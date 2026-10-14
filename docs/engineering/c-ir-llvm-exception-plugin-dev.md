@@ -291,7 +291,7 @@ C++ 异常 runtime。正常使用不输出逐函数转换日志。
 | 位置 | 内容与职责 |
 | --- | --- |
 | `third_party/llvm-c-eh/` | 独立协议头文件、Pass 源码、构建配置、测试及使用说明；可在无 Feng 源码和 runtime 的环境中构建、验证 |
-| `scripts/build_llvm_c_eh.sh` | 仓库维护入口；选择全部或单个 host，发现／覆盖完整 SDK，手工执行构建、测试和预构建产物安装 |
+| `scripts/build_llvm_c_eh.sh` | 当前 host 的仓库维护入口；发现／覆盖完整 SDK，手工执行构建、测试和预构建产物安装 |
 | `toolchain/llvm-c-eh/<host>/` | 通过验证的插件动态库、配套协议头文件及许可证；供编译与分发使用 |
 
 插件目录与 `toolchain/llvm/` 并列。现有 `scripts/trim_llvm.sh` 会替换 LLVM 的 host
@@ -313,26 +313,24 @@ C++ 异常 runtime。正常使用不输出逐函数转换日志。
 
 ## 7. 手工构建与分发流程
 
-维护入口要求（2026-09-23 人工确认）：
+维护入口要求（2026-10-14 人工确认）：
 
-- 不指定平台时构建 §6 的全部三个 host；`--platform=<host>` 只构建指定 host。
+- 在 §6 对应的 macOS／Linux host 上执行，只构建当前 host；省略 `--platform`
+  时从当前系统和 CPU 架构推导，显式指定时必须与当前 host 一致。
 - `--llvm-root=<path>` 为可选覆盖；省略时在对应构建环境查找已安装的完整
   LLVM 23.1.3 SDK，校验版本和必要组件，找不到时明确报错，不自动安装工具链。
 - 独立工程统一使用 Makefile，不再依赖 CMake／Ninja；从 `llvm-config` 读取 SDK
   编译配置，保留导出入口、无 SDK RPATH 和不另链接 LLVM 的规则。
-- 全平台维护入口为 macOS ARM64：macOS 在本机执行，Linux 分别在已准备的本机
-  Apple Container `llvm-c-eh-arm64`／`llvm-c-eh-x64` 中执行。每个容器须将当前仓库
-  挂载到 `/work` 并安装完整 SDK；脚本校验架构和挂载，不自动安装 SDK 或创建环境。
-  仅停止本次脚本启动的容器，不影响原本运行的容器。
-- 显式 SDK 路径属于所选 host 的构建环境，须与 `--platform` 一起使用；全平台模式
-  由各环境独立发现 SDK。无兼容 SDK、构建或验证失败均返回非零；全平台模式仍完成
-  其他 host 的尝试并汇总结果，不用某个平台成功代替整体成功。
+- 脚本不感知容器；调用方决定执行环境和目录挂载，容器用法见
+  [README](../../third_party/llvm-c-eh/README.md#独立构建)。
+- 显式 SDK 路径属于当前 host 的构建环境。无兼容 SDK、构建或验证失败均返回非零；
+  三个 host 的制品分别验证，不用某个平台成功代替整体成功。
 
-选择容器的依据：当前 `build_libunwind.sh` 也是在 macOS／Linux 对应 CPU 环境分别
+原生构建的依据：当前 `build_libunwind.sh` 也是在 macOS／Linux 对应 CPU 环境分别
 构建，只在 Linux 切换 GNU／musl。现有 Linux sysroot 不含 C++ 标准库开发文件，
 实际交叉编译 `#include <vector>` 报头文件缺失，亦没有 Linux LLVM 开发 SDK。
 理论上补齐这些依赖可以交叉构建插件，但仍需在 Linux 加载验证。本阶段不扩展
-sysroot 或新增交叉 SDK 管理，使用人工已授权的 Apple Container。
+sysroot 或新增交叉 SDK 管理。
 
 当前配套 LLVM **23.1.3**。构建需要完整开发 SDK 的头文件、构建信息及必要工具；
 已剪裁的发行工具链不作为完整 SDK。维护脚本负责以下顺序：
@@ -349,8 +347,8 @@ sysroot 或新增交叉 SDK 管理，使用人工已授权的 Apple Container。
 
 维护构建记录只保留在 `build/`：插件的 `build-info.txt`、`source-files.sha256` 位于
 `build/llvm-c-eh/maintainer-<host>/`；补丁 LLD 的 `build-info.txt` 和 `SHA256SUMS`
-位于 `build/test-lld/macos-arm64/`。`toolchain/llvm-c-eh/` 与
-`toolchain/test_tools/lld/` 不保存或分发上述记录文件，已生成的同名文件也须移除。
+位于 `build/lld/<host>/`。`toolchain/` 不保存或分发上述记录文件，
+已生成的同名文件也须移除。
 
 若同一插件产物不能兼容 bundled 与宿主 Clang，记录具体构建差异并提交人工决策，
 不能自动增加第二套实现、回退到普通 C 异常路径或将版本号检查当作兼容通过。
@@ -382,6 +380,11 @@ Feng 用户发行包的安装路径与组装由[工具链接入方案](./feng-ll
 预编译插件与宿主补丁版本的兼容性由完整回归验证，不改变维护入口的 SDK 版本。
 
 ### 7.2 UBSan 专用预构建 LLD
+
+2026-10-13 人工批准将补丁 LLD 扩展为三个 host 的测试／发行共用制品。
+当前来源、补丁、维护入口、依赖基线和验收以 [LLD 维护说明](../../third_party/lld/README.md)
+为准；普通与 UBSan 配置使用同一 `toolchain/llvm/<host>/bin/lld`。
+本节余下内容及 §7.3 的原版／测试专用区分保留为历史实施记录，不再定义当前选择规则。
 
 2026-09-24 人工批准：I04 的补丁 LLD 仅用于 macOS UBSan 验证，维护者手工预构建
 并验证后长期复用。后续人工批准将测试工具统一放入 `toolchain/test_tools/`，由现有

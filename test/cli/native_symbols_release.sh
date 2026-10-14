@@ -15,7 +15,7 @@ printf '0.1.0\n' > "$source_root/VERSION"
 printf '/* Small cross-format fixture; never executed. */\nint fixture(void) { return 0; }\n' > "$work/input.c"
 for host in "${hosts[@]}"; do
     case "$host" in
-        macos-arm64) triple=arm64-apple-macosx; extension=dylib; extra=(debugserver ld64.lld);;
+        macos-arm64) triple=arm64-apple-macosx; extension=dylib; extra=(debugserver);;
         linux-arm64-gnu) triple=aarch64-unknown-linux-gnu; extension=so; extra=(lldb-server);;
         linux-x64-gnu) triple=x86_64-unknown-linux-gnu; extension=so; extra=(lldb-server);;
     esac
@@ -53,6 +53,7 @@ for host in "${hosts[@]}"; do
         printf '#!/bin/sh\nexit 0\n' > "$llvm/bin/$tool"
         chmod +x "$llvm/bin/$tool"
     done
+    ln -s lld "$llvm/bin/ld64.lld"
     for plugin in llvm-c-eh llvm-native-symbols; do
         plugin_root="$source_root/toolchain/$plugin/$host"
         mkdir -p "$plugin_root/lib"

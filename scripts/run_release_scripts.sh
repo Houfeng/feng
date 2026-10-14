@@ -199,9 +199,7 @@ create_source_root() {
       "${source_root}/toolchain/llvm/${host_platform}/bin/ld.lld" \
       "${source_root}/toolchain/llvm/${host_platform}/bin/llvm-ranlib"
     ln -s lld "${source_root}/toolchain/llvm/${host_platform}/bin/ld.lld"
-    if [[ "${host_platform}" == macos-* ]]; then
-      ln -s lld "${source_root}/toolchain/llvm/${host_platform}/bin/ld64.lld"
-    fi
+    ln -s lld "${source_root}/toolchain/llvm/${host_platform}/bin/ld64.lld"
     ln -s llvm-ar "${source_root}/toolchain/llvm/${host_platform}/bin/llvm-ranlib"
     case "${host_platform}" in
       macos-arm64) tool="debugserver" ;;

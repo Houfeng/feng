@@ -91,7 +91,7 @@ feng-<version>-<platform>/
 │   │   │   ├── clang          # C/LLVM 后端驱动
 │   │   │   ├── lld            # LLVM linker，macOS / Linux 最终链接使用
 │   │   │   ├── ld.lld -> lld  # Clang / driver 调用入口
-│   │   │   ├── ld64.lld -> lld # macOS host 的 Mach-O 链接入口
+│   │   │   ├── ld64.lld -> lld # 各 host 的 Mach-O 链接入口
 │   │   │   ├── llvm-ar        # 跨目标静态归档工具
 │   │   │   ├── llvm-ranlib    # 跨目标静态归档索引工具
 │   │   │   ├── lldb           # 命令行调试器
@@ -128,7 +128,7 @@ feng-<version>-<platform>/
 - `lib/` 按完整目标平台分目录。三份分发包均包含五份 runtime；macOS runtime 在合法 macOS 环境构建，Linux runtime 使用对应 sysroot 构建。发布时校验对象格式、CPU 架构和平台，禁止跨平台或 libc ABI 复用。
 - runtime 成员校验区分原生对象与 bitcode：原生对象沿用 `file` 的格式和 CPU 检查；bitcode 由校验环境 `PATH` 中的 host `llvm-dis` 解码，脚本核对原始 target triple 的 CPU、OS 及 Linux GNU／musl 标记。工具缺失、无法解码或目标不匹配均报错，不跳过检查。`llvm-dis` 只属于本机／CI 的发行校验依赖，不随 Feng 分发，也不进入编译器的工具查找链；校验环境须提供可读取当前 bitcode 的版本，CI 组装任务复用现有 LLVM 安装步骤。正常用户安装和使用 Feng 不依赖它。
 - `include/` 仅存放一份平台无关的 Feng 头文件。其中 `feng_generated.h` 为生成 C 提供 SDK-free 编译所需的自包含声明闭包，`feng_runtime.h` 与 `feng_runtime_contract.inc` 定义 runtime 公共 ABI；正常目标的标准和系统头文件仍由目标 SDK / sysroot 提供，不得复制 Apple SDK 头文件。
-- `toolchain/llvm/` 保持 LLVM 官方包布局，所有工具来自同一版本、同一 host 平台包。每份 Linux 分发包只包含当前 host 架构的一份 LLVM，同时支持 GNU 和 musl 目标。
+- `toolchain/llvm/` 保持 LLVM 官方包布局，工具使用同一 LLVM 版本及当前 host 格式。LLD 使用同版本源码加已维护补丁构建，其余工具仍来自官方 host 平台包。每份 Linux 分发包只包含当前 host 架构的一份 LLVM，同时支持 GNU 和 musl 目标。补丁、维护入口及验收要求见 [LLD 维护说明](../../third_party/lld/README.md)。测试与发行共用这一份 LLD，不再分发 `toolchain/test_tools/lld/`。
 - `toolchain/llvm-c-eh/` 从仓库同名目录的 `<host-platform>/` 原样复制，包含插件、头文件与许可证；不按目标平台重复装入。macOS 签名复用现有 Mach-O 文件遍历。维护构建规则见 [插件开发方案](./c-ir-llvm-exception-plugin-dev.md)，本阶段接入不改变 Feng 异常后端。
 - `toolchain/llvm-native-symbols/` 的默认加载、host 分发、开发链接和预构建归档要求统一见[原生符号插件方案 §8](./feng-native-symbol-normalization-dev.md#8-默认接入与-host-分发)。
 - `toolchain/sysroot/` 按完整 Linux 目标平台分目录，保留编译和链接所需文件及目录关系，移除 GCC、binutils 和 musl.cc 工具。native 与交叉编译共用 sysroot，调用参数见 [feng-build.md](../specifications/feng-build.md)。
@@ -152,10 +152,10 @@ feng-<version>-<platform>/
   - 来源：LLVM 官方 host 平台预编译包。
   - 版本：`23.1.3`。
   - 工具：`clang`。
-  - 工具：`lld`、`ld.lld`；macOS 另有 `ld64.lld -> lld`。
+  - 工具：`lld`、`ld.lld -> lld`、`ld64.lld -> lld`，均只分发 host 版本。
   - 工具：`llvm-ar`、`llvm-ranlib`。
   - 工具：`lldb`、`lldb-dap`、`lldb-argdumper`、`debugserver` / `lldb-server`。
-  - 脚本：`scripts/fetch_llvm.sh`、`scripts/trim_llvm.sh`。
+  - 脚本：`scripts/fetch_llvm.sh`、`scripts/trim_llvm.sh`；随后通过 `scripts/build_lld.sh` 安装统一补丁 LLD。
   - Linux host 私有运行库（§5.2）
     - AlmaLinux 8.10：`libxml2 2.9.7`、`xz 5.2.4`、`zlib 1.2.11`、`libgcc 8.5.0`。
     - AlmaLinux 9.8：`Python 3.14.7`。
@@ -163,7 +163,7 @@ feng-<version>-<platform>/
     - host 下限：glibc `2.34`。
 - LLVM C EH
   - 使用预构建 Release 插件，LLVM 版本与上述工具链一致；普通构建和 CI 不现场构建插件。
-  - `toolchain/test_tools/` 中的补丁 LLD 仅用于 macOS UBSan 测试，随工具链预构建归档分发；发行组装只复制前述 LLVM、插件和 sysroot 子目录，不包含测试工具，也不替换 bundled LLD。
+  - 测试与发行共用 `toolchain/llvm/<host-platform>/bin/lld` 中的补丁 LLD；维护入口及校验要求见 [LLD 维护说明](../../third_party/lld/README.md)。
 - sysroot
   - macOS（§5.1）：来自 Xcode 或 Xcode Command Line Tools，不随 Feng 分发，不固定版本。
   - GNU/Linux（§5.3）
@@ -211,7 +211,7 @@ macOS 全量回归步骤从 `DEVELOPER_DIR` 推导当前 Xcode 的 `SharedFramew
 
 Linux 全量回归步骤固定使用 `LANG=C.UTF-8` 和 `LC_ALL=C.UTF-8`，使依赖 POSIX 字符宽度接口的标准库测试不受 job container 默认 `C` locale 影响。
 
-macOS 任务生成 `macos-arm64` runtime；两个 Linux 任务分别使用同架构 GNU / musl sysroot 生成该架构的两份 runtime。各 host 平台的精简 LLVM 产物位于仓库 `toolchain/llvm/<host-platform>/`，四份 Linux 目标 sysroot 位于仓库 `toolchain/sysroot/<platform>/`，均由 git lfs 管理。预构建归档还须包含 `toolchain/llvm-c-eh/<host-platform>/` 和 `toolchain/test_tools/`，由同一次 `toolchain-prebuilt-fetch.sh` 恢复；CI 不再为测试工具单独执行 LFS 下载。补丁 LLD 的完整性、版本和实际选择在 `test-sanitize` 前置验证，环境仅对该阶段生效，具体配置见 [接入方案](./feng-llvm-c-eh-integration-dev.md#4-macos-ubsan-测试链接器)。
+macOS 任务生成 `macos-arm64` runtime；两个 Linux 任务分别使用同架构 GNU / musl sysroot 生成该架构的两份 runtime。各 host 平台的精简 LLVM 产物位于仓库 `toolchain/llvm/<host-platform>/`，四份 Linux 目标 sysroot 位于仓库 `toolchain/sysroot/<platform>/`，均由 git lfs 管理。预构建归档还须包含 `toolchain/llvm-c-eh/<host-platform>/`，由同一次 `toolchain-prebuilt-fetch.sh` 恢复。补丁 LLD 的完整性、版本和实际选择在 `test-sanitize` 前置验证，具体配置见 [接入方案](./feng-llvm-c-eh-integration-dev.md#4-macos-ubsan-测试链接器)。
 
 版本 tag push 或手动试发的三个原生构件任务全部成功后，独立汇聚任务下载三份构件并组装三份 `feng-<version>-<platform>.zip`。因此发布流程不要求 Linux 生成 macOS runtime，也不要求 macOS 或任一 Linux host 单独产生完整 release zip。普通分支 push 与 pull request 不执行该汇聚任务。
 

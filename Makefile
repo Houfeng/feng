@@ -142,8 +142,8 @@ RUNTIME_AR := $(LLVM_LAYOUT_LINK)/bin/llvm-ar
 ifeq ($(_HOST_OS),macos)
 CEH_LIBRARY := lib/llvm_c_eh.dylib
 NATIVE_SYMBOLS_LIBRARY := lib/llvm_native_symbols.dylib
-# Clang's existing tool search selects this linker only during sanitizer testing.
-TEST_LLD_ROOT := $(CURDIR)/toolchain/test_tools/lld/$(HOST_PLATFORM)
+# Host sanitizer Clang selects the same bundled linker used by releases.
+TEST_LLD_ROOT := $(CURDIR)/toolchain/llvm/$(HOST_PLATFORM)
 SANITIZE_LDFLAGS := -fuse-ld=lld
 test-sanitize: export COMPILER_PATH := $(TEST_LLD_ROOT)/bin
 MACOS_SDK_PATH := $(shell xcrun --sdk macosx --show-sdk-path 2>/dev/null)
@@ -199,7 +199,7 @@ RUNTIME_UNWIND_$(1) := extlib/$(1)/$$(STATIC_LIB_PREFIX)feng_unwind$$(STATIC_LIB
 
 $$(OBJ_DIR)/runtime/$(1)/%.o: src/runtime/%.c Makefile | runtime-platform-inputs
 	@mkdir -p $$(dir $$@)
-	$$(RUNTIME_CC) $$(CPPFLAGS) $$(HOST_CPPFLAGS) $$(CFLAGS) $$(RUNTIME_FLAGS_$(1)) -flto=thin $$(DEPFLAGS) -c $$< -o $$@
+	$$(RUNTIME_CC) $$(CPPFLAGS) $$(HOST_CPPFLAGS) $$(CFLAGS) $$(RUNTIME_FLAGS_$(1)) -fexceptions -flto=thin $$(DEPFLAGS) -c $$< -o $$@
 
 $$(LIB_DIR)/$(1)/$$(STATIC_LIB_PREFIX)feng_runtime$$(STATIC_LIB_EXT): $$(RUNTIME_OBJS_$(1)) $$(RUNTIME_UNWIND_$(1)) | toolchain-layout
 	@mkdir -p $$(dir $$@)
@@ -275,8 +275,10 @@ test-normal: check-clang check-cc
 test-sanitize: export ASAN_OPTIONS := $(if $(ASAN_OPTIONS),$(ASAN_OPTIONS):)detect_leaks=1
 test-sanitize: check-clang check-cc
 ifeq ($(_HOST_OS),macos)
-	@test -x "$(TEST_LLD_ROOT)/bin/ld64.lld" || { echo "error: missing macOS UBSan linker; restore the toolchain prebuilt archive" >&2; exit 1; }
-	@test "$$('$(TEST_LLD_ROOT)/bin/ld64.lld' --version)" = "Feng UBSan test tools patch 1 LLD 23.1.3"
+	@test -x "$(TEST_LLD_ROOT)/bin/ld64.lld" || { echo "error: missing bundled macOS linker; restore the toolchain prebuilt archive" >&2; exit 1; }
+	@. third_party/lld/source.env; case "$$('$(TEST_LLD_ROOT)/bin/ld64.lld' --version)" in \
+	  "Feng patch $$LLD_PATCH_REVISION LLD $$LLD_VERSION"|"Feng patch $$LLD_PATCH_REVISION LLD $$LLD_VERSION "*) ;; \
+	  *) echo "error: bundled LLD does not match the maintained patch" >&2; exit 1;; esac
 	@$(CC) -### -fuse-ld=lld -fsanitize=undefined -fsanitize=address -x c /dev/null -o /dev/null 2>&1 | grep -F '"$(TEST_LLD_ROOT)/bin/ld64.lld"' >/dev/null || { echo "error: Clang did not select the macOS UBSan linker" >&2; exit 1; }
 endif
 	$(MAKE) clean
