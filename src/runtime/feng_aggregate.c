@@ -29,9 +29,18 @@ static void feng_visit_aggregate_managed_slots(
         FengManagedSlotVisitor visitor,
         void *ctx) {
     const FengManagedSlotDescriptor *slots = desc->managed_slots;
-    size_t count = desc->managed_slot_count;
+    size_t begin = 0U;
+    size_t end = desc->managed_slot_count;
     char *base = (char *)value;
-    for (size_t i = 0; i < count; i++) {
+    /* Descriptors supply valid field offsets and an in-range slot index. */
+    if (desc->managed_slot_choice_offset != 0U) {
+        uint32_t index;
+        memcpy(&index, base + desc->managed_slot_choice_offset - 1U,
+               sizeof(index));
+        begin = (size_t)index;
+        end = begin + 1U;
+    }
+    for (size_t i = begin; i < end; i++) {
         const FengManagedSlotDescriptor *slot = &slots[i];
         void *slot_addr = base + slot->offset;
         switch (slot->kind) {

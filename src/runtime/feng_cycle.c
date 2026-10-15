@@ -60,7 +60,7 @@
  *                   release_children callback is NOT invoked on cycle-path
  *                   frees: components are reclaimed as a unit, and BLACK
  *                   external children referenced by white objects are
- *                   handled separately (see free_external_refs_of_whites). */
+ *                   released after severing intra-white edges. */
 
 #include "runtime/feng_runtime.h"
 #include "runtime/feng_runtime_internal.h"
@@ -233,7 +233,17 @@ static void cyc_aggregate_for_each_pointer_slot(
     if (value == NULL || desc == NULL) {
         return;
     }
-    for (size_t i = 0U; i < desc->managed_slot_count; ++i) {
+    size_t begin = 0U;
+    size_t end = desc->managed_slot_count;
+    /* Keep the same slot selection as the aggregate lifecycle walker. */
+    if (desc->managed_slot_choice_offset != 0U) {
+        uint32_t index;
+        memcpy(&index, value + desc->managed_slot_choice_offset - 1U,
+               sizeof(index));
+        begin = (size_t)index;
+        end = begin + 1U;
+    }
+    for (size_t i = begin; i < end; ++i) {
         const FengManagedSlotDescriptor *s = &desc->managed_slots[i];
         unsigned char *p = value + s->offset;
         switch (s->kind) {
@@ -284,9 +294,8 @@ static void cyc_aggregate_for_each_pointer_slot(
  * to `visit(child, ctx)`. The traversal handles all four built-in tags:
  *
  *   OBJECT/CLOSURE — uses descriptor->managed_fields (static trace table
- *                    emitted by codegen). After the §7.2 flatten step the
- *                    table already enumerates aggregate-embedded slots, so
- *                    no per-tag aggregate walk is required here.
+ *                    emitted by codegen). Dynamic aggregate fields retain
+ *                    their aggregate_desc and use the aggregate walker.
  *   ARRAY          — dispatches on element_kind: TRIVIAL skips, MANAGED_POINTER
  *                    iterates items[0..length) as void*-sized slots, AGGREGATE
  *                    walks each element via element_aggregate's slot table.
@@ -533,9 +542,17 @@ static void cyc_for_each_child_slot(FengManagedHeader *header,
             const FengTypeDescriptor *desc = header->desc;
             for (size_t i = 0U; i < desc->managed_field_count; ++i) {
                 size_t off = desc->managed_fields[i].offset;
-                FengManagedHeader **slot =
-                    (FengManagedHeader **)((char *)header + off);
-                visit(slot, *slot, ctx);
+                if (desc->managed_fields[i].aggregate_desc != NULL) {
+                    cyc_aggregate_for_each_pointer_slot(
+                        (unsigned char *)header + off,
+                        desc->managed_fields[i].aggregate_desc,
+                        visit,
+                        ctx);
+                } else {
+                    FengManagedHeader **slot =
+                        (FengManagedHeader **)((char *)header + off);
+                    visit(slot, *slot, ctx);
+                }
             }
             break;
         }
@@ -580,24 +597,21 @@ static inline bool is_white(const FengManagedHeader *h) {
         && cyc_color(h) == CYC_COLOR_WHITE;
 }
 
-/* ---- Phase 0: restore intra-white in-refcount ------------------------- */
+/* ---- Phase 0: restore white-owned references ------------------------- */
 /*
- * After mark_grey/scan, every white object's refcount has been decremented
- * once per inbound intra-grey-component edge AND never restored (scan_black
- * only restored objects on the BLACK closure). To make the §13.2 Phase 1.5
- * resurrection check meaningful — "actual rc > intra-component in-degree"
- * — we re-inflate each white's refcount by exactly the number of inbound
- * edges from other whites. After Phase 0 a white's refcount equals its
- * "would-be" rc if the component were live: external rc (== 0 here, since
- * the cycle is otherwise unreachable) + intra-white in-edges. */
+ * scan_black restores only BLACK-owned edges. Restore every WHITE-owned
+ * edge, including edges to BLACK children, before user code can read or
+ * replace fields. Finalizers then observe real ownership counts, and
+ * survivors keep all their outgoing references. Free-set outgoing edges
+ * are released after Phase 1.5 using the final field values. */
 static void phase0_restore_visit(FengManagedHeader *child, void *ctx) {
     (void)ctx;
-    if (is_white(child)) {
+    if (child != NULL && child->refcount != FENG_REFCOUNT_IMMORTAL) {
         cyc_inc_rc(child);
     }
 }
 
-static void phase0_restore_intra_white_rc(WhiteList *wl) {
+static void phase0_restore_owned_refs(WhiteList *wl) {
     for (size_t i = 0U; i < wl->count; ++i) {
         cyc_for_each_child(wl->buf[i], phase0_restore_visit, NULL);
     }
@@ -712,12 +726,24 @@ static void phase15_mark_survivors_bfs(WhiteList *wl, WhiteAux *aux,
         /* Walk children inline to enqueue any white not yet survived. */
         if (s->tag == FENG_TYPE_TAG_OBJECT || s->tag == FENG_TYPE_TAG_CLOSURE) {
             for (size_t k = 0U; desc != NULL && k < desc->managed_field_count; ++k) {
-                FengManagedHeader **slot =
-                    (FengManagedHeader **)((char *)s + desc->managed_fields[k].offset);
-                FengManagedHeader *c = *slot;
-                if (is_white(c) && !(c->cycle_state & CYC_FLAG_VISITED)) {
-                    c->cycle_state |= CYC_FLAG_VISITED;
-                    queue[qtail++] = c;
+                if (desc->managed_fields[k].aggregate_desc != NULL) {
+                    struct {
+                        FengManagedHeader **q;
+                        size_t *tail_p;
+                    } bctx = { queue, &qtail };
+                    cyc_aggregate_for_each_pointer_slot(
+                        (unsigned char *)s + desc->managed_fields[k].offset,
+                        desc->managed_fields[k].aggregate_desc,
+                        cyc_bfs_enqueue_white,
+                        &bctx);
+                } else {
+                    FengManagedHeader **slot =
+                        (FengManagedHeader **)((char *)s + desc->managed_fields[k].offset);
+                    FengManagedHeader *c = *slot;
+                    if (is_white(c) && !(c->cycle_state & CYC_FLAG_VISITED)) {
+                        c->cycle_state |= CYC_FLAG_VISITED;
+                        queue[qtail++] = c;
+                    }
                 }
             }
         } else if (s->tag == FENG_TYPE_TAG_ARRAY) {
@@ -778,7 +804,9 @@ static inline bool is_free_member(const FengManagedHeader *h) {
  *   (b) Free → survivor edges: dec the survivor's rc once per such edge so
  *       the survivor's post-collection rc reflects only refs from objects
  *       that still exist (other survivors + true externals).
- * (a) handlers run as the survivor pass; (b) as the free pass. */
+ * (c) Clear every free → white slot before any white allocation is freed,
+ *     so Phase 2 visits only external children, never freed white memory.
+ * (a) handlers run as the survivor pass; (b/c) as the free pass. */
 static void survivor_sanitise_visit(FengManagedHeader **slot,
                                     FengManagedHeader *child,
                                     void *ctx) {
@@ -791,12 +819,14 @@ static void survivor_sanitise_visit(FengManagedHeader **slot,
 static void free_sanitise_visit(FengManagedHeader **slot,
                                 FengManagedHeader *child,
                                 void *ctx) {
-    (void)slot;
     (void)ctx;
     if (is_survivor(child)) {
         /* Free → survivor edge dies with us. Dec survivor's rc so its
          * post-collection rc is correct. */
         cyc_dec_rc(child);
+    }
+    if (is_white(child)) {
+        *slot = NULL;
     }
 }
 
@@ -827,28 +857,38 @@ static void phase15_restore_survivor_state(WhiteList *wl) {
              * enqueued it. That candidate remains owned by g_candidates and
              * must stay discoverable after this collection round. */
             h->cycle_state &= ~CYC_FLAG_VISITED;
+            /* External child destruction in Phase 2 can release survivors.
+             * Do not leave those pointers in the pending free list. */
+            wl->buf[i] = NULL;
         }
     }
 }
 
 /* ---- Phase 2: free unsurvived whites --------------------------------- */
 /*
- * No release_children invocation: the only remaining out-edges from a free
- * member point either to other free members (their memory is also being
- * freed; no rc maintenance required) or to BLACK external objects whose
- * refcount was already balanced by mark_grey's decrement of this dying
- * edge. Survivor → free and free → survivor edges have been handled by
- * phase15_sanitise. Built-in values, including an array's tail-inline payload,
- * are freed with their single owning allocation. */
+ * No release_children invocation: Phase 1.5 severed all intra-white edges
+ * and removed survivors from wl. Release the remaining external fields
+ * through normal ARC, then free each allocation (including array payloads).
+ * A child finalizer may release a survivor without invalidating this list. */
+static void free_external_visit(FengManagedHeader **slot,
+                                 FengManagedHeader *child,
+                                 void *ctx) {
+    (void)ctx;
+    *slot = NULL;
+    feng_release(child);
+}
+
+/* Free-set entries remain valid throughout external-child callbacks. */
 static void phase2_free_unsurvived(WhiteList *wl) {
     for (size_t i = 0U; i < wl->count; ++i) {
         FengManagedHeader *h = wl->buf[i];
-        if (!is_free_member(h)) {
+        if (h == NULL) {
             continue;
         }
         /* Phase 1 temporary releases may have added the white to the next
          * candidate buffer. Remove it before invalidating the allocation. */
         feng_cycle_remove_candidate(h);
+        cyc_for_each_child_slot(h, free_external_visit, NULL);
         switch (h->tag) {
             case FENG_TYPE_TAG_ARRAY: {
                 free(h);
@@ -866,9 +906,9 @@ static void phase2_free_unsurvived(WhiteList *wl) {
 /* ---- Whole-set free for the no-finalizer fast path ------------------- */
 /*
  * When no white has a user finalizer there is no resurrection window, so we
- * skip Phase 0/1/1.5 entirely and free the whole white set. Same correctness
- * argument as phase2: BLACK external children's rc is already correct; intra-
- * white edges die together. */
+ * skip Phase 0/1/1.5 entirely and free the whole white set. BLACK external
+ * children's rc retains mark_grey's decrement; intra-white edges die
+ * together. */
 static void free_whole_white_set(WhiteList *wl) {
     for (size_t i = 0U; i < wl->count; ++i) {
         FengManagedHeader *h = wl->buf[i];
@@ -959,8 +999,8 @@ static void cycle_collect_one_locked(void) {
     }
 
     /* Slow path (§13.2 cycle-with-finalizer two-phase collection):
-     *   Phase 0   : restore intra-white refcount inflation so Phase 1.5's
-     *               "rc > intra-white in-degree" comparison is meaningful.
+     *   Phase 0   : restore all WHITE-owned references so finalizers and
+     *               resurrection checks use real ownership counts.
      *   Phase 1   : invoke each white's user finalizer exactly once.
      *   Phase 1.5 : recompute intra-white in-degrees (finalizers may have
      *               mutated field slots), seed survivor BFS from whites
@@ -968,7 +1008,7 @@ static void cycle_collect_one_locked(void) {
      *               out-edges, sanitise survivor↔free edges.
      *   Phase 2   : free the unsurvived (free_set) members. */
 
-    phase0_restore_intra_white_rc(&whites);
+    phase0_restore_owned_refs(&whites);
     phase1_run_finalizers(&whites);
 
     WhiteAux *aux = (WhiteAux *)calloc(whites.count, sizeof(*aux));

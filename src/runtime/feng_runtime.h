@@ -483,9 +483,9 @@ typedef struct FengAggregateDescriptor {
      * a complete value whose managed slots own their references. It never
      * invokes user constructors and MUST be non-NULL. */
     const FengDefaultZeroInitDescriptor *default_zero_init;
-    /* Managed slot table in declaration order. Slots that are non-managed
-     * (trivial bytes) are NOT enumerated. */
+    /* Number of entries in managed_slots, independent of slot selection. */
     size_t managed_slot_count;
+    /* Sequential managed fields, or selectable entries including NONE. */
     const FengManagedSlotDescriptor *managed_slots;
     FengValueEqualFn equal_fn;   /* NULL => no aggregate equality support */
 
@@ -546,6 +546,12 @@ typedef struct FengAggregateDescriptor {
     /* Same closed generic static state carried by FengTypeDescriptor. Value
      * type shared methods receive this aggregate descriptor instead. */
     FengStaticBindingState *static_bindings;
+
+    /* 0: visit all slots. Otherwise, the 1-based byte position of a stored
+     * 0-based uint32_t slot index. Subtract 1 to locate that field, not to
+     * index managed_slots. The producer guarantees a valid field offset and
+     * an index less than managed_slot_count. */
+    size_t managed_slot_choice_offset;
 } FengAggregateDescriptor;
 
 /* Describes how one closed callable implementation forms a callable value.

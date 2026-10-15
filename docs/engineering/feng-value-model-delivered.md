@@ -100,8 +100,9 @@ typedef struct FengAggregateDescriptor {
     size_t size;
     /* 语言默认零值策略，见 §4；与 trivial descriptor 共用策略类型。 */
     const struct FengDefaultZeroInitDescriptor *default_zero_init;
-    /* 按声明顺序排列的托管槽位表（仅托管槽位，不含平凡字段）。 */
+    /* managed_slots 表的元素数量，不随是否选择单项而改变。 */
     size_t managed_slot_count;
+    /* 顺序模式为托管字段表；选择模式保留 NONE 项，见 §3.2.1。 */
     const FengManagedSlotDescriptor *managed_slots;
     /* 等值比较函数。NULL 表示不支持 aggregate 等值。 */
     FengValueEqualFn equal_fn;
@@ -114,16 +115,48 @@ typedef struct FengAggregateDescriptor {
     const struct FengAggregateDescriptor *const *reified_agg_deps;
     size_t reified_type_deps_count;
     const struct FengTypeDescriptor *const *reified_type_deps;
+    /* 其余既有具化元数据略；以下字段追加在完整描述符末尾。 */
+    /* 0 表示遍历全部；非零值为保存 0-based uint32_t 索引的字节偏移 + 1。 */
+    size_t managed_slot_choice_offset;
 } FengAggregateDescriptor;
 ```
 
 ### 3.2 设计要点
 
-- 描述符**只列托管槽位**，不枚举平凡字段。trivial 字段不进入任何 walker 路径；`FENG_SLOT_NONE` 仅用于运行时转发描述符表达当前无托管槽位。
+- 顺序模式只列托管槽位，不枚举平凡字段；选择模式保留 `FENG_SLOT_NONE` 候选项，使值中的索引与表项一一对应。`NONE` 在两种模式及运行时转发中均不访问托管指针。
 - `kind` 不引入回调指针；`FENG_SLOT_FORWARD` 表示该位置存放一个运行时 `FengManagedSlotDescriptor`，walker 读取后按同一个 aggregate value base 解释其 `offset` 并继续处理。
 - `nested` 字段为递归留出空间，但第一阶段（fat spec）不会用到（fat spec 只有一个 `FENG_SLOT_POINTER` 槽位 = subject）。
 - `name` 仅用于调试与诊断，不参与任何决策。
 - 静态描述符是 `static const`，由 codegen 生成；`FENG_SLOT_FORWARD` 指向的运行时描述符位于值本身内部，由 codegen 在值构造或 active 状态切换时写入。
+
+#### 3.2.1 按值选择活动 slot
+
+`managed_slot_choice_offset` 为可选的索引字段位置：`0` 保持顺序遍历全部 slots；
+非零值为该字段相对 aggregate 值基地址的字节偏移加 `1`。减 `1` 后用 `memcpy`
+读取 `uint32_t` 索引，索引本身仍为 0-based，直接选择 `managed_slots[index]`。
+索引位于偏移 `0` 时，描述符字段应为 `1`；不得对读取的索引再减 `1`。
+
+`managed_slot_count` 始终是 `managed_slots` 表的元素数量，包括表中的 `FENG_SLOT_NONE`。
+选择模式只处理被选中的一项，复用现有 kind 分派；嵌套 aggregate 仍可递归到多个托管指针。所有 slot
+偏移始终相对当前 aggregate 值基地址，选择表项不改变这个基地址。
+
+与已有 slot 偏移一样，构造者须保证索引字段的完整字节范围位于值内、表存在且索引
+小于表项数，并保证编码不溢出。这些是私有 ABI 的使用前提，不在每次遍历时重复
+检查，不承诺无效描述符的 panic 行为。未设置时保持原空表行为，不读取值中的索引。
+
+普通 aggregate walker 与循环收集的 pointer-slot walker 分别在原循环前读取索引，
+将遍历区间从 `[0, count)` 改为 `[index, index + 1)`，其余 slot 操作保持不变。
+源、目标分别选择当前活动项；assign 保持先 retain 源、再 release 目标、最后复制，
+take 保持先 release 目标、再复制、最后清空源活动指针，保留源索引及非托管字节。
+release-and-clear 仍逐槽先清空后释放，自赋值／自移动仍直接返回。
+
+`FENG_SLOT_FORWARD` 的布局、相对偏移及禁止直接再次 forward 的规则不变；新旧模式
+可通过 nested aggregate 相互嵌套，选择项也可采用原有 forward。该机制不增加公共
+runtime 函数、不改变 `feng_release` 或 aggregate API 签名。第一阶段不改变 union
+的生成布局及 forward 用法；迁移计划见 [union 布局优化方案](feng-union-layout-performance-optimize.md)。
+
+新增字段追加于完整描述符末尾，未指定时自动为零。这是私有 ABI 变更，必须重建
+受影响的 runtime、生成代码和依赖库，不能将旧描述符二进制与新 runtime 混用。
 
 ### 3.3 trivial 值不生成 `FengAggregateDescriptor`
 
@@ -337,7 +370,7 @@ runtime 负责：
 
 **接入方式：在 codegen 生成 `FengTypeDescriptor.managed_fields` 时，将含 aggregate 字段的对象按 aggregate 描述符展平成多条原始 `FengManagedFieldDescriptor`。**
 
-上述静态展平适用于 `FENG_SLOT_POINTER` 与 `FENG_SLOT_NESTED_AGGREGATE` 组成的描述符。若某个 aggregate slot 使用 `FENG_SLOT_FORWARD`，active 托管槽位由值内的运行时 `FengManagedSlotDescriptor` 决定，不能预先翻译成固定的 `FengManagedFieldDescriptor`；此类载体必须在拥有值字节与 aggregate 描述符的运行时路径中直接走 aggregate slot 遍历。
+上述静态展平适用于顺序模式的 `FENG_SLOT_POINTER` 与 `FENG_SLOT_NESTED_AGGREGATE` 描述符。若 aggregate 使用按值选择模式或 `FENG_SLOT_FORWARD`，active 托管槽位由值内信息决定，不能将全部候选项预先翻译成固定的 `FengManagedFieldDescriptor`；此类载体必须在拥有值字节与 aggregate 描述符的运行时路径中直接走 aggregate slot 遍历。
 
 具体规则：
 
