@@ -1,8 +1,10 @@
 *.vsix
 *.log
+*.local.json
 .DS_Store
 .venv/
 .smoke
+__pycache__
 local/
 node_modules/
 /website/node_modules/
@@ -13,5 +15,3 @@ temp/
 third_party/**/*.a
 third_party/**/*.o
 editors/feng-zed/target/
-__pycache__
-*.local.json
