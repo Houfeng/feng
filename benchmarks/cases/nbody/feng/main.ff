@@ -47,16 +47,15 @@ func energy(bodies: Body[!]): f64 {
 func advance(bodies: Body[!]) {
     for var i: int = 0; i < 5; i += 1 {
         for var j: int = i + 1; j < 5; j += 1 {
-            var a = bodies[i]; var b = bodies[j];
+            let a = bodies[i]; let b = bodies[j];
             let dx = a.x - b.x; let dy = a.y - b.y; let dz = a.z - b.z;
             let d2 = dx * dx + dy * dy + dz * dz; let magnitude = 0.01 / (d2 * Math.sqrt(d2));
-            a.vx -= dx * b.mass * magnitude; a.vy -= dy * b.mass * magnitude; a.vz -= dz * b.mass * magnitude;
-            b.vx += dx * a.mass * magnitude; b.vy += dy * a.mass * magnitude; b.vz += dz * a.mass * magnitude;
-            bodies[i] = a; bodies[j] = b;
+            bodies[i].vx -= dx * b.mass * magnitude; bodies[i].vy -= dy * b.mass * magnitude; bodies[i].vz -= dz * b.mass * magnitude;
+            bodies[j].vx += dx * a.mass * magnitude; bodies[j].vy += dy * a.mass * magnitude; bodies[j].vz += dz * a.mass * magnitude;
         }
     }
     for var i: int = 0; i < 5; i += 1 {
-        var b = bodies[i]; b.x += 0.01 * b.vx; b.y += 0.01 * b.vy; b.z += 0.01 * b.vz; bodies[i] = b;
+        bodies[i].x += 0.01 * bodies[i].vx; bodies[i].y += 0.01 * bodies[i].vy; bodies[i].z += 0.01 * bodies[i].vz;
     }
 }
 

@@ -1,0 +1,2455 @@
+{
+  "checks": 184,
+  "cases": [
+    "nbody",
+    "binary-trees",
+    "text-scan",
+    "fannkuch-redux",
+    "spectral-norm"
+  ],
+  "languages": [
+    "feng",
+    "cpp",
+    "rust",
+    "go",
+    "swift",
+    "csharp",
+    "csharp-aot",
+    "java"
+  ],
+  "results": [
+    {
+      "case": "nbody",
+      "input": "0",
+      "language": "feng",
+      "expected": [
+        -0.16907516382852447,
+        -0.16907516382852447
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.16907516382852447\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "0",
+      "language": "cpp",
+      "expected": [
+        -0.16907516382852447,
+        -0.16907516382852447
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.16907516382852447\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "0",
+      "language": "rust",
+      "expected": [
+        -0.16907516382852447,
+        -0.16907516382852447
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.16907516382852447\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "0",
+      "language": "go",
+      "expected": [
+        -0.16907516382852447,
+        -0.16907516382852447
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.16907516382852447\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "0",
+      "language": "swift",
+      "expected": [
+        -0.16907516382852447,
+        -0.16907516382852447
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.16907516382852447\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "0",
+      "language": "csharp",
+      "expected": [
+        -0.16907516382852447,
+        -0.16907516382852447
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.16907516382852447\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "0",
+      "language": "csharp-aot",
+      "expected": [
+        -0.16907516382852447,
+        -0.16907516382852447
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.16907516382852447\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "0",
+      "language": "java",
+      "expected": [
+        -0.16907516382852447,
+        -0.16907516382852447
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.16907516382852447\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "1",
+      "language": "feng",
+      "expected": [
+        -0.16907516382852447,
+        -0.16907495402506745
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.16907495402506745\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "1",
+      "language": "cpp",
+      "expected": [
+        -0.16907516382852447,
+        -0.16907495402506745
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.16907495402506745\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "1",
+      "language": "rust",
+      "expected": [
+        -0.16907516382852447,
+        -0.16907495402506745
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.16907495402506745\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "1",
+      "language": "go",
+      "expected": [
+        -0.16907516382852447,
+        -0.16907495402506745
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.16907495402506745\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "1",
+      "language": "swift",
+      "expected": [
+        -0.16907516382852447,
+        -0.16907495402506745
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.16907495402506745\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "1",
+      "language": "csharp",
+      "expected": [
+        -0.16907516382852447,
+        -0.16907495402506745
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.16907495402506745\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "1",
+      "language": "csharp-aot",
+      "expected": [
+        -0.16907516382852447,
+        -0.16907495402506745
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.16907495402506745\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "1",
+      "language": "java",
+      "expected": [
+        -0.16907516382852447,
+        -0.16907495402506745
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.16907495402506745\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "1000",
+      "language": "feng",
+      "expected": [
+        -0.16907516382852447,
+        -0.169087605234606
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.16908760523460623\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "1000",
+      "language": "cpp",
+      "expected": [
+        -0.16907516382852447,
+        -0.169087605234606
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.16908760523460623\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "1000",
+      "language": "rust",
+      "expected": [
+        -0.16907516382852447,
+        -0.169087605234606
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.16908760523460600\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "1000",
+      "language": "go",
+      "expected": [
+        -0.16907516382852447,
+        -0.169087605234606
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.16908760523460628\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "1000",
+      "language": "swift",
+      "expected": [
+        -0.16907516382852447,
+        -0.169087605234606
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.169087605234606\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "1000",
+      "language": "csharp",
+      "expected": [
+        -0.16907516382852447,
+        -0.169087605234606
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.169087605234606\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "1000",
+      "language": "csharp-aot",
+      "expected": [
+        -0.16907516382852447,
+        -0.169087605234606
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.169087605234606\n",
+      "stderr": ""
+    },
+    {
+      "case": "nbody",
+      "input": "1000",
+      "language": "java",
+      "expected": [
+        -0.16907516382852447,
+        -0.169087605234606
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-0.16907516382852447 -0.169087605234606\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "6",
+      "language": "feng",
+      "expected": [
+        255,
+        4,
+        64,
+        1984,
+        6,
+        16,
+        2032,
+        127
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "255\n4 64 1984\n6 16 2032\n127\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "6",
+      "language": "cpp",
+      "expected": [
+        255,
+        4,
+        64,
+        1984,
+        6,
+        16,
+        2032,
+        127
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "255\n4 64 1984\n6 16 2032\n127\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "6",
+      "language": "rust",
+      "expected": [
+        255,
+        4,
+        64,
+        1984,
+        6,
+        16,
+        2032,
+        127
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "255\n4 64 1984\n6 16 2032\n127\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "6",
+      "language": "go",
+      "expected": [
+        255,
+        4,
+        64,
+        1984,
+        6,
+        16,
+        2032,
+        127
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "255\n4 64 1984\n6 16 2032\n127\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "6",
+      "language": "swift",
+      "expected": [
+        255,
+        4,
+        64,
+        1984,
+        6,
+        16,
+        2032,
+        127
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "255\n4 64 1984\n6 16 2032\n127\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "6",
+      "language": "csharp",
+      "expected": [
+        255,
+        4,
+        64,
+        1984,
+        6,
+        16,
+        2032,
+        127
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "255\n4 64 1984\n6 16 2032\n127\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "6",
+      "language": "csharp-aot",
+      "expected": [
+        255,
+        4,
+        64,
+        1984,
+        6,
+        16,
+        2032,
+        127
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "255\n4 64 1984\n6 16 2032\n127\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "6",
+      "language": "java",
+      "expected": [
+        255,
+        4,
+        64,
+        1984,
+        6,
+        16,
+        2032,
+        127
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "255\n4 64 1984\n6 16 2032\n127\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "7",
+      "language": "feng",
+      "expected": [
+        511,
+        4,
+        128,
+        3968,
+        6,
+        32,
+        4064,
+        255
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "511\n4 128 3968\n6 32 4064\n255\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "7",
+      "language": "cpp",
+      "expected": [
+        511,
+        4,
+        128,
+        3968,
+        6,
+        32,
+        4064,
+        255
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "511\n4 128 3968\n6 32 4064\n255\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "7",
+      "language": "rust",
+      "expected": [
+        511,
+        4,
+        128,
+        3968,
+        6,
+        32,
+        4064,
+        255
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "511\n4 128 3968\n6 32 4064\n255\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "7",
+      "language": "go",
+      "expected": [
+        511,
+        4,
+        128,
+        3968,
+        6,
+        32,
+        4064,
+        255
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "511\n4 128 3968\n6 32 4064\n255\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "7",
+      "language": "swift",
+      "expected": [
+        511,
+        4,
+        128,
+        3968,
+        6,
+        32,
+        4064,
+        255
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "511\n4 128 3968\n6 32 4064\n255\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "7",
+      "language": "csharp",
+      "expected": [
+        511,
+        4,
+        128,
+        3968,
+        6,
+        32,
+        4064,
+        255
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "511\n4 128 3968\n6 32 4064\n255\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "7",
+      "language": "csharp-aot",
+      "expected": [
+        511,
+        4,
+        128,
+        3968,
+        6,
+        32,
+        4064,
+        255
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "511\n4 128 3968\n6 32 4064\n255\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "7",
+      "language": "java",
+      "expected": [
+        511,
+        4,
+        128,
+        3968,
+        6,
+        32,
+        4064,
+        255
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "511\n4 128 3968\n6 32 4064\n255\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "8",
+      "language": "feng",
+      "expected": [
+        1023,
+        4,
+        256,
+        7936,
+        6,
+        64,
+        8128,
+        8,
+        16,
+        8176,
+        511
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1023\n4 256 7936\n6 64 8128\n8 16 8176\n511\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "8",
+      "language": "cpp",
+      "expected": [
+        1023,
+        4,
+        256,
+        7936,
+        6,
+        64,
+        8128,
+        8,
+        16,
+        8176,
+        511
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1023\n4 256 7936\n6 64 8128\n8 16 8176\n511\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "8",
+      "language": "rust",
+      "expected": [
+        1023,
+        4,
+        256,
+        7936,
+        6,
+        64,
+        8128,
+        8,
+        16,
+        8176,
+        511
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1023\n4 256 7936\n6 64 8128\n8 16 8176\n511\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "8",
+      "language": "go",
+      "expected": [
+        1023,
+        4,
+        256,
+        7936,
+        6,
+        64,
+        8128,
+        8,
+        16,
+        8176,
+        511
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1023\n4 256 7936\n6 64 8128\n8 16 8176\n511\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "8",
+      "language": "swift",
+      "expected": [
+        1023,
+        4,
+        256,
+        7936,
+        6,
+        64,
+        8128,
+        8,
+        16,
+        8176,
+        511
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1023\n4 256 7936\n6 64 8128\n8 16 8176\n511\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "8",
+      "language": "csharp",
+      "expected": [
+        1023,
+        4,
+        256,
+        7936,
+        6,
+        64,
+        8128,
+        8,
+        16,
+        8176,
+        511
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1023\n4 256 7936\n6 64 8128\n8 16 8176\n511\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "8",
+      "language": "csharp-aot",
+      "expected": [
+        1023,
+        4,
+        256,
+        7936,
+        6,
+        64,
+        8128,
+        8,
+        16,
+        8176,
+        511
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1023\n4 256 7936\n6 64 8128\n8 16 8176\n511\n",
+      "stderr": ""
+    },
+    {
+      "case": "binary-trees",
+      "input": "8",
+      "language": "java",
+      "expected": [
+        1023,
+        4,
+        256,
+        7936,
+        6,
+        64,
+        8128,
+        8,
+        16,
+        8176,
+        511
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1023\n4 256 7936\n6 64 8128\n8 16 8176\n511\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "0",
+      "language": "feng",
+      "expected": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "0 0 0 0\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "0",
+      "language": "cpp",
+      "expected": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "0 0 0 0\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "0",
+      "language": "rust",
+      "expected": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "0 0 0 0\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "0",
+      "language": "go",
+      "expected": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "0 0 0 0\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "0",
+      "language": "swift",
+      "expected": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "0 0 0 0\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "0",
+      "language": "csharp",
+      "expected": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "0 0 0 0\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "0",
+      "language": "csharp-aot",
+      "expected": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "0 0 0 0\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "0",
+      "language": "java",
+      "expected": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "0 0 0 0\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "1",
+      "language": "feng",
+      "expected": [
+        1,
+        0,
+        0,
+        23
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1 0 0 23\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "1",
+      "language": "cpp",
+      "expected": [
+        1,
+        0,
+        0,
+        23
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1 0 0 23\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "1",
+      "language": "rust",
+      "expected": [
+        1,
+        0,
+        0,
+        23
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1 0 0 23\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "1",
+      "language": "go",
+      "expected": [
+        1,
+        0,
+        0,
+        23
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1 0 0 23\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "1",
+      "language": "swift",
+      "expected": [
+        1,
+        0,
+        0,
+        23
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1 0 0 23\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "1",
+      "language": "csharp",
+      "expected": [
+        1,
+        0,
+        0,
+        23
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1 0 0 23\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "1",
+      "language": "csharp-aot",
+      "expected": [
+        1,
+        0,
+        0,
+        23
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1 0 0 23\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "1",
+      "language": "java",
+      "expected": [
+        1,
+        0,
+        0,
+        23
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1 0 0 23\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "1000",
+      "language": "feng",
+      "expected": [
+        1000,
+        333,
+        333,
+        4384500
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1000 333 333 4384500\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "1000",
+      "language": "cpp",
+      "expected": [
+        1000,
+        333,
+        333,
+        4384500
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1000 333 333 4384500\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "1000",
+      "language": "rust",
+      "expected": [
+        1000,
+        333,
+        333,
+        4384500
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1000 333 333 4384500\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "1000",
+      "language": "go",
+      "expected": [
+        1000,
+        333,
+        333,
+        4384500
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1000 333 333 4384500\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "1000",
+      "language": "swift",
+      "expected": [
+        1000,
+        333,
+        333,
+        4384500
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1000 333 333 4384500\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "1000",
+      "language": "csharp",
+      "expected": [
+        1000,
+        333,
+        333,
+        4384500
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1000 333 333 4384500\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "1000",
+      "language": "csharp-aot",
+      "expected": [
+        1000,
+        333,
+        333,
+        4384500
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1000 333 333 4384500\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "1000",
+      "language": "java",
+      "expected": [
+        1000,
+        333,
+        333,
+        4384500
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1000 333 333 4384500\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "independent",
+      "language": "feng",
+      "expected": [
+        4,
+        1,
+        2,
+        154447
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "4 1 2 154447\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "independent",
+      "language": "cpp",
+      "expected": [
+        4,
+        1,
+        2,
+        154447
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "4 1 2 154447\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "independent",
+      "language": "rust",
+      "expected": [
+        4,
+        1,
+        2,
+        154447
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "4 1 2 154447\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "independent",
+      "language": "go",
+      "expected": [
+        4,
+        1,
+        2,
+        154447
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "4 1 2 154447\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "independent",
+      "language": "swift",
+      "expected": [
+        4,
+        1,
+        2,
+        154447
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "4 1 2 154447\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "independent",
+      "language": "csharp",
+      "expected": [
+        4,
+        1,
+        2,
+        154447
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "4 1 2 154447\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "independent",
+      "language": "csharp-aot",
+      "expected": [
+        4,
+        1,
+        2,
+        154447
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "4 1 2 154447\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "independent",
+      "language": "java",
+      "expected": [
+        4,
+        1,
+        2,
+        154447
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "4 1 2 154447\n",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "partial",
+      "language": "feng",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "partial",
+      "language": "cpp",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "partial",
+      "language": "rust",
+      "invalid": true,
+      "exit_code": 101,
+      "stdout": "",
+      "stderr": "\nthread 'main' (1518) panicked at /workspace/feng/temp/spectral-norm-20261015/repo/benchmarks/cases/text-scan/rust/main.rs:6:5:\nassertion `left == right` failed\n  left: 7\n right: 0\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    },
+    {
+      "case": "text-scan",
+      "input": "partial",
+      "language": "go",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "partial",
+      "language": "swift",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "partial",
+      "language": "csharp",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "partial",
+      "language": "csharp-aot",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "partial",
+      "language": "java",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "severity",
+      "language": "feng",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "severity",
+      "language": "cpp",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "severity",
+      "language": "rust",
+      "invalid": true,
+      "exit_code": 101,
+      "stdout": "",
+      "stderr": "\nthread 'main' (1562) panicked at /workspace/feng/temp/spectral-norm-20261015/repo/benchmarks/cases/text-scan/rust/main.rs:10:9:\nassertion failed: matches!(level, b'I' | b'W' | b'E')\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    },
+    {
+      "case": "text-scan",
+      "input": "severity",
+      "language": "go",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "severity",
+      "language": "swift",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "severity",
+      "language": "csharp",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "severity",
+      "language": "csharp-aot",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "severity",
+      "language": "java",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "digit",
+      "language": "feng",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "digit",
+      "language": "cpp",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "digit",
+      "language": "rust",
+      "invalid": true,
+      "exit_code": 101,
+      "stdout": "",
+      "stderr": "\nthread 'main' (1606) panicked at /workspace/feng/temp/spectral-norm-20261015/repo/benchmarks/cases/text-scan/rust/main.rs:15:13:\nassertion failed: digit.is_ascii_digit()\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    },
+    {
+      "case": "text-scan",
+      "input": "digit",
+      "language": "go",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "digit",
+      "language": "swift",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "digit",
+      "language": "csharp",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "digit",
+      "language": "csharp-aot",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "digit",
+      "language": "java",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "delimiter",
+      "language": "feng",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "delimiter",
+      "language": "cpp",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "delimiter",
+      "language": "rust",
+      "invalid": true,
+      "exit_code": 101,
+      "stdout": "",
+      "stderr": "\nthread 'main' (1650) panicked at /workspace/feng/temp/spectral-norm-20261015/repo/benchmarks/cases/text-scan/rust/main.rs:11:9:\nassertion `left == right` failed\n  left: 59\n right: 44\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    },
+    {
+      "case": "text-scan",
+      "input": "delimiter",
+      "language": "go",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "delimiter",
+      "language": "swift",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "delimiter",
+      "language": "csharp",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "delimiter",
+      "language": "csharp-aot",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "delimiter",
+      "language": "java",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "newline",
+      "language": "feng",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "newline",
+      "language": "cpp",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "newline",
+      "language": "rust",
+      "invalid": true,
+      "exit_code": 101,
+      "stdout": "",
+      "stderr": "\nthread 'main' (1694) panicked at /workspace/feng/temp/spectral-norm-20261015/repo/benchmarks/cases/text-scan/rust/main.rs:12:9:\nassertion `left == right` failed\n  left: 120\n right: 10\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    },
+    {
+      "case": "text-scan",
+      "input": "newline",
+      "language": "go",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "newline",
+      "language": "swift",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "newline",
+      "language": "csharp",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "newline",
+      "language": "csharp-aot",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "text-scan",
+      "input": "newline",
+      "language": "java",
+      "invalid": true,
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "1",
+      "language": "feng",
+      "expected": [
+        0,
+        0
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "0 0\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "1",
+      "language": "cpp",
+      "expected": [
+        0,
+        0
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "0 0\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "1",
+      "language": "rust",
+      "expected": [
+        0,
+        0
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "0 0\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "1",
+      "language": "go",
+      "expected": [
+        0,
+        0
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "0 0\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "1",
+      "language": "swift",
+      "expected": [
+        0,
+        0
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "0 0\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "1",
+      "language": "csharp",
+      "expected": [
+        0,
+        0
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "0 0\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "1",
+      "language": "csharp-aot",
+      "expected": [
+        0,
+        0
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "0 0\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "1",
+      "language": "java",
+      "expected": [
+        0,
+        0
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "0 0\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "2",
+      "language": "feng",
+      "expected": [
+        -1,
+        1
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-1 1\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "2",
+      "language": "cpp",
+      "expected": [
+        -1,
+        1
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-1 1\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "2",
+      "language": "rust",
+      "expected": [
+        -1,
+        1
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-1 1\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "2",
+      "language": "go",
+      "expected": [
+        -1,
+        1
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-1 1\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "2",
+      "language": "swift",
+      "expected": [
+        -1,
+        1
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-1 1\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "2",
+      "language": "csharp",
+      "expected": [
+        -1,
+        1
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-1 1\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "2",
+      "language": "csharp-aot",
+      "expected": [
+        -1,
+        1
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-1 1\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "2",
+      "language": "java",
+      "expected": [
+        -1,
+        1
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "-1 1\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "3",
+      "language": "feng",
+      "expected": [
+        2,
+        2
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "2 2\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "3",
+      "language": "cpp",
+      "expected": [
+        2,
+        2
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "2 2\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "3",
+      "language": "rust",
+      "expected": [
+        2,
+        2
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "2 2\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "3",
+      "language": "go",
+      "expected": [
+        2,
+        2
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "2 2\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "3",
+      "language": "swift",
+      "expected": [
+        2,
+        2
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "2 2\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "3",
+      "language": "csharp",
+      "expected": [
+        2,
+        2
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "2 2\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "3",
+      "language": "csharp-aot",
+      "expected": [
+        2,
+        2
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "2 2\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "3",
+      "language": "java",
+      "expected": [
+        2,
+        2
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "2 2\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "7",
+      "language": "feng",
+      "expected": [
+        228,
+        16
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "228 16\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "7",
+      "language": "cpp",
+      "expected": [
+        228,
+        16
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "228 16\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "7",
+      "language": "rust",
+      "expected": [
+        228,
+        16
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "228 16\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "7",
+      "language": "go",
+      "expected": [
+        228,
+        16
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "228 16\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "7",
+      "language": "swift",
+      "expected": [
+        228,
+        16
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "228 16\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "7",
+      "language": "csharp",
+      "expected": [
+        228,
+        16
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "228 16\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "7",
+      "language": "csharp-aot",
+      "expected": [
+        228,
+        16
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "228 16\n",
+      "stderr": ""
+    },
+    {
+      "case": "fannkuch-redux",
+      "input": "7",
+      "language": "java",
+      "expected": [
+        228,
+        16
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "228 16\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "1",
+      "language": "feng",
+      "expected": [
+        1
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "1",
+      "language": "cpp",
+      "expected": [
+        1
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "1",
+      "language": "rust",
+      "expected": [
+        1
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.00000000000000000\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "1",
+      "language": "go",
+      "expected": [
+        1
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "1",
+      "language": "swift",
+      "expected": [
+        1
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.0\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "1",
+      "language": "csharp",
+      "expected": [
+        1
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "1",
+      "language": "csharp-aot",
+      "expected": [
+        1
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "1",
+      "language": "java",
+      "expected": [
+        1
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.0\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "2",
+      "language": "feng",
+      "expected": [
+        1.1833501765516568
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.1833501765516568\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "2",
+      "language": "cpp",
+      "expected": [
+        1.1833501765516568
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.1833501765516568\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "2",
+      "language": "rust",
+      "expected": [
+        1.1833501765516568
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.18335017655165675\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "2",
+      "language": "go",
+      "expected": [
+        1.1833501765516568
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.1833501765516568\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "2",
+      "language": "swift",
+      "expected": [
+        1.1833501765516568
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.1833501765516568\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "2",
+      "language": "csharp",
+      "expected": [
+        1.1833501765516568
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.1833501765516568\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "2",
+      "language": "csharp-aot",
+      "expected": [
+        1.1833501765516568
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.1833501765516568\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "2",
+      "language": "java",
+      "expected": [
+        1.1833501765516568
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.1833501765516568\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "10",
+      "language": "feng",
+      "expected": [
+        1.2718440192507248
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.2718440192507248\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "10",
+      "language": "cpp",
+      "expected": [
+        1.2718440192507248
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.2718440192507248\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "10",
+      "language": "rust",
+      "expected": [
+        1.2718440192507248
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.27184401925072477\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "10",
+      "language": "go",
+      "expected": [
+        1.2718440192507248
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.2718440192507248\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "10",
+      "language": "swift",
+      "expected": [
+        1.2718440192507248
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.2718440192507248\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "10",
+      "language": "csharp",
+      "expected": [
+        1.2718440192507248
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.2718440192507248\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "10",
+      "language": "csharp-aot",
+      "expected": [
+        1.2718440192507248
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.2718440192507248\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "10",
+      "language": "java",
+      "expected": [
+        1.2718440192507248
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.2718440192507248\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "100",
+      "language": "feng",
+      "expected": [
+        1.2742199912349306
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.2742199912349303\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "100",
+      "language": "cpp",
+      "expected": [
+        1.2742199912349306
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.2742199912349303\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "100",
+      "language": "rust",
+      "expected": [
+        1.2742199912349306
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.27421999123493057\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "100",
+      "language": "go",
+      "expected": [
+        1.2742199912349306
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.2742199912349303\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "100",
+      "language": "swift",
+      "expected": [
+        1.2742199912349306
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.2742199912349306\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "100",
+      "language": "csharp",
+      "expected": [
+        1.2742199912349306
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.2742199912349306\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "100",
+      "language": "csharp-aot",
+      "expected": [
+        1.2742199912349306
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.2742199912349306\n",
+      "stderr": ""
+    },
+    {
+      "case": "spectral-norm",
+      "input": "100",
+      "language": "java",
+      "expected": [
+        1.2742199912349306
+      ],
+      "invalid": false,
+      "exit_code": 0,
+      "stdout": "1.2742199912349306\n",
+      "stderr": ""
+    }
+  ],
+  "completed_at": "2026-10-15T06:23:36.756Z"
+}

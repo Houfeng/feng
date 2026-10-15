@@ -62,8 +62,8 @@ double energy(const Bodies &bodies) {
 void advance(Bodies &bodies) {
   for (size_t i = 0; i < bodies.size(); ++i) {
     for (size_t j = i + 1; j < bodies.size(); ++j) {
-      auto a = bodies[i];
-      auto b = bodies[j];
+      auto &a = bodies[i];
+      auto &b = bodies[j];
       const double dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
       const double d2 = dx * dx + dy * dy + dz * dz;
       const double magnitude = 0.01 / (d2 * std::sqrt(d2));
@@ -73,8 +73,6 @@ void advance(Bodies &bodies) {
       b.vx += dx * a.mass * magnitude;
       b.vy += dy * a.mass * magnitude;
       b.vz += dz * a.mass * magnitude;
-      bodies[i] = a;
-      bodies[j] = b;
     }
   }
   for (auto &b : bodies) {

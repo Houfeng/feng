@@ -15,10 +15,10 @@ func entry(i, j int) float64 {
 
 // multiplyA multiplies a vector by A, evaluating each entry inside the loop.
 func multiplyA(n int, input, output []float64) {
-	for i := 0; i < n; i++ {
+	for i := range output[:n] {
 		sum := 0.0
-		for j := 0; j < n; j++ {
-			sum += entry(i, j) * input[j]
+		for j, value := range input[:n] {
+			sum += entry(i, j) * value
 		}
 		output[i] = sum
 	}
@@ -26,10 +26,10 @@ func multiplyA(n int, input, output []float64) {
 
 // multiplyAt multiplies a vector by the transpose of A.
 func multiplyAt(n int, input, output []float64) {
-	for i := 0; i < n; i++ {
+	for i := range output[:n] {
 		sum := 0.0
-		for j := 0; j < n; j++ {
-			sum += entry(j, i) * input[j]
+		for j, value := range input[:n] {
+			sum += entry(j, i) * value
 		}
 		output[i] = sum
 	}

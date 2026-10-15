@@ -1,7 +1,7 @@
 #include <cstdint>
 #include <fstream>
 #include <iostream>
-#include <vector>
+#include <memory>
 
 /** Read the input and validate and aggregate each fixed-format ASCII record. */
 int main(int argc, char **argv) {
@@ -13,12 +13,13 @@ int main(int argc, char **argv) {
   const auto size = file.tellg();
   if (size < 0 || size % 8 != 0)
     return 2;
-  std::vector<char> data(static_cast<size_t>(size));
+  // Read the complete buffer before inspecting any of its uninitialized bytes.
+  std::unique_ptr<char[]> data(new char[static_cast<size_t>(size)]);
   file.seekg(0);
-  if (!file.read(data.data(), size))
+  if (!file.read(data.get(), size))
     return 2;
   std::uint64_t lines = 0, warnings = 0, errors = 0, sum = 0;
-  for (size_t i = 0; i < data.size(); i += 8) {
+  for (size_t i = 0; i < static_cast<size_t>(size); i += 8) {
     const char level = data[i];
     if ((level != 'I' && level != 'W' && level != 'E') || data[i + 1] != ',' ||
         data[i + 7] != '\n')

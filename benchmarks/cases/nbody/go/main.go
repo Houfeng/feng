@@ -55,7 +55,7 @@ func energy(bodies *[5]Body) float64 {
 func advance(bodies *[5]Body) {
 	for i := 0; i < 5; i++ {
 		for j := i + 1; j < 5; j++ {
-			a, b := bodies[i], bodies[j]
+			a, b := &bodies[i], &bodies[j]
 			dx, dy, dz := a.x-b.x, a.y-b.y, a.z-b.z
 			d2 := dx*dx + dy*dy + dz*dz
 			magnitude := 0.01 / (d2 * math.Sqrt(d2))
@@ -65,8 +65,6 @@ func advance(bodies *[5]Body) {
 			b.vx += dx * a.mass * magnitude
 			b.vy += dy * a.mass * magnitude
 			b.vz += dz * a.mass * magnitude
-			bodies[i] = a
-			bodies[j] = b
 		}
 	}
 	for i := range bodies {

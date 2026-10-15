@@ -12,6 +12,10 @@ C#/Native AOT、Java/HotSpot 八种运行配置。扩展分两步：先为 `nbod
   自身正常、最高效的惯用写法及正常的标准库、运行时；多种等价写法通过
   正确性校验和受控实测选择。不统一 ARC、GC、对象布局或具体分配次数，
   不因某种语言缺少能力而限制其他语言采用等价的高效实现。
+- 等价实现可直接通过元素引用、指针或字段更新避免整值复制和写回，使用标准库的
+  集合访问或切片遍历避免额外缓冲区。文件内容必须完整读入后再扫描；读满前
+  不访问缓冲区中的未初始化字节。所有记录和数字校验、计算及累加顺序保持一致，
+  不通过更换写法省略任务要求的工作。
 - 所有程序只有一个业务执行线程。Go 设置 `GOMAXPROCS=1`，保留默认 GC；
   运行时自身的辅助线程不等同于业务并行。不强制 GC，不使用自定义内存池。
 - 采用发布优化：Feng `--release`，C++ `-O2`，Rust `-C opt-level=3`，
@@ -45,7 +49,7 @@ C#/Native AOT、Java/HotSpot 八种运行配置。扩展分两步：先为 `nbod
 C# 项目使用 `scripts/csharp.csproj.template`，构建时复制到该构建目录后再发布。
 `make test` 会清理 `build/`，需要长期保存的结果应先归档。
 
-要求 macOS 或 Linux、Node.js 22+、C/C++ 编译器、Rust、Go、Swift、.NET SDK 10+
+要求 macOS 或 Linux、Node.js 22+、C/C++ 编译器、Rust、Go、Swift（需支持 `Data.span`）、.NET SDK 10+
 （目标框架 `net10.0`）、JDK 17+，以及与 runtime、
 标准库相匹配的 Feng 编译器。默认使用 `build/bin/feng` 和 PATH 中的工具。
 可通过 `FENG`、`CC`、`CXX`、`RUSTC`、`GO`、`SWIFTC`、`DOTNET`、`JAVA`、`JAVAC`

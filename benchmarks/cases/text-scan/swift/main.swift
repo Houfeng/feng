@@ -3,7 +3,8 @@ import Foundation
 /// Read, validate and aggregate fixed-format ASCII log records.
 func main() throws {
   guard CommandLine.arguments.count == 2 else { exit(2) }
-  let data = Array(try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1])))
+  let file = try Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1]))
+  let data = file.span
   guard data.count % 8 == 0 else { exit(2) }
   var lines: UInt64 = 0
   var warnings: UInt64 = 0

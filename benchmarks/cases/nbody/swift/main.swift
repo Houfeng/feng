@@ -63,21 +63,19 @@ func energy(_ bodies: [Body]) -> Double {
 func advance(_ bodies: inout [Body]) {
   for i in bodies.indices {
     for j in (i + 1)..<bodies.count {
-      var a = bodies[i]
-      var b = bodies[j]
+      let a = bodies[i]
+      let b = bodies[j]
       let dx = a.x - b.x
       let dy = a.y - b.y
       let dz = a.z - b.z
       let d2 = dx * dx + dy * dy + dz * dz
       let magnitude = 0.01 / (d2 * d2.squareRoot())
-      a.vx -= dx * b.mass * magnitude
-      a.vy -= dy * b.mass * magnitude
-      a.vz -= dz * b.mass * magnitude
-      b.vx += dx * a.mass * magnitude
-      b.vy += dy * a.mass * magnitude
-      b.vz += dz * a.mass * magnitude
-      bodies[i] = a
-      bodies[j] = b
+      bodies[i].vx -= dx * b.mass * magnitude
+      bodies[i].vy -= dy * b.mass * magnitude
+      bodies[i].vz -= dz * b.mass * magnitude
+      bodies[j].vx += dx * a.mass * magnitude
+      bodies[j].vy += dy * a.mass * magnitude
+      bodies[j].vz += dz * a.mass * magnitude
     }
   }
   for i in bodies.indices {
