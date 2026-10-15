@@ -32154,6 +32154,228 @@ static void test_thin_lto_sdk_free_target_matrix(void) {
     puts("ThinLTO SDK-free: five targets, include closure, builtins and explicit sysroot verified");
 }
 
+/* Read the independent minimum-OS and SDK fields from ARM64 Mach-O output. */
+static void sdk_version_test_macho_versions(const char *path,
+                                            uint32_t *minimum, uint32_t *sdk) {
+    FILE *file = fopen(path, "rb");
+    uint32_t header[8];
+    bool found = false;
+    ASSERT(file != NULL);
+    ASSERT(fread(header, sizeof(header), 1U, file) == 1U);
+    ASSERT(header[0] == 0xfeedfacfU);
+    for (uint32_t index = 0U; index < header[4]; ++index) {
+        long offset = ftell(file);
+        uint32_t command[2];
+        ASSERT(offset >= 0 && fread(command, sizeof(command), 1U, file) == 1U);
+        ASSERT(command[1] >= sizeof(command));
+        if (command[0] == 0x32U) { /* LC_BUILD_VERSION */
+            uint32_t version[4];
+            ASSERT(command[1] >= sizeof(command) + sizeof(version));
+            ASSERT(fread(version, sizeof(version), 1U, file) == 1U);
+            ASSERT(version[0] == 1U); /* PLATFORM_MACOS */
+            *minimum = version[1];
+            *sdk = version[2];
+            found = true;
+        }
+        ASSERT(fseek(file, offset + (long)command[1], SEEK_SET) == 0);
+    }
+    ASSERT(found && fclose(file) == 0);
+}
+
+/* Capture the real backend's diagnostics without changing its warning policy. */
+static int sdk_version_test_compile(const FengCliDriverOptions *options,
+                                     char **diagnostics) {
+    FILE *errors = temp_file();
+    int saved_stderr;
+    int result;
+    fflush(stderr);
+    saved_stderr = dup(STDERR_FILENO);
+    ASSERT(saved_stderr >= 0 && dup2(fileno(errors), STDERR_FILENO) >= 0);
+    result = feng_cli_compile_driver_invoke(options);
+    fflush(stderr);
+    ASSERT(dup2(saved_stderr, STDERR_FILENO) >= 0);
+    close(saved_stderr);
+    *diagnostics = read_text_stream(errors);
+    ASSERT(fclose(errors) == 0);
+    return result;
+}
+
+/* Cover library target/mode/SDK combinations and preserve the binary's real SDK. */
+static void test_macos_sdk_version_target_matrix(void) {
+    static const char *targets[] = {
+        "macos-arm64", "linux-x64-gnu", "linux-x64-musl", "linux-arm64-gnu", "linux-arm64-musl"
+    };
+    static const char *versions[] = {"26.2", "27.0"};
+    ThinLtoTestWorkspace work = thin_lto_test_workspace();
+    char *source = path_join(work.root, "feng.c");
+    char *library = path_join(work.root, "libsdk.a");
+    char *object = path_join(work.root, "member.o");
+    char *sdks[3] = {NULL, NULL, NULL};
+    char *sdk_libraries[2] = {
+        path_join(work.root, "libsdk-one.a"), path_join(work.root, "libsdk-two.a")
+    };
+    for (size_t index = 0U; index < 2U; ++index) {
+        sdks[index + 1U] = dup_printf("%s/SDK space/MacOSX%s.sdk", work.root, versions[index]);
+        char *include = path_join(sdks[index + 1U], "usr/include");
+        char *settings = path_join(sdks[index + 1U], "SDKSettings.json");
+        char *header = path_join(include, "sdk_version_test.h");
+        char *json = dup_printf("{\"Version\":\"%s\",\"MaximumDeploymentTarget\":\"%s\"}\n",
+                                versions[index], versions[index]);
+        mkdir_p(include);
+        write_text_file(settings, json);
+        write_text_file(header,
+            "#define SDK_VERSION_TEST_VALUE 42\n"
+            "int sdk_future_api(void) __attribute__((availability(macos,introduced=99.0)));\n"
+            "int sdk_unavailable_api(void) __attribute__((availability(macos,unavailable)));\n");
+        free(json); free(header); free(settings); free(include);
+    }
+    for (size_t target = 0U; target < 5U; ++target) {
+        for (size_t sdk_case = 0U; sdk_case < (target == 0U ? 3U : 1U); ++sdk_case) {
+            write_text_file(source, sdk_case == 0U
+                ? "int sdk_value(void) { return 42; }\n"
+                : sdk_case == 1U
+                    ? "#include <sdk_version_test.h>\nint sdk_two(int);\n"
+                      "int sdk_one(int value) { return sdk_two(value) + 1; }\n"
+                    : "#include <sdk_version_test.h>\n"
+                      "int sdk_two(int value) { return value * SDK_VERSION_TEST_VALUE; }\n");
+            for (size_t release = 0U; release < 2U; ++release) {
+                for (size_t thin = 0U; thin < 2U; ++thin) {
+                    FengCliDriverOptions options = {
+                        .program_path = "build/bin/feng", .platform = targets[target],
+                        .sysroot = sdks[sdk_case], .target = FENG_COMPILE_TARGET_LIB,
+                        .c_path = source, .out_path = library, .release = release != 0U,
+                        .lto = thin != 0U ? FENG_CLI_LTO_THIN : FENG_CLI_LTO_OFF,
+                        .keep_intermediate = true
+                    };
+                    char *diagnostics;
+                    write_text_file(work.log, "");
+                    ASSERT(sdk_version_test_compile(&options, &diagnostics) == 0);
+                    ASSERT(strstr(diagnostics, "SDK Version") == NULL);
+                    free(diagnostics);
+                    thin_lto_test_flags(&work, 1, release != 0U, thin != 0U);
+                    char *log = read_text_file(work.log);
+                    ASSERT(count_logged_arguments(log, "-target-sdk-version=0") == (target == 0U ? 1 : 0));
+                    if (target == 0U) ASSERT(strstr(log, "-Xclang\n-target-sdk-version=0\n") != NULL);
+                    ASSERT(count_logged_arguments(log, "-isysroot") == (sdk_case != 0U ? 1 : 0));
+                    ASSERT(count_logged_arguments(log, "-nostdlibinc") == (target == 0U && sdk_case == 0U ? 1 : 0));
+                    if (sdk_case != 0U) ASSERT(count_logged_arguments(log, sdks[sdk_case]) == 1);
+                    free(log);
+                    char *ir = thin_lto_test_member(&work, library, "feng.o", thin != 0U, targets[target]);
+                    if (thin != 0U) ASSERT(strstr(ir, "!\"SDK Version\"") == NULL);
+                    else if (target == 0U) {
+                        uint32_t minimum = 0U, sdk = 1U;
+                        sdk_version_test_macho_versions(object, &minimum, &sdk);
+                        ASSERT(minimum != 0U && sdk == 0U);
+                    }
+                    free(ir);
+                    if (target == 0U && sdk_case != 0U && release != 0U && thin != 0U) {
+                        copy_file_or_die(library, sdk_libraries[sdk_case - 1U]);
+                    }
+                }
+            }
+        }
+    }
+    uint32_t real_sdk = 0U;
+#if defined(__APPLE__)
+    FILE *version = popen("xcrun --sdk macosx --show-sdk-version", "r");
+    unsigned major = 0U, minor = 0U, patch = 0U;
+    ASSERT(version != NULL && fscanf(version, "%u.%u.%u", &major, &minor, &patch) >= 1);
+    ASSERT(pclose(version) == 0);
+    real_sdk = (major << 16U) | (minor << 8U) | patch;
+#endif
+    for (size_t release = 0U; release < 2U; ++release) {
+        for (size_t thin = 0U; thin < 2U; ++thin) {
+            char *binary = path_join(work.root, "sdk-bin");
+            FengCliDriverOptions options = {
+                .program_path = "build/bin/feng", .platform = work.host,
+                .target = FENG_COMPILE_TARGET_BIN, .c_path = source, .out_path = binary,
+                .link_libs = real_sdk != 0U ? (const char *const *)sdk_libraries : NULL,
+                .link_lib_count = real_sdk != 0U ? 2U : 0U,
+                .release = release != 0U,
+                .lto = thin != 0U ? FENG_CLI_LTO_THIN : FENG_CLI_LTO_OFF,
+                .keep_intermediate = true
+            };
+            char *diagnostics;
+            write_text_file(source, real_sdk != 0U
+                ? "int sdk_one(int);\nint main(int argc, char **argv) {\n"
+                  "  (void)argv; return sdk_one(argc) == 43 ? 0 : 1;\n}\n"
+                : "int main(void) { return 0; }\n");
+            write_text_file(work.log, "");
+            ASSERT(sdk_version_test_compile(&options, &diagnostics) == 0);
+            ASSERT(strstr(diagnostics, "SDK Version") == NULL);
+            free(diagnostics);
+            char *log = read_text_file(work.log);
+            ASSERT(count_logged_arguments(log, "-target-sdk-version=0") == 0);
+            free(log);
+            if (real_sdk != 0U) {
+                uint32_t minimum = 0U, sdk = 0U;
+                sdk_version_test_macho_versions(binary, &minimum, &sdk);
+                ASSERT(minimum != 0U && sdk == real_sdk);
+            }
+            free(binary);
+        }
+    }
+    /* Availability attributes remain effective when the SDK marker is omitted. */
+    FengCliDriverOptions options = {
+        .program_path = "build/bin/feng", .platform = "macos-arm64", .sysroot = sdks[2],
+        .target = FENG_COMPILE_TARGET_LIB, .c_path = source, .out_path = library,
+        .release = true, .lto = FENG_CLI_LTO_THIN, .keep_intermediate = true
+    };
+    char *diagnostics;
+    write_text_file(source, "#include <sdk_version_test.h>\n"
+                            "int sdk_call(void) { return sdk_future_api(); }\n");
+    ASSERT(sdk_version_test_compile(&options, &diagnostics) == 0);
+    ASSERT(strstr(diagnostics, "only available on macOS 99.0 or newer") != NULL);
+    free(diagnostics);
+    write_text_file(source, "#include <sdk_version_test.h>\n"
+                            "int sdk_call(void) { return sdk_unavailable_api(); }\n");
+    ASSERT(sdk_version_test_compile(&options, &diagnostics) != 0);
+    ASSERT(strstr(diagnostics, "sdk_unavailable_api") != NULL);
+    ASSERT(strstr(diagnostics, "unavailable") != NULL);
+    free(diagnostics);
+    char *binary = path_join(work.root, "sdk-missing-bin");
+    options.platform = work.host;
+    options.sysroot = NULL;
+    options.target = FENG_COMPILE_TARGET_BIN;
+    options.out_path = binary;
+    write_text_file(source, "int sdk_missing_api(void);\n"
+                            "int main(void) { return sdk_missing_api(); }\n");
+    ASSERT(sdk_version_test_compile(&options, &diagnostics) != 0);
+    ASSERT(strstr(diagnostics, "sdk_missing_api") != NULL);
+    free(diagnostics); free(binary);
+    free(sdk_libraries[1]); free(sdk_libraries[0]);
+    free(sdks[2]); free(sdks[1]); free(object); free(library); free(source);
+    thin_lto_test_dispose(&work);
+    puts("SDK version: five targets, both modes, SDK-free/explicit libraries, binary SDK and API diagnostics verified");
+}
+
+/* Check the actual distributed runtime members rather than a separate C probe. */
+static void test_runtime_sdk_version_metadata(void) {
+    ThinLtoTestWorkspace work = thin_lto_test_workspace();
+    char *archive = dup_printf("build/lib/%s/libfeng_runtime.a", work.host);
+    char *listing = path_join(work.root, "sdk-runtime-members.txt");
+    char *quoted_archive = quote_shell_argument(archive);
+    char *quoted_listing = quote_shell_argument(listing);
+    char *command = dup_printf("build/toolchain/llvm/bin/llvm-ar t %s > %s", quoted_archive, quoted_listing);
+    char *state = NULL;
+    size_t count = 0U;
+    run_command_or_die(command);
+    char *members = read_text_file(listing);
+    for (char *member = strtok_r(members, "\n", &state); member != NULL;
+         member = strtok_r(NULL, "\n", &state)) {
+        if (strncmp(member, "feng_", 5U) != 0) continue;
+        char *ir = thin_lto_test_member(&work, archive, member, true, work.host);
+        ASSERT(strstr(ir, "!\"SDK Version\"") == NULL);
+        ++count;
+        free(ir);
+    }
+    ASSERT(count > 0U);
+    free(members); free(command); free(quoted_listing); free(quoted_archive);
+    free(listing); free(archive);
+    thin_lto_test_dispose(&work);
+    puts("SDK version: all distributed runtime bitcode members omit the SDK marker");
+}
+
 /* Find the attribute group attached to a definition, not a call-site attribute. */
 static const char *thin_lto_test_function_attributes(const char *ir, const char *name) {
     char *needle = dup_printf("@%s(", name);
@@ -32612,6 +32834,8 @@ int main(void) {
     test_thin_lto_project_dependency_matrix();
     test_thin_lto_source_hidden_mixed_packages();
     test_thin_lto_sdk_free_target_matrix();
+    test_macos_sdk_version_target_matrix();
+    test_runtime_sdk_version_metadata();
     test_thin_lto_runtime_archive();
     test_thin_lto_linux_abi_matrix();
     test_thin_lto_dap_dependencies();

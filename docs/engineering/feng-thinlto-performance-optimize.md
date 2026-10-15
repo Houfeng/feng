@@ -178,6 +178,9 @@ feng pack --lto=off               # 用原生对象重新构建当前库并打�
 SDK-free 指编译该库不需要系统 SDK 头文件；它不要求使用 C 的 freestanding 模式，
 也不意味着 macOS 可执行文件无需 SDK 即可链接。
 
+macOS runtime/lib 的 SDK 版本模块标记及 bin 保留真实 SDK 的规则，以
+[构建规范 §2.2](../specifications/feng-build.md#22-目标平台与工具链转换) 为准。
+
 ### 4.2 SDK-free 参数调整
 
 变更前，macOS SDK-free lib 路径附加 `-ffreestanding` 和 `FENG_COMPILE_SDK_FREE`。

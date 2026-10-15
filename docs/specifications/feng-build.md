@@ -79,6 +79,14 @@ bin/lib 一致允许内建库函数优化。通过 `-fno-unwind-tables` 保持�
 unwind-table 策略，现有 `-fexceptions` 和异常插件继续生效。runtime 的 SDK 依赖及 Linux sysroot
 规则不变，且此调整不受 LTO 开关影响。
 
+macOS 目标的 runtime 和 `target=lib` 编译统一添加
+`-Xclang -target-sdk-version=0`，使 IR 不携带 `SDK Version` 模块标记，避免不同
+构建 SDK 的 bitcode 在 LTO 合并时仅因版本值不同产生冲突警告。该规则覆盖
+Debug/Release、LTO off/thin，以及库的 SDK-free 和显式 sysroot 路径；实际 SDK
+头文件、目标平台、最低系统版本及原有 API 可用性和链接诊断保持不变。
+`target=bin` 不添加该参数，最终 Mach-O 继续记录链接所用的真实 SDK 版本。
+SDK 版本标记一致性不代表 API 或 ABI 兼容，也不替代最低目标系统上的运行验证。
+
 Linux GNU / musl 目标参数：
 
 - `--sysroot=<feng 可执行文件目录>/../toolchain/sysroot/<platform>`：未提供用户显式覆盖时，选择 bundled GNU 或 musl 目标头文件、库、CRT 与动态加载器。

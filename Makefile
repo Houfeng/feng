@@ -147,7 +147,8 @@ TEST_LLD_ROOT := $(CURDIR)/toolchain/llvm/$(HOST_PLATFORM)
 SANITIZE_LDFLAGS := -fuse-ld=lld
 test-sanitize: export COMPILER_PATH := $(TEST_LLD_ROOT)/bin
 MACOS_SDK_PATH := $(shell xcrun --sdk macosx --show-sdk-path 2>/dev/null)
-RUNTIME_FLAGS_macos-arm64 := --target=arm64-apple-macosx -isysroot $(MACOS_SDK_PATH)
+# Keep the real SDK headers without an SDK-version constraint in runtime IR.
+RUNTIME_FLAGS_macos-arm64 := --target=arm64-apple-macosx -isysroot $(MACOS_SDK_PATH) -Xclang -target-sdk-version=0
 else
 CEH_LIBRARY := lib/llvm_c_eh.so
 NATIVE_SYMBOLS_LIBRARY := lib/llvm_native_symbols.so

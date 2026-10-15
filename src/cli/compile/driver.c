@@ -2050,6 +2050,12 @@ static bool argv_push_target_platform_flags(ArgVec *av,
 
     free(target_flag);
     if (feng_platform_is_macos(target_platform)) {
+        /* Library SDK provenance must not constrain cross-SDK LTO imports. */
+        if (ok && !link_executable &&
+            (!argv_push(av, "-Xclang") ||
+             !argv_push(av, "-target-sdk-version=0"))) {
+            ok = false;
+        }
         if (target_sysroot == NULL) {
             /* Keep SDK headers out without disabling builtin optimization.
              * Preserve the former freestanding unwind-table defaults. */
