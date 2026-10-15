@@ -233,6 +233,11 @@ extern func ssl_connect(fd: int): int;
 
 - 非 `release` 的 `target=bin` 与 `target=lib` 直编都生成与最终产物同级的 `.fd` sidecar；相对于该次直编收到的精确 `--out`, `target=bin` 产物形态为 `<out>/bin/<artifact>` 与 `<out>/bin/<artifact>.fd`,`target=lib` 产物则在 `<out>/lib/` 的库文件同级生成 `.fd`。项目级构建传入 `<项目输出根>/<platform>` 作为该 `<out>`。
 - `release` 构建默认不生成 `.fd`,也不额外保留调试态插桩。
+- 非 `release` 的 `target=bin` 最终链接必须保留 DAP 读取数组与字符串所依赖的
+  `feng_array_length`、`feng_array_data`、`feng_string_length`、`feng_string_data`
+  函数符号，即使应用代码没有直接引用它们。该要求与 runtime 是原生对象还是 ThinLTO
+  bitcode、应用 `--lto` 是否开启无关；保留可调用定义不禁止正常代码内联这些函数。
+  `target=lib` 不做最终链接，`release` 可执行文件继续遵循 §2.8 的精简规则。
 - `#line` 的文件名参数固定使用逻辑源码 URI `PKG_NAME://<package-relative path>`,其中 `PKG_NAME` 取源码所属包的 `feng.fm.name`; 编译器不得把宿主磁盘绝对路径写进 `#line`。
 - `.fd` 只记录 LLDB 无法直接知道的最小调试事实,例如 package URI 到本地包根的映射、frame 显示名重写、变量显示名映射与少量特殊 carrier 的 `read_expr`; 地址到源码行的映射仍以主机编译器基于 `#line` 与 `-g` 生成的原生调试信息为准。
 - `.fd` 属于 artifact-scoped 本地调试产物,`feng clean` 应与其他构建产物一并删除,`feng pack` 不得打包 `.fd`。

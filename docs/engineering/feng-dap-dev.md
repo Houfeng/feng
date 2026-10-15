@@ -647,6 +647,11 @@ LLDB 对 `FengArray *` / `FengString *` 等 runtime 载体只理解 C struct 内
 
 第一阶段按以下原则显示：
 
+数组与字符串的值读取必须在 runtime 为原生对象或 ThinLTO bitcode、应用 LTO
+开启或关闭时保持一致。Debug 最终链接对现有 runtime 访问器的保留要求见
+[构建规范 §2.7](../specifications/feng-build.md#27-调试-sidecar-与源码映射)。有效数组应
+显示长度摘要并按索引展开元素，不得因访问器被优化消除而退回 runtime 内部字段。
+
 - builtin 标量：直接复用 `lldb-dap` 原始值。
 - enum：若能从现有类型信息稳定恢复展示名，则做轻量重写；否则先退回原始整数值。
 - builtin 标量：直接复用 `lldb-dap` 原始值。

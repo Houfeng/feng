@@ -1978,7 +1978,7 @@ static bool argv_push_mode_flags(ArgVec *av, bool release,
     return true;
 }
 
-/* Keep distinct native LTO objects available until Clang finishes dsymutil. */
+/* Retain DAP accessors and keep macOS LTO objects through dsymutil. */
 static bool argv_push_debug_link_flags(ArgVec *av, const char *target_platform,
                                       bool release, const char *c_path,
                                       char **out_lto_object_dir,
@@ -1986,7 +1986,25 @@ static bool argv_push_debug_link_flags(ArgVec *av, const char *target_platform,
     char *directory;
     char *absolute_directory;
 
-    if (release || !feng_platform_is_macos(target_platform)) {
+    static const char *const accessors[] = {
+        "feng_array_length", "feng_array_data",
+        "feng_string_length", "feng_string_data"
+    };
+
+    if (release) {
+        return true;
+    }
+    /* DAP calls these by name; application references may all be inlined away. */
+    for (size_t index = 0U; index < sizeof(accessors) / sizeof(accessors[0]); ++index) {
+        char flag[64];
+        snprintf(flag, sizeof(flag), "-Wl,-u,%s%s",
+                 feng_platform_is_macos(target_platform) ? "_" : "", accessors[index]);
+        if (!argv_push(av, flag)) {
+            return set_errorf(out_error_message,
+                              "out of memory retaining debugger runtime accessors");
+        }
+    }
+    if (!feng_platform_is_macos(target_platform)) {
         return true;
     }
     directory = replace_with_sibling_filename(c_path, "lto-XXXXXX");

@@ -32708,6 +32708,267 @@ static void test_thin_lto_dap_dependencies(void) {
     puts("ThinLTO Debug DAP: source steps, dependency frames, locals/watch, exception unwind and bitcode packages verified");
 }
 
+/* Find exactly one displayed variable and verify its semantic value. */
+static DapTestJson dap_runtime_value(DapTestJson variables, const char *name,
+                                      const char *value) {
+    DapTestJson found = {0};
+    for (size_t index = 0U;; ++index) {
+        DapTestJson item = dap_test_json_at(variables, index);
+        if (item.begin == NULL) break;
+        if (dap_test_json_string_is(dap_test_json_get(item, "name"), name)) {
+            ASSERT(found.begin == NULL);
+            found = item;
+        }
+    }
+    ASSERT(found.begin != NULL);
+    ASSERT(dap_test_json_string_is(dap_test_json_get(found, "value"), value));
+    return found;
+}
+
+/* Require semantic children rather than an LLDB runtime-structure reference. */
+static char *dap_runtime_children(DapTestSession *session, DapTestJson variable,
+                                   size_t count) {
+    long reference = dap_test_json_integer(dap_test_json_get(variable, "variablesReference"));
+    ASSERT(reference >= 0x40000000L);
+    char *arguments = dup_printf("{\"variablesReference\":%ld}", reference);
+    char *response = dap_test_request(session, "variables", arguments);
+    DapTestJson variables = dap_test_json_get(dap_test_body(response), "variables");
+    for (size_t index = 0U; index < count; ++index) {
+        ASSERT(dap_test_json_at(variables, index).begin != NULL);
+    }
+    ASSERT(dap_test_json_at(variables, count).begin == NULL);
+    free(arguments);
+    return response;
+}
+
+/* Debug bin links retain the debugger's dependencies; lib/release links do not. */
+static void test_debug_runtime_accessor_link_flags(void) {
+    static const char *const names[] = {
+        "feng_array_length", "feng_array_data", "feng_string_length", "feng_string_data"
+    };
+    ThinLtoTestWorkspace work = thin_lto_test_workspace();
+    char *source = path_join(work.root, "feng.c");
+    char *binary = path_join(work.root, "probe");
+    char *library = host_static_library_output_path(work.root, "probe");
+    char *library_dir = path_join(work.root, "lib");
+    mkdir_p(library_dir);
+    free(library_dir);
+    for (size_t target = 0U; target < 2U; ++target) {
+        for (size_t release = 0U; release < 2U; ++release) {
+            for (size_t mode = 0U; mode < 3U; ++mode) {
+                FengCliDriverOptions options = {
+                    .platform = work.host,
+                    .target = target == 0U ? FENG_COMPILE_TARGET_BIN : FENG_COMPILE_TARGET_LIB,
+                    .c_path = source, .out_path = target == 0U ? binary : library,
+                    .release = release != 0U, .keep_intermediate = true,
+                    .lto = mode == 0U ? FENG_CLI_LTO_UNSPECIFIED :
+                           mode == 1U ? FENG_CLI_LTO_OFF : FENG_CLI_LTO_THIN
+                };
+                write_text_file(source, "int main(void) { return 0; }\n");
+                write_text_file(work.log, "");
+                ASSERT(feng_cli_compile_driver_invoke(&options) == 0);
+                char *log = read_text_file(work.log);
+                for (size_t index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
+                    char *flag = dup_printf("-Wl,-u,%s%s",
+                        feng_platform_is_macos(work.host) ? "_" : "", names[index]);
+                    ASSERT(count_logged_arguments(log, flag) ==
+                           (target == 0U && release == 0U ? 1 : 0));
+                    free(flag);
+                }
+                free(log);
+            }
+        }
+    }
+    free(library); free(binary); free(source);
+    thin_lto_test_dispose(&work);
+    puts("DAP runtime links: bin/lib, Debug/Release and default/off/thin verified");
+}
+
+/* Build an isolated native runtime without replacing the suite's ThinLTO archive. */
+static void dap_runtime_native_archive(const char *root, const char *host,
+                                        const char *archive) {
+    const FengCliHostToolStrategy strategy = {
+        "C compiler", "FENG_CC", "toolchain/llvm/bin/clang", "CC", "cc"
+    };
+    char *compiler = feng_cli_resolve_host_tool(NULL, &strategy, NULL);
+    ASSERT(compiler != NULL);
+    char *quoted_compiler = quote_shell_argument(compiler);
+    char *objects = path_join(root, "native-objects");
+    char *quoted_objects = quote_shell_argument(objects);
+    char *quoted_archive = quote_shell_argument(archive);
+    char *sdk;
+    const char *flags = getenv("FENG_CC_FLAGS");
+    if (flags == NULL) flags = "";
+#if defined(__APPLE__)
+    sdk = dup_cstr("-isysroot \"$(xcrun --sdk macosx --show-sdk-path)\"");
+#else
+    sdk = dup_printf("--sysroot=build/toolchain/sysroot/%s "
+                     "--gcc-toolchain=build/toolchain/sysroot/%s", host, host);
+#endif
+    mkdir_p(objects);
+    runtime_inline_command("set -eu\nfor source in src/runtime/*.c; do\n"
+        "  name=${source##*/}\n  %s %s -std=c11 -O2 -Isrc -fexceptions -fno-lto "
+        "--target='%s' %s -c \"$source\" -o %s/\"${name%%.c}.o\"\ndone\n"
+        "build/toolchain/llvm/bin/llvm-ar rcs %s %s/*.o",
+        quoted_compiler, flags, feng_platform_clang_target(host), sdk,
+        quoted_objects, quoted_archive, quoted_objects);
+    free(sdk); free(quoted_archive); free(quoted_objects); free(objects);
+    free(quoted_compiler); free(compiler);
+}
+
+/* Exercise real array/string reads for native/ThinLTO runtime and all app modes. */
+static void test_dap_runtime_accessor_lto_matrix(void) {
+    static const char *const headers[] = {
+        "feng_runtime.h", "feng_generated.h", "feng_runtime_contract.inc"
+    };
+    static const char *const modes[] = {"", "--lto=off", "--lto=thin"};
+    static const char *const fixture =
+        "module dap_runtime_values;\n"
+        "@cdecl(\"libc\")\nextern func exit(code: i32): void;\n"
+        "type Holder { let values: int[]; let label: string; }\n"
+        "func inspect(input: int[], label: string) {\n"
+        "  let empty: int[] = [];\n  let numbers: int[] = [10, 20, 30];\n"
+        "  let writable: int[!] = [4, 5];\n"
+        "  let matrix: int[][] = [[1, 2], []];\n"
+        "  let strings: string[] = [\"Feng\", \"你好\", \"\"];\n"
+        "  let text = \"Feng\\n你好\";\n  let zero = \"\";\n"
+        "  let holder = Holder{values: numbers, label: \"field\"};\n"
+        "  var ready = 0;\n  ready += 1; // breakpoint: ready\n"
+        "  if numbers[1] != 20 { exit(1); }\n}\n"
+        "func main(args: string[]) { inspect([7, 8], \"parameter\"); }\n";
+    ThinLtoTestWorkspace work = thin_lto_test_workspace();
+    char *repo = getcwd(NULL, 0);
+    char *install = path_join(work.root, "install space");
+    char *bin_dir = path_join(install, "bin");
+    char *include = path_join(install, "include");
+    char *lib_dir = dup_printf("%s/lib/%s", install, work.host);
+    char *compiler = path_join(bin_dir, "feng");
+    char *archive = path_join(lib_dir, "libfeng_runtime.a");
+    char *original_archive = dup_printf("build/lib/%s/libfeng_runtime.a", work.host);
+    char *tools = path_join(install, "toolchain");
+    char *original_tools = path_join(repo, "build/toolchain");
+    char *backend = path_join(repo, "build/toolchain/llvm/bin/lldb-dap");
+    char *quoted_compiler = quote_shell_argument(compiler);
+    char *project = thin_lto_test_project(&work, "dap_runtime_values", "bin", fixture, NULL);
+    char *quoted_project = quote_shell_argument(project);
+    char *source = path_join(project, "src/main.ff");
+    char *escaped_source = json_escape_text(source);
+    char *binary = project_host_build_path(project, "bin/dap_runtime_values");
+    ASSERT(repo != NULL);
+    mkdir_p(bin_dir); mkdir_p(include); mkdir_p(lib_dir);
+    copy_file_or_die("build/bin/feng", compiler);
+    ASSERT(chmod(compiler, 0755) == 0);
+    ASSERT(symlink(original_tools, tools) == 0);
+    for (size_t index = 0U; index < sizeof(headers) / sizeof(headers[0]); ++index) {
+        char *from = path_join("build/include", headers[index]);
+        char *to = path_join(include, headers[index]);
+        copy_file_or_die(from, to);
+        free(to); free(from);
+    }
+    for (size_t runtime = 0U; runtime < 2U; ++runtime) {
+        copy_file_or_die(original_archive, archive);
+        if (runtime == 0U) dap_runtime_native_archive(work.root, work.host, archive);
+        for (size_t mode = 0U; mode < sizeof(modes) / sizeof(modes[0]); ++mode) {
+            char *log = dup_printf("%s/dap-%zu-%zu.log", work.root, runtime, mode);
+            DapTestSession session;
+            runtime_inline_command("%s build %s %s", quoted_compiler, quoted_project, modes[mode]);
+            thin_lto_test_debug_fingerprint(binary);
+            dap_test_start(&session, work.root, backend, log);
+            free(dap_test_request(&session, "initialize", "{\"adapterID\":\"feng\"}"));
+            int launch = dap_test_launch_native(&session, binary, work.root, 0);
+            free(dap_test_wait(&session, 0, "initialized", NULL));
+            char *arguments = dup_printf("{\"source\":{\"path\":\"%s\"},"
+                "\"breakpoints\":[{\"line\":%u}]}", escaped_source,
+                dap_test_breakpoint_line(fixture, "ready"));
+            char *response = dap_test_request(&session, "setBreakpoints", arguments);
+            dap_test_json_require_true(dap_test_json_get(dap_test_json_at(
+                dap_test_json_get(dap_test_body(response), "breakpoints"), 0U), "verified"));
+            free(response); free(arguments);
+            free(dap_test_request(&session, "configurationDone", "{}"));
+            free(dap_test_response(&session, launch));
+            DapTestStepLocation location = dap_test_step_location(&session, "breakpoint", source, "inspect");
+            ASSERT(location.line == dap_test_breakpoint_line(fixture, "ready"));
+            arguments = dup_printf("{\"frameId\":%ld}", location.frame_id);
+            response = dap_test_request(&session, "scopes", arguments);
+            free(arguments);
+            DapTestJson scopes = dap_test_json_get(dap_test_body(response), "scopes");
+            long locals_ref = 0;
+            for (size_t index = 0U;; ++index) {
+                DapTestJson scope = dap_test_json_at(scopes, index);
+                if (scope.begin == NULL) break;
+                if (dap_test_json_string_is(dap_test_json_get(scope, "name"), "Locals")) {
+                    ASSERT(locals_ref == 0);
+                    locals_ref = dap_test_json_integer(dap_test_json_get(scope, "variablesReference"));
+                }
+            }
+            ASSERT(locals_ref > 0);
+            free(response);
+            arguments = dup_printf("{\"variablesReference\":%ld}", locals_ref);
+            char *locals = dap_test_request(&session, "variables", arguments);
+            free(arguments);
+            DapTestJson values = dap_test_json_get(dap_test_body(locals), "variables");
+            dap_runtime_value(values, "ready", "0");
+            dap_runtime_value(values, "text", "\"Feng\\n你好\"");
+            dap_runtime_value(values, "zero", "\"\"");
+            dap_runtime_value(values, "label", "\"parameter\"");
+            response = dap_runtime_children(&session, dap_runtime_value(values, "empty", "i64[length=0]"), 0U);
+            free(response);
+            static const struct { const char *name, *summary; const char *items[3]; size_t count; } arrays[] = {
+                {"input", "i64[length=2]", {"7", "8"}, 2U},
+                {"numbers", "i64[length=3]", {"10", "20", "30"}, 3U},
+                {"writable", "i64[length=2]", {"4", "5"}, 2U},
+                {"strings", "string[length=3]", {"\"Feng\"", "\"你好\"", "\"\""}, 3U}
+            };
+            for (size_t index = 0U; index < sizeof(arrays) / sizeof(arrays[0]); ++index) {
+                response = dap_runtime_children(&session,
+                    dap_runtime_value(values, arrays[index].name, arrays[index].summary), arrays[index].count);
+                DapTestJson children = dap_test_json_get(dap_test_body(response), "variables");
+                for (size_t item = 0U; item < arrays[index].count; ++item) {
+                    char *name = dup_printf("[%zu]", item);
+                    dap_runtime_value(children, name, arrays[index].items[item]);
+                    free(name);
+                }
+                free(response);
+            }
+            response = dap_runtime_children(&session,
+                dap_runtime_value(values, "matrix", "i64[][length=2]"), 2U);
+            DapTestJson rows = dap_test_json_get(dap_test_body(response), "variables");
+            char *row = dap_runtime_children(&session, dap_runtime_value(rows, "[0]", "i64[length=2]"), 2U);
+            DapTestJson elements = dap_test_json_get(dap_test_body(row), "variables");
+            dap_runtime_value(elements, "[0]", "1"); dap_runtime_value(elements, "[1]", "2");
+            free(row);
+            row = dap_runtime_children(&session, dap_runtime_value(rows, "[1]", "i64[length=0]"), 0U);
+            free(row); free(response);
+            response = dap_runtime_children(&session,
+                dap_runtime_value(values, "holder", "Feng__dap_runtime_values__Holder"), 2U);
+            DapTestJson fields = dap_test_json_get(dap_test_body(response), "variables");
+            dap_runtime_value(fields, "label", "\"field\"");
+            row = dap_runtime_children(&session, dap_runtime_value(fields, "values", "i64[length=3]"), 3U);
+            elements = dap_test_json_get(dap_test_body(row), "variables");
+            dap_runtime_value(elements, "[0]", "10"); dap_runtime_value(elements, "[2]", "30");
+            free(row); free(response); free(locals);
+            arguments = dup_printf("{\"threadId\":%ld}", location.thread_id);
+            free(dap_test_request(&session, "continue", arguments));
+            free(arguments);
+            response = dap_test_wait(&session, 0, "terminated", "stopped");
+            const char *cursor = response;
+            ASSERT(dap_test_json_string_is(dap_test_json_get(dap_test_json_next(&cursor), "event"), "terminated"));
+            free(response);
+            response = dap_test_wait(&session, 0, "exited", NULL);
+            ASSERT(dap_test_json_integer(dap_test_json_get(dap_test_body(response), "exitCode")) == 0);
+            free(response);
+            dap_test_finish(&session);
+            free(log);
+        }
+    }
+    free(binary); free(escaped_source); free(source); free(quoted_project); free(project);
+    free(quoted_compiler); free(backend); free(original_tools); free(tools);
+    free(original_archive); free(archive); free(compiler); free(lib_dir); free(include);
+    free(bin_dir); free(install); free(repo);
+    thin_lto_test_dispose(&work);
+    puts("DAP runtime values: native/ThinLTO runtime x default/off/thin, arrays, strings and fields verified");
+}
+
 /* Verify launch defaults and byte-for-byte preservation of explicit frame formats. */
 static void test_dap_launch_frame_format_defaults(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x71U};
@@ -32839,6 +33100,8 @@ int main(void) {
     test_thin_lto_runtime_archive();
     test_thin_lto_linux_abi_matrix();
     test_thin_lto_dap_dependencies();
+    test_debug_runtime_accessor_link_flags();
+    test_dap_runtime_accessor_lto_matrix();
     test_main_argv_lifetime();
     test_binary_operand_lifetime();
     test_tuple_initializer_lifetime();
