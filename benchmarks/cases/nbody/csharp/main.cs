@@ -28,10 +28,9 @@ static class Program
         double px = 0, py = 0, pz = 0;
         for (int i = 0; i < bodies.Length; ++i)
         {
-            var b = bodies[i];
+            ref var b = ref bodies[i];
             b.Vx *= 365.24; b.Vy *= 365.24; b.Vz *= 365.24; b.Mass *= solar;
             px += b.Vx * b.Mass; py += b.Vy * b.Mass; pz += b.Vz * b.Mass;
-            bodies[i] = b;
         }
         bodies[0].Vx = -px / solar; bodies[0].Vy = -py / solar; bodies[0].Vz = -pz / solar;
         return bodies;
@@ -43,11 +42,11 @@ static class Program
         double total = 0;
         for (int i = 0; i < bodies.Length; ++i)
         {
-            var a = bodies[i];
+            ref var a = ref bodies[i];
             total += 0.5 * a.Mass * (a.Vx * a.Vx + a.Vy * a.Vy + a.Vz * a.Vz);
             for (int j = i + 1; j < bodies.Length; ++j)
             {
-                var b = bodies[j];
+                ref var b = ref bodies[j];
                 double dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
                 total -= a.Mass * b.Mass / Math.Sqrt(dx * dx + dy * dy + dz * dz);
             }
@@ -62,20 +61,18 @@ static class Program
         {
             for (int j = i + 1; j < bodies.Length; ++j)
             {
-                var a = bodies[i]; var b = bodies[j];
+                ref var a = ref bodies[i]; ref var b = ref bodies[j];
                 double dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
                 double d2 = dx * dx + dy * dy + dz * dz;
                 double magnitude = 0.01 / (d2 * Math.Sqrt(d2));
                 a.Vx -= dx * b.Mass * magnitude; a.Vy -= dy * b.Mass * magnitude; a.Vz -= dz * b.Mass * magnitude;
                 b.Vx += dx * a.Mass * magnitude; b.Vy += dy * a.Mass * magnitude; b.Vz += dz * a.Mass * magnitude;
-                bodies[i] = a; bodies[j] = b;
             }
         }
         for (int i = 0; i < bodies.Length; ++i)
         {
-            var b = bodies[i];
+            ref var b = ref bodies[i];
             b.X += 0.01 * b.Vx; b.Y += 0.01 * b.Vy; b.Z += 0.01 * b.Vz;
-            bodies[i] = b;
         }
     }
 
