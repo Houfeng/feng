@@ -1,6 +1,6 @@
 # Feng union 布局与 aggregate 按索引遍历优化方案
 
-> **状态：第二阶段拆分为纯 union 布局优化；三项既有问题修复保存为独立 patch，当前未应用。拆分后 Linux 全量回归已通过，性能评测待人工 Review、提交后进行。日期：2026-10-16。**
+> **状态：保留两阶段布局方案及拆分时验证记录；三项独立修复的当前状态见 §4.4 及各自 bugfix 文档。日期：2026-10-16。**
 >
 > 本文提出两阶段方案：先扩展通用 aggregate 遍历机制，再迁移 union 布局。
 > 已确认采用 `managed_slot_choice_offset`，0 表示未设置，非零值为实际字节偏移加 1。
@@ -169,17 +169,17 @@ Review，不能在实现中自行增加另一套实例元数据或 FT 协议。
 
 ### 4.4 第二阶段验证发现的既有问题
 
-三项问题均在修改前编译器复现，曾获人工批准合并修复。现按新的人工安排，将实现、
-对应回归用例和必要规范更新分别拆出，保存为同名 bugfix 文档旁的 patch，稍后逐项
-Review、应用。详细根因及验证记录仅维护在各自文档中：
+三项问题均在修改前编译器复现，曾获人工批准合并修复，之后按人工安排将实现、
+对应回归用例和必要规范更新分别拆出。当前处理状态如下；详细根因、方案及验证
+记录仅维护在各自文档中：
 
-- [值对象字面量部分初始化清理](feng-value-literal-partial-cleanup-bugfix.md)。
-- [union 成员引用的静态循环识别](feng-union-cycle-detection-bugfix.md)。
-- [DAP 内联数组元素类型与步长](feng-dap-array-element-types-bugfix.md)。
+- [值对象字面量构造期清理](feng-value-literal-conditional-cleanup-bugfix.md)：旧无条件登记方案已废弃，patch 已删除；新方案待 Review，未实施。
+- [union 成员引用的静态循环识别](feng-union-cycle-detection-bugfix.md)：独立 patch 保留，未应用。
+- [DAP 内联数组元素类型与步长](feng-dap-array-element-types-bugfix.md)：已独立提交，原 patch 已删除。
 
-这三项修复当前未应用，已知缺陷仍存在。纯布局版本保留完整值的异常清理、旧分析
-可识别循环类型中的活动 slot 扫描及复活、局部／对象字段的 DAP 展示覆盖。
-不通过跳过或放宽缺陷断言取得通过；对应新增用例随修复保存，应用时一起恢复。
+纯布局拆分版本保留完整值的异常清理、旧分析可识别循环类型中的活动 slot 扫描及
+复活、局部／对象字段的 DAP 展示覆盖。不通过跳过或放宽缺陷断言取得通过；
+独立问题的缺陷场景随各自修复落实回归。
 
 ## 5. 变更范围与 ABI 边界
 
@@ -421,8 +421,8 @@ C 差异为 `new-layout-cycle.diff`，最终 IR 摘录为 `llvm-fixed/check.ll` 
 源码校验记录一并保存于该目录，并归档到上述持久备份目录的
 `split-verification.tar.gz`。
 
-主工作区的生产代码仅保留 `src/codegen/codegen.c` 中的 union 布局优化；三项修复
-未应用，第一阶段已提交的 runtime 机制与修复保持原状。本次没有运行性能评测，
+拆分当时，主工作区的生产代码仅保留 `src/codegen/codegen.c` 中的 union 布局优化；三项修复
+未应用，第一阶段已提交的 runtime 机制与修复保持原状。该轮没有运行性能评测，
 也未执行 macOS 回归或提交代码。历史 0.313 s 诊断仅替换了循环分析单元，不能
 当作本版本成绩；性能评测按人工安排在 Review、提交后进行。
 
