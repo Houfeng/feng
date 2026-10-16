@@ -17508,6 +17508,9 @@ void test_spec_registration_growth_codegen(void (*compile_c)(const char *));
 /* Source callable entries share local-storage visibility, including erased bodies. */
 void test_callable_debug_storage_codegen(void (*compile_c)(const char *));
 
+/* Concrete debug types preserve nominal array stride and sidecar records. */
+void test_dap_array_element_types_codegen(void);
+
 /* Compact unions preserve static ownership, generic offsets and tag identity. */
 void test_union_slot_layout_codegen(void (*compile_c)(const char *));
 
@@ -17787,6 +17790,7 @@ int main(void) {
     test_receiver_binding_codegen(compile_generated_c_or_die);
     test_spec_registration_growth_codegen(compile_generated_c_or_die);
     test_callable_debug_storage_codegen(compile_generated_c_or_die);
+    test_dap_array_element_types_codegen();
     fprintf(stdout, "codegen tests passed\n");
     return 0;
 }

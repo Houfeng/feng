@@ -293,7 +293,11 @@ bool feng_codegen_maping_info_add_variable_with_parent_display_type(
         display_type[0] == '\0') {
         return false;
     }
-    if (kind == FENG_CODEGEN_MAPING_VARIABLE_FIELD) {
+    if (kind == FENG_CODEGEN_MAPING_VARIABLE_TYPE) {
+        if (frame_backend_symbol != NULL || backend_name == NULL || backend_name[0] == '\0' ||
+            read_expr != NULL || parent_display_type != NULL || strcmp(display_name, display_type) != 0)
+            return false;
+    } else if (kind == FENG_CODEGEN_MAPING_VARIABLE_FIELD) {
         if (frame_backend_symbol != NULL || backend_name != NULL || read_expr == NULL ||
             read_expr[0] == '\0' || parent_display_type == NULL ||
             parent_display_type[0] == '\0') {
@@ -303,6 +307,13 @@ bool feng_codegen_maping_info_add_variable_with_parent_display_type(
         return false;
     }
     for (index = 0U; index < info->variable_count; ++index) {
+        if (kind == FENG_CODEGEN_MAPING_VARIABLE_TYPE) {
+            if (info->variables[index].kind == kind &&
+                strcmp(info->variables[index].display_type, display_type) == 0)
+                return mapping_cstr_equals(info->variables[index].backend_name, backend_name);
+            continue;
+        }
+        if (info->variables[index].kind == FENG_CODEGEN_MAPING_VARIABLE_TYPE) continue;
         if (kind == FENG_CODEGEN_MAPING_VARIABLE_FIELD) {
             if (info->variables[index].kind != FENG_CODEGEN_MAPING_VARIABLE_FIELD ||
                 !mapping_cstr_equals(info->variables[index].parent_display_type,
@@ -346,7 +357,9 @@ bool feng_codegen_maping_info_add_variable_with_parent_display_type(
     entry.display_type = mapping_dup_cstr(display_type);
     entry.parent_display_type = mapping_dup_cstr(parent_display_type);
     entry.kind = kind;
-    if ((kind != FENG_CODEGEN_MAPING_VARIABLE_FIELD && entry.frame_backend_symbol == NULL) ||
+    if ((kind != FENG_CODEGEN_MAPING_VARIABLE_FIELD && kind != FENG_CODEGEN_MAPING_VARIABLE_TYPE &&
+         entry.frame_backend_symbol == NULL) ||
+        (backend_name != NULL && entry.backend_name == NULL) ||
         entry.display_name == NULL ||
         entry.display_type == NULL ||
         (parent_display_type != NULL && entry.parent_display_type == NULL) ||

@@ -36,7 +36,9 @@ typedef enum FengCodegenMapingVariableKind {
     FENG_CODEGEN_MAPING_VARIABLE_BINDING = 1,
     FENG_CODEGEN_MAPING_VARIABLE_CAPTURE = 2,
     FENG_CODEGEN_MAPING_VARIABLE_SELF = 3,
-    FENG_CODEGEN_MAPING_VARIABLE_FIELD = 4
+    FENG_CODEGEN_MAPING_VARIABLE_FIELD = 4,
+    /* Concrete Feng type -> C representation; frame/read_expr/parent are NULL. */
+    FENG_CODEGEN_MAPING_VARIABLE_TYPE = 5
 } FengCodegenMapingVariableKind;
 
 /* Maps one backend frame symbol to a user-facing frame name and policy. */
@@ -46,7 +48,7 @@ typedef struct FengCodegenMapingFrameRecord {
     FengCodegenMapingFramePolicy policy;
 } FengCodegenMapingFrameRecord;
 
-/* Maps one backend variable slot, expression, or field template to a debug entity. */
+/* Maps one backend variable, field template, or concrete C type to a debug entity. */
 typedef struct FengCodegenMapingVariableRecord {
     char *frame_backend_symbol;
     char *backend_name;

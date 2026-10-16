@@ -362,7 +362,7 @@
 
 - `frame_backend_symbol_strid`
   - 该映射所属的 callable / frame。
-  - `kind = field` 的字段模板记录此项为 0（不属于任何具体 frame）。
+  - `kind = field` / `type` 的记录此项为 0（不属于任何具体 frame）。
 - `backend_name_strid`
   - `lldb-dap` 可见的原始变量名。
   - `kind = field` 的字段模板记录此项为 0。
@@ -372,8 +372,12 @@
   - 用户可见的静态类型文本，为必填字段。
   - 数组沿用 Feng 语法显示为 `T[]` 或 `T[!]`，不写运行时长度摘要。
 - `kind`
-  - `param` / `local` / `capture` / `self` / `field`。
+  - `param` / `local` / `capture` / `self` / `field` / `type`。
   - `field`：字段模板记录，不属于任何具体 frame，描述某 Feng 用户类型的一个字段。
+  - `type`：具化后的 Feng 类型与 C 表示的映射，不属于 frame。`display_name` 与
+    `display_type` 均为完整 Feng 类型名，`backend_name` 为真实 C 类型；frame、
+    `read_expr`、parent 均为空。按 `display_type` 去重，跨包合并时拒绝冲突的 C 表示。
+    复用现有 ENTS 记录宽度，不新增 section；开放泛型占位载体不作为具体类型记录。
 - `read_expr_strid`
   - 顶层变量：可选；当 `backend_name` 指向 carrier 而非最终用户值时，提供最小后端读取表达式。
   - 字段模板记录：必填；C 成员访问后缀（含点号或箭头），例如 `.feng_age`；代理层将其拼接到父 `read_expr` 后，构造子变量完整读取表达式：`"(" + parent_read_expr + ")" + field_read_expr`。
@@ -392,7 +396,7 @@
 - 字段模板记录的唯一键是 `parent_strid + display_name_strid`；同一类型下字段名不允许重复。
 - `display_name_strid` 对顶层变量允许重复；同一 callable 中不同词法位置的 shadowing 变量，允许映射到不同 `backend_name_strid`。
 - `display_type_strid` 为必填；首版 reader / writer 不再保留"缺失类型时额外走可选 section 补齐"的旁路。
-- `kind = field` 的记录不参与 per-frame 变量重写；proxy 仅在展开用户类型时按 `parent_strid` 查询字段模板列表。
+- `kind = field` / `type` 的记录不参与 per-frame 变量重写；前者用于字段展开，后者用于解析数组元素的 C 类型。
 - `ENTS` 记录格式：version 1 为 6 个 u32（无 `parent_strid`，读为 0）；version 2 为 7 个 u32（含 `parent_strid`）；reader 按 header 中 `version` 字段区分两种记录尺寸，向前兼容。
 - `feng dap` 只对 LLDB 当前返回的可见变量集合做重写，因此当 LLDB 的可见性结果正确时，同名变量不会串到未激活绑定上。
 - 当前 frame 若可直接读取本模块的顶层 binding，则 `.fd.ENTS` 也应为该 frame 记录对应的 module binding backend slot，这样 backend `Globals` scope 才能被重写成 Feng 名称，而不是因为缺失映射被整体过滤掉。
@@ -502,7 +506,12 @@ LLDB 对 `FengArray *` / `FengString *` 等 runtime 载体只理解 C struct 内
 
 - 对 DAP client（VS Code）完全透明，client 只认 DAP 协议，代理合成的 children 与 LLDB 原生 children 无法区分。
 - 代理层维护一个 **synthetic variablesReference** 注册表，拦截子变量请求，绕过 LLDB 直接返回合成 children 列表。
-- 数组元素展开完全在代理层动态合成，不写入 `.fd`；代理层利用 `display_type` 后缀和 `feng_array_data` 表达式生成。
+- 数组元素数量与内容由代理层动态读取。具名元素的 C 表示通过 ENTS 的 `type`
+  记录取得，使用真实元素类型作下标访问；不把 union／值对象按 `void *` 步长读取。
+  内建类型沿用直接映射；同一次数组展开只解析一次元素的 C 类型，所有元素复用。
+  Debug 编译保留未被生成代码直接使用的类型调试信息（Clang
+  `-fno-eliminate-unused-debug-types`），使仅经数组使用的跨包类型也可被 LLDB 解析。
+  此选项不用于 Release，不增加运行时类型存储。
 - 用户类型字段展开通过在 `ENTS` 中写入 `kind = field` 的字段模板记录实现；codegen 将每个 spec 类型的字段写为 `parent_strid = 父类型名 strid` 的 ENTS 记录，代理层按 `parent_strid` 查找字段列表，不新增 section。
 - string 不做字符级展开，顶层显示实际字符串值即可。
 
@@ -537,7 +546,7 @@ LLDB 对 `FengArray *` / `FengString *` 等 runtime 载体只理解 C struct 内
 | `bool` | `((uint8_t *)feng_array_data(PARENT))[INDEX]` |
 | `string` | `((FengString **)feng_array_data(PARENT))[INDEX]` |
 | `T[]` / `T[!]`（嵌套数组） | `((FengArray **)feng_array_data(PARENT))[INDEX]` |
-| 用户类型元素 | 结合 `ENTS` 中 `parent_strid == 元素类型名 strid` 的字段模板记录展开子字段 |
+| 具名类型元素 | `((C_TYPE *)feng_array_data(PARENT))[INDEX]`，`C_TYPE` 来自 ENTS `type` 记录；后端返回的 children 继续使用现有载体或字段展示协议 |
 
 展开约束：
 

@@ -2388,7 +2388,7 @@ static const FengCodegenMapingVariableRecord *proxy_find_variable_record(
     for (index = 0U; index < artifact->info.variable_count; ++index) {
         const FengCodegenMapingVariableRecord *record = artifact->info.variables + index;
 
-        if (record->backend_name == NULL) {
+        if (record->frame_backend_symbol == NULL || record->backend_name == NULL) {
             continue;
         }
         if (strcmp(record->frame_backend_symbol, frame_backend_symbol) == 0 &&
@@ -3371,7 +3371,7 @@ static bool proxy_resolve_evaluate_identifier(const FengDebugArtifact *artifact,
         const FengCodegenMapingVariableRecord *record = artifact->info.variables + index;
         const char *candidate_expression;
 
-        if (record->kind == FENG_CODEGEN_MAPING_VARIABLE_FIELD ||
+        if (record->frame_backend_symbol == NULL ||
             strcmp(record->frame_backend_symbol, frame_backend_symbol) != 0 ||
             strcmp(record->display_name, identifier) != 0) {
             continue;
@@ -5466,7 +5466,9 @@ static char *proxy_array_summary_element_type(const FengCodegenMapingVariableRec
     return proxy_array_display_element_type(record->display_type);
 }
 
-static const char *proxy_array_element_c_type(const char *element_display_type) {
+/* Keep builtin mappings direct and resolve nominal types from debug metadata. */
+static const char *proxy_array_element_c_type(const FengDebugArtifact *artifact,
+                                              const char *element_display_type) {
     char *nested_element_type;
 
     if (element_display_type == NULL) {
@@ -5489,14 +5491,21 @@ static const char *proxy_array_element_c_type(const char *element_display_type) 
         free(nested_element_type);
         return "FengArray *";
     }
+    if (artifact != NULL) {
+        for (size_t i = 0U; i < artifact->info.variable_count; ++i) {
+            const FengCodegenMapingVariableRecord *record = &artifact->info.variables[i];
+            if (record->kind == FENG_CODEGEN_MAPING_VARIABLE_TYPE &&
+                strcmp(record->display_type, element_display_type) == 0)
+                return record->backend_name;
+        }
+    }
     return "void *";
 }
 
+/* Subscript the actual C type so inline values use their complete stride. */
 static char *proxy_build_array_element_expr(const char *parent_read_expr,
-                                            const char *element_display_type,
+                                            const char *element_c_type,
                                             uint64_t index) {
-    const char *element_c_type = proxy_array_element_c_type(element_display_type);
-
     if (parent_read_expr == NULL || parent_read_expr[0] == '\0' || element_c_type == NULL) {
         return NULL;
     }
@@ -5811,6 +5820,7 @@ static bool proxy_send_synthetic_array_variables_response(FengDapMessageReader *
     size_t variables_capacity = 0U;
     char *payload = NULL;
     uint64_t visible_count;
+    const char *element_c_type = NULL;
     bool ok = false;
 
     if (synthetic_ref == NULL || synthetic_ref->kind != FENG_DAP_SYNTHETIC_ARRAY) {
@@ -5824,6 +5834,9 @@ static bool proxy_send_synthetic_array_variables_response(FengDapMessageReader *
     visible_count = synthetic_ref->element_count;
     if (visible_count > FENG_DAP_SYNTHETIC_ARRAY_ELEMENT_LIMIT) {
         visible_count = FENG_DAP_SYNTHETIC_ARRAY_ELEMENT_LIMIT;
+    }
+    if (visible_count > 0U) {
+        element_c_type = proxy_array_element_c_type(artifact, synthetic_ref->element_display_type);
     }
     if (!proxy_append_byte(&variables_json, &variables_length, &variables_capacity, '[')) {
         proxy_report_error(error_fd, "failed to expand synthetic array variables", "out of memory");
@@ -5840,7 +5853,7 @@ static bool proxy_send_synthetic_array_variables_response(FengDapMessageReader *
         uint64_t request_id = 0U;
 
         element_expr = proxy_build_array_element_expr(synthetic_ref->parent_read_expr,
-                                                      synthetic_ref->element_display_type,
+                                                      element_c_type,
                                                       element_index);
         element_name = proxy_dup_printf("[%llu]", (unsigned long long)element_index);
         if (element_expr == NULL || element_name == NULL) {
@@ -5881,8 +5894,30 @@ static bool proxy_send_synthetic_array_variables_response(FengDapMessageReader *
             proxy_report_error(error_fd, "failed to expand synthetic array variables", "out of memory");
             goto cleanup;
         }
+        char *carrier_summary = NULL;
+        if (!proxy_present_carrier_value(evaluated.type, element_expr,
+                                          synthetic_ref->element_display_type,
+                                          evaluated.variables_reference,
+                                          backend_reader, backend_stdin_fd, output_fd,
+                                          artifact, state, synthetic_ref->frame_id,
+                                          synthetic_ref->depth + 1U,
+                                          &carrier_summary, &child_ref, error_fd)) {
+            free(element_expr);
+            free(element_name);
+            free(element_value);
+            free(element_type);
+            proxy_evaluated_variable_dispose(&evaluated);
+            goto cleanup;
+        }
+        if (carrier_summary != NULL) {
+            free(element_value);
+            element_value = carrier_summary;
+        } else {
+            child_ref = evaluated.variables_reference;
+        }
         if (strcmp(synthetic_ref->element_display_type, "string") == 0) {
             char *string_value = NULL;
+            child_ref = 0U;
 
             if (!proxy_try_read_runtime_string_value(backend_reader,
                                                      backend_stdin_fd,

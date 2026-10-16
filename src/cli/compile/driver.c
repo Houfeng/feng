@@ -1959,7 +1959,9 @@ static bool argv_push_mode_flags(ArgVec *av, bool release,
         !argv_push(av, "-ffp-contract=off")) {
         return false;
     }
-    if (!release && !argv_push(av, "-g")) {
+    /* DAP may name a concrete element type used only through an erased array. */
+    if (!release && (!argv_push(av, "-g") ||
+                     !argv_push(av, "-fno-eliminate-unused-debug-types"))) {
         return false;
     }
     if (release && !argv_push(av, "-DNDEBUG")) {

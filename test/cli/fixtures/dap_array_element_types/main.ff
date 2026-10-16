@@ -1,0 +1,33 @@
+module union_slot_debug;
+import dap_array_dep;
+
+/** Closed small and pointer payloads are both visible through DAP. */
+@value type Empty {}
+/** A generic union retains its language tag and active payload. */
+spec Choice<T>: Empty | T;
+/** An object field exposes the same union view as a local. */
+type Holder { let value: Choice<i32>; }
+/** Inline values exercise the same concrete-type mapping without a union. */
+@value type Pair { let first: i64; let second: i64; }
+/** Nominal scalar types retain their four-byte element stride. */
+enum Status { First = 3, Second = 7 }
+/** Keep the stop and later execution observable without a standard library. */
+@cdecl("libc", "puts") extern func puts(message: string*): i32;
+/** Standalone debugger fixture does not depend on std. */
+func main(args: string[]) {
+    let small: Choice<i32> = (i32)7;
+    let large: Choice<i64> = 9000000001;
+    let holder = Holder { value: small };
+    let items: Choice<i32>[] = [small, (i32)9];
+    let onlyArray: Choice<u16>[] = [(u16)42, (u16)65530];
+    let nested: Choice<i32>[][] = [items, [(i32)11]];
+    let empty: Choice<i32>[] = [];
+    let defaults = Choice<i32>[: (int)2];
+    let writable: Choice<i32>[!] = [(i32)13, (i32)15];
+    let pairs: Pair[] = [Pair { first: 1, second: 2 }, Pair { first: 3, second: 4 }];
+    let states: Status[] = [Status.First, Status.Second];
+    let holders: Holder[] = [holder, Holder { value: (i32)23 }];
+    let imported = choices();
+    let importedPairs = pairsFromLibrary();
+    puts(&"ready"); // breakpoint: ready
+}

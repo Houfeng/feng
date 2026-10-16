@@ -483,6 +483,15 @@ static bool debug_merge_variable_record(FengCodegenMapingInfo *merged_info,
         return false;
     }
     is_field = variable->kind == FENG_CODEGEN_MAPING_VARIABLE_FIELD;
+    if (variable->kind == FENG_CODEGEN_MAPING_VARIABLE_TYPE) {
+        if (feng_codegen_maping_info_add_variable_with_parent_display_type(merged_info,
+                variable->frame_backend_symbol, variable->backend_name, variable->display_name,
+                variable->read_expr, variable->display_type, variable->parent_display_type,
+                variable->kind)) return true;
+        debug_set_error(out_error_message, "%s provides an invalid or conflicting type '%s'",
+                        input_label != NULL ? input_label : "debug sidecar input", variable->display_type);
+        return false;
+    }
     if (is_field) {
         if (variable->frame_backend_symbol != NULL || variable->backend_name != NULL ||
             variable->read_expr == NULL || variable->parent_display_type == NULL ||
@@ -500,6 +509,7 @@ static bool debug_merge_variable_record(FengCodegenMapingInfo *merged_info,
     }
 
     for (index = 0U; index < merged_info->variable_count; ++index) {
+        if (merged_info->variables[index].kind == FENG_CODEGEN_MAPING_VARIABLE_TYPE) continue;
         if (is_field) {
             if (merged_info->variables[index].kind != FENG_CODEGEN_MAPING_VARIABLE_FIELD ||
                 !debug_cstr_equals(merged_info->variables[index].parent_display_type,
@@ -1233,11 +1243,17 @@ static bool debug_parse_variables_section(const FengDebugParsedSection *section,
             : NULL;
 
         if (display_name == NULL || display_type == NULL ||
-            kind > (uint32_t)FENG_CODEGEN_MAPING_VARIABLE_FIELD) {
+            kind > (uint32_t)FENG_CODEGEN_MAPING_VARIABLE_TYPE) {
             debug_set_error(out_error_message, "invalid debug variable record");
             return false;
         }
-        if (kind == (uint32_t)FENG_CODEGEN_MAPING_VARIABLE_FIELD) {
+        if (kind == (uint32_t)FENG_CODEGEN_MAPING_VARIABLE_TYPE) {
+            if (frame_backend_symbol != NULL || backend_name == NULL || backend_name[0] == '\0' ||
+                read_expr != NULL || parent_display_type != NULL || strcmp(display_name, display_type) != 0) {
+                debug_set_error(out_error_message, "invalid debug type record");
+                return false;
+            }
+        } else if (kind == (uint32_t)FENG_CODEGEN_MAPING_VARIABLE_FIELD) {
             if (frame_backend_symbol != NULL || backend_name != NULL || read_expr == NULL ||
                 parent_display_type == NULL) {
                 debug_set_error(out_error_message, "invalid debug field record");
@@ -1255,7 +1271,9 @@ static bool debug_parse_variables_section(const FengDebugParsedSection *section,
         info->variables[index].parent_display_type = debug_dup_cstr(parent_display_type);
         info->variables[index].kind = (FengCodegenMapingVariableKind)kind;
         if ((kind != (uint32_t)FENG_CODEGEN_MAPING_VARIABLE_FIELD &&
+             kind != (uint32_t)FENG_CODEGEN_MAPING_VARIABLE_TYPE &&
              info->variables[index].frame_backend_symbol == NULL) ||
+            (backend_name != NULL && info->variables[index].backend_name == NULL) ||
             info->variables[index].display_name == NULL ||
             info->variables[index].display_type == NULL ||
             (parent_display_type != NULL && info->variables[index].parent_display_type == NULL)) {

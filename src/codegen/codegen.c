@@ -3321,6 +3321,10 @@ static char *cg_debug_dup_display_type_from_cgtype(CG *cg,
         blame);
 }
 
+/* Nominal types record the C representation used for debugger array access. */
+static bool cg_debug_add_type_record(CG *cg, const CGType *type,
+                                      const FengProgram *program, FengToken token);
+
 /* Adds one variable mapping that already has a C-string display name. */
 static bool cg_debug_add_variable_record_cstr_typed(CG *cg,
                                                     const char *backend_name,
@@ -6524,6 +6528,10 @@ static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
     free(box_descriptor_name);
     free(box_equal_name);
     free(module_dot_name);
+    if (cg_debug_enabled(cg)) {
+        CGType type = {.kind = CG_TYPE_I32, .enum_decl = decl};
+        return cg_debug_add_type_record(cg, &type, owner_program, decl->token);
+    }
     return true;
 }
 
@@ -66137,6 +66145,42 @@ static void cg_dispose(CG *cg) {
     free(cg->expr_narrowings);
 }
 
+/* Preserve concrete C representations for erased array elements in the debugger. */
+static bool cg_debug_add_type_record(CG *cg, const CGType *type,
+                                      const FengProgram *program, FengToken token) {
+    char *display = cg_debug_dup_display_type_from_cgtype_from_program(cg, type, program, token);
+    char *backend = cg_ctype_dup(type);
+    bool ok = display != NULL && backend != NULL &&
+        feng_codegen_maping_info_add_variable_with_display_type(&cg->debug_info, NULL,
+            backend, display, NULL, display, FENG_CODEGEN_MAPING_VARIABLE_TYPE);
+    free(display);
+    free(backend);
+    return ok || cg_fail(cg, token, "IE0001", "codegen: failed to record concrete debug type");
+}
+
+/* Open generic placeholders have no concrete array stride; closed instances do. */
+static bool cg_debug_add_concrete_type_records(CG *cg) {
+    if (!cg_debug_enabled(cg)) return true;
+    for (size_t i = 0U; i < cg->user_type_count; ++i) {
+        const UserType *user = &cg->user_types[i];
+        if (user->generic_context_type_param_count != 0U) continue;
+        CGType type = {.kind = CG_TYPE_OBJECT, .user = user};
+        if (!cg_debug_add_type_record(cg, &type,
+                user->instantiation_program != NULL ? user->instantiation_program : user->owner_program,
+                user->decl->token)) return false;
+    }
+    for (size_t i = 0U; i < cg->user_spec_count; ++i) {
+        const UserSpec *spec = &cg->user_specs[i];
+        if (spec->generic_context_type_param_count != 0U) continue;
+        CGType type = {.kind = spec->form == FENG_SPEC_FORM_CALLABLE ? CG_TYPE_CALLABLE : CG_TYPE_SPEC,
+                       .user_spec = spec};
+        if (!cg_debug_add_type_record(cg, &type,
+                spec->instantiation_program != NULL ? spec->instantiation_program : spec->owner_program,
+                spec->decl->token)) return false;
+    }
+    return true;
+}
+
 bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
                                FengCompileTarget target,
                                const FengCodegenOptions *options,
@@ -66225,6 +66269,10 @@ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
      * captured. The init prelude inside `main()` references these slots. */
     cg_emit_string_literal_table(&cg);
 
+    if (!cg_debug_add_concrete_type_records(&cg)) {
+        cg_dispose(&cg);
+        return false;
+    }
     char *src = cg_finalize(&cg);
     if (!src) {
         cg_fail(&cg, (FengToken){0}, "IE0001", "codegen: out of memory finalizing output");

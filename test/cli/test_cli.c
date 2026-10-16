@@ -33064,6 +33064,7 @@ static void test_dap_launch_frame_format_defaults(void) {
 
 #include "dap_callable.inc"
 #include "dap_union.inc"
+#include "test_dap_array_element_types.h"
 #include "throw_constraint.inc"
 #include "exception_info_routing.inc"
 #include "defer_exception_effects.inc"
@@ -33091,6 +33092,7 @@ int main(void) {
     test_bundle_ft_diagnostic_lifetime();
     test_debug_link_lto_object_lifetime();
     test_dap_launch_frame_format_defaults();
+    test_dap_array_element_types();
     test_thin_lto_option_diagnostics();
     test_thin_lto_direct_mode_matrix();
     test_thin_lto_project_dependency_matrix();

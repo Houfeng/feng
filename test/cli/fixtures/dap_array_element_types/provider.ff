@@ -1,0 +1,13 @@
+open module dap_array_dep;
+
+/** A source-hidden library supplies differently sized union payloads. */
+open spec RemoteChoice: i32 | i64;
+/** Inline records from a library must retain their full array stride. */
+@value open type RemotePair { open let first: i64; open let second: i64; }
+
+/** Return both active members without exposing the provider source. */
+open func choices(): RemoteChoice[] { return [(i32)21, (i64)9000000031]; }
+/** Distinct fields expose a pointer-width stride mistake on the second item. */
+open func pairsFromLibrary(): RemotePair[] {
+    return [RemotePair { first: 31, second: 32 }, RemotePair { first: 41, second: 42 }];
+}
