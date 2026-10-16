@@ -17513,6 +17513,8 @@ void test_dap_array_element_types_codegen(void);
 
 /* Compact unions preserve static ownership, generic offsets and tag identity. */
 void test_union_slot_layout_codegen(void (*compile_c)(const char *));
+/* Partial value construction retains ownership until completion or unwind. */
+void test_value_literal_partial_cleanup_codegen(void (*compile_c)(const char *));
 
 int main(void) {
     (void)system("rm -rf temp");
@@ -17526,6 +17528,7 @@ int main(void) {
     test_nested_exception_codegen(compile_generated_c_or_die);
     test_native_exception_codegen(compile_generated_c_or_die);
     test_cleanup_boundary_codegen(compile_generated_c_or_die);
+    test_value_literal_partial_cleanup_codegen(compile_generated_c_or_die);
     test_binary_operand_lifetime_codegen(compile_generated_c_or_die);
     test_throw_constraint_codegen(compile_generated_c_or_die);
     test_g24_static_descriptors(compile_generated_c_or_die);

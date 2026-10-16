@@ -32458,6 +32458,7 @@ static bool cg_resolve_object_literal_target_user_type(CG *cg,
         "CE0180", "codegen: only direct type constructor targets are supported for object literals");
 }
 
+/* Construct a value or managed object in the language-defined field order. */
 static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
     const UserType *ut = NULL;
     const UserMethod *ctor = NULL;
@@ -32492,6 +32493,8 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
     if (cg_user_type_is_value(ut)) {
         char *obj_ptr_expr = NULL;
         ExprResult ctor_result;
+        Scope *construction_scope = NULL;
+        bool ok = false;
 
         if (!cg_emit_value_type_construction(cg, ut, ctor,
                                              target_call != NULL
@@ -32529,6 +32532,30 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
             er_free(&ctor_result);
             return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
+        if (e->as.object_literal.field_count > 0U &&
+            (ctor_result.uses_reified_storage || cgtype_is_aggregate(ctor_result.type))) {
+            construction_scope = scope_push(cg->cur_scope);
+            if (construction_scope == NULL) goto value_literal_cleanup;
+            cg->cur_scope = construction_scope;
+            /* The storage outlives this scope. An empty source name keeps its
+             * compiler-only ownership invisible to Feng identifier lookup. */
+            CGType *ownership_type = cgtype_clone(ctor_result.type);
+            if (ownership_type == NULL) goto value_literal_cleanup;
+            if (!scope_add(construction_scope, "", ctor_result.c_expr, ownership_type, false)) {
+                if (construction_scope->count == 0U) cgtype_free(ownership_type);
+                goto value_literal_cleanup;
+            }
+            if (ctor_result.uses_reified_storage &&
+                !scope_mark_last_reified_storage(construction_scope,
+                    ctor_result.reified_descriptor_c_name, ctor_result.reified_size_c_name))
+                goto value_literal_cleanup;
+            buf_append_cstr(cg->cur_body, "    {\n");
+            if (ctor_result.uses_reified_storage)
+                cg_emit_cleanup_push_for_reified_aggregate_storage(cg,
+                    ctor_result.c_expr, ctor_result.reified_descriptor_c_name);
+            else
+                cg_emit_cleanup_push_for_aggregate_local(cg, ctor_result.c_expr, ctor_result.type);
+        }
         for (size_t i = 0; i < e->as.object_literal.field_count; i++) {
             const FengObjectFieldInit *fi = &e->as.object_literal.fields[i];
             size_t idx = (size_t)-1;
@@ -32540,23 +32567,23 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
                 }
             }
             if (idx == (size_t)-1) {
-                free(assigned); free(obj_ptr_expr); er_free(&ctor_result);
-                return cg_fail(cg, fi->token,
+                cg_fail(cg, fi->token,
                     "CE0176", "codegen: type '%s' has no field '%.*s'",
                     ut->feng_name, (int)fi->name.length, fi->name.data);
+                goto value_literal_cleanup;
             }
             if (assigned[idx]) {
-                free(assigned); free(obj_ptr_expr); er_free(&ctor_result);
-                return cg_fail(cg, fi->token,
+                cg_fail(cg, fi->token,
                     "CE0181", "codegen: duplicate field '%s' in object literal",
                     ut->fields[idx].feng_name);
+                goto value_literal_cleanup;
             }
             assigned[idx] = true;
-            ExprResult v;
+            ExprResult v = {0};
             const UserField *uf = &ut->fields[idx];
             if (!cg_emit_expr_for_expected_type(cg, fi->value, uf->type, &v)) {
-                free(assigned); free(obj_ptr_expr); er_free(&ctor_result);
-                return false;
+                er_free(&v);
+                goto value_literal_cleanup;
             }
             if (ctor_result.uses_reified_storage &&
                 ctor_result.reified_descriptor_c_name != NULL) {
@@ -32579,14 +32606,32 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
                     true)) {
                 free(field_offsets_expr);
                 er_free(&v);
-                free(assigned); free(obj_ptr_expr); er_free(&ctor_result);
-                return false;
+                goto value_literal_cleanup;
             }
             free(field_offsets_expr);
             er_free(&v);
         }
+        if (construction_scope != NULL) {
+            /* Retire producer temporaries first, then transfer the original
+             * value without retaining, releasing or clearing its fields. */
+            construction_scope->items[0].cleanup_pop_only = true;
+            cg_release_scope(cg, construction_scope);
+            buf_append_cstr(cg->cur_body, "    }\n");
+        }
+        ok = true;
+
+value_literal_cleanup:
+        if (construction_scope != NULL) {
+            cg->cur_scope = construction_scope->parent;
+            scope_pop_free(construction_scope);
+        }
         free(assigned);
         free(obj_ptr_expr);
+        if (!ok) {
+            er_free(&ctor_result);
+            if (!cg->failed) cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+            return false;
+        }
 
         /* Transfer the complete representation contract, including dynamic
          * aggregate descriptor/size authority. */

@@ -1,0 +1,308 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.partial_value;
+
+var partialCleanupDrops: int = 0;
+var partialCleanupOrder: int = 0;
+
+/** Observe each owned resource exactly once and in actual destruction order. */
+type PartialCleanupRef {
+    let id: int;
+    func ~PartialCleanupRef() {
+        if self.id > 0 {
+            partialCleanupDrops += 1;
+            partialCleanupOrder = partialCleanupOrder * 10 + self.id;
+        }
+    }
+}
+/** Two pointer fields ensure the selected slot recursively visits all leaves. */
+@value type PartialCleanupPair { let first: PartialCleanupRef; let second: PartialCleanupRef; }
+/** Both selected union fields need protection during partial initialization. */
+@value type PartialCleanupUnionPair { let first: PartialCleanupChoice; let second: PartialCleanupChoice; }
+/** A union field selects either a scalar, resource or nested value. */
+spec PartialCleanupChoice: i8 | PartialCleanupRef | PartialCleanupPair;
+
+/** Unwind both a completed union and a partially initialized outer value. */
+func partialCleanupThrow(): PartialCleanupRef { throw "slot-layout"; }
+/** The first field must be cleaned when evaluation of the second field throws. */
+func partialCleanupPartial() {
+    let first: PartialCleanupChoice = PartialCleanupRef { id: 5 };
+    let pair = PartialCleanupPair { first: PartialCleanupRef { id: 6 }, second: partialCleanupThrow() };
+}
+/** A nested selected aggregate must also unwind through the construction guard. */
+func partialCleanupPartialUnion() {
+    let pair = PartialCleanupUnionPair {
+        first: PartialCleanupPair { first: PartialCleanupRef { id: 6 }, second: PartialCleanupRef { id: 7 } },
+        second: partialCleanupThrow()
+    };
+}
+/** Keep the shared construction call inside a void try-expression target. */
+func partialCleanupPartialGeneric() {
+    let value = makePartialPair<PartialCleanupRef>(PartialCleanupRef { id: 8 },
+        () { return partialCleanupThrow(); });
+}
+
+/** An ordinary constructor evaluates its arguments before the nested fields. */
+type PartialCleanupBuilt {
+    let n: int;
+    func PartialCleanupBuilt(n: int) { self.n = n; }
+}
+/** Hold an owned field while another initializer evaluates constructor arguments. */
+@value type PartialCleanupNumber { let first: PartialCleanupRef; let n: int; }
+/** A throwing argument must be included in the whole initializer's effects. */
+func partialCleanupConstructorArgument() {
+    let value = PartialCleanupNumber {
+        first: PartialCleanupRef { id: 2 }, n: (PartialCleanupBuilt(partialThrowNumber()) {}).n
+    };
+}
+
+/** Member initialization already owns a resource before explicit fields run. */
+@value type PartialCleanupPreset {
+    let first: PartialCleanupRef = PartialCleanupRef { id: 9 };
+    let second: PartialCleanupRef;
+}
+/** Fail at the first explicit initializer without losing the default field. */
+func partialCleanupDefault() {
+    let pair = PartialCleanupPreset { second: partialCleanupThrow() };
+}
+/** A user constructor can acquire a resource before explicit initialization. */
+@value type PartialCleanupConstructed {
+    let first: PartialCleanupRef;
+    let second: PartialCleanupRef;
+    func PartialCleanupConstructed() { self.first = PartialCleanupRef { id: 7 }; }
+}
+/** The first explicit failure must also release constructor-populated fields. */
+func partialCleanupAfterConstructor() {
+    let pair = PartialCleanupConstructed() { second: partialCleanupThrow() };
+}
+/** Exercise a later failure after more than one field has acquired ownership. */
+@value type PartialCleanupTriple {
+    let first: PartialCleanupRef; let second: PartialCleanupRef; let third: PartialCleanupRef;
+}
+/** The failing last field is not owned, while both earlier fields are. */
+func partialCleanupLast() {
+    let value = PartialCleanupTriple {
+        first: PartialCleanupRef { id: 2 }, second: PartialCleanupRef { id: 3 }, third: partialCleanupThrow()
+    };
+}
+/** A borrowed outer owner must survive the failed construction. */
+func partialCleanupBorrowed(ref: PartialCleanupRef) {
+    let pair = PartialCleanupPair { first: ref, second: partialCleanupThrow() };
+}
+/** A normal return from a field expression leaves the unfinished value. */
+func partialCleanupEarly(): int {
+    let pair = PartialCleanupPair {
+        first: PartialCleanupRef { id: 2 },
+        second: if true { return 31; } else { PartialCleanupRef { id: 3 }; }
+    };
+    return 0;
+}
+/** An early return also retires a node required by the other throwing path. */
+func partialCleanupGuardedEarly(stop: bool): int {
+    let pair = PartialCleanupPair {
+        first: PartialCleanupRef { id: 2 },
+        second: if stop { return 31; } else { partialCleanupThrow(); }
+    };
+    return 0;
+}
+/** Returning an outside owner must survive cleanup of the unfinished value. */
+func partialCleanupReturnOwner(ref: PartialCleanupRef): PartialCleanupRef {
+    let pair = PartialCleanupPair {
+        first: ref, second: if true { return ref; } else { PartialCleanupRef { id: 3 }; }
+    };
+    return ref;
+}
+/** Rethrowing from an initializer's catch still abandons the construction. */
+func partialCleanupRethrow() {
+    let value = PartialCleanupPair {
+        first: PartialCleanupRef { id: 2 }, second: try partialCleanupThrow() catch { throw; }
+    };
+}
+/** Inner loop exits preserve the enclosing construction and clean only inner locals. */
+func partialCleanupLoop() {
+    let pair = PartialCleanupPair {
+        first: PartialCleanupRef { id: 3 },
+        second: if true {
+            var i = 0;
+            while i < 3 {
+                i += 1;
+                let inner = PartialCleanupRef { id: 1 };
+                if i == 1 { continue; }
+                if i == 2 { break; }
+            }
+            PartialCleanupRef { id: 2 };
+        } else { PartialCleanupRef { id: 4 }; }
+    };
+    assert(partialCleanupDrops == 2 && pair.first.id == 3 && pair.second.id == 2,
+        "inner loop exits leave construction ownership alive");
+}
+/** An internally caught throw continues construction and preserves its first field. */
+func partialCleanupCaughtInside() {
+    let pair = PartialCleanupPair {
+        first: PartialCleanupRef { id: 2 },
+        second: try partialCleanupThrow() catch { PartialCleanupRef { id: 3 }; }
+    };
+    assert(partialCleanupDrops == 0 && pair.first.id == 2 && pair.second.id == 3,
+        "an internal catch keeps the partial value alive");
+}
+/** Nested throwing construction must release both inner and outer fields. */
+func partialCleanupNested() {
+    let outer = PartialCleanupUnionPair {
+        first: PartialCleanupRef { id: 2 },
+        second: PartialCleanupPair {
+            first: PartialCleanupRef { id: 3 }, second: partialCleanupThrow()
+        }
+    };
+}
+/** Non-throwing shared construction handles managed and aggregate actual types. */
+func partialCleanupQuietGeneric() {
+    let ref = PartialCleanupRef { id: 4 };
+    let pair = makeQuietPartialPair<PartialCleanupRef>(ref);
+    let value = makeQuietPartialPair<PartialPair<PartialCleanupRef>>(pair);
+    let choice: PartialCleanupChoice = ref;
+    let unionPair = makeQuietPartialPair<PartialCleanupChoice>(choice);
+    assert(pair.first.id == 4 && pair.second.id == 4 && value.first.first.id == 4,
+        "non-throwing generic fields preserve values");
+    assert(partialCleanupDrops == 0, "shared generic copies retain their outer owner");
+}
+
+/** Partial value construction transfers or unwinds each acquired resource. */
+func test_value_literal_partial_cleanup() {
+    describe("value literal partial cleanup", () {
+        test("exception and partial initialization cleanup", () {
+            partialCleanupDrops = 0;
+            partialCleanupOrder = 0;
+            var caught = false;
+            try partialCleanupPartial() catch error: string { caught = error == "slot-layout"; }
+            assert(caught, "exception reaches its handler");
+            assert(partialCleanupDrops == 2, "partial field and completed union are each cleaned");
+            assert(partialCleanupOrder == 65, "partial field is cleaned before the completed union");
+        });
+        test("nested selected field partial initialization cleanup", () {
+            partialCleanupDrops = 0;
+            partialCleanupOrder = 0;
+            var caught = false;
+            try partialCleanupPartialUnion() catch error: string { caught = error == "slot-layout"; }
+            assert(caught && partialCleanupDrops == 2 && partialCleanupOrder == 67,
+                "partial union releases the selected aggregate in field order");
+        });
+        test("source-hidden generic partial value cleanup", () {
+            partialCleanupDrops = 0;
+            partialCleanupOrder = 0;
+            var caught = false;
+            try partialCleanupPartialGeneric() catch error: string { caught = error == "slot-layout"; }
+            assert(caught && partialCleanupDrops == 1 && partialCleanupOrder == 8,
+                "generic construction and caller temporary each release their own token");
+        });
+        test("default field survives until first explicit initializer fails", () {
+            partialCleanupDrops = 0;
+            partialCleanupOrder = 0;
+            var caught = false;
+            try partialCleanupDefault() catch error: string { caught = error == "slot-layout"; }
+            assert(caught && partialCleanupDrops == 1 && partialCleanupOrder == 9,
+                "default initialization is part of the construction ownership");
+        });
+        test("nested constructor arguments retain escaping effects", () {
+            partialCleanupDrops = 0;
+            partialCleanupOrder = 0;
+            var caught = false;
+            try partialCleanupConstructorArgument() catch error: string { caught = error == "partial-number"; }
+            assert(caught && partialCleanupDrops == 1 && partialCleanupOrder == 2,
+                "argument failure releases the outer value's earlier field");
+        });
+        test("constructor-populated fields are protected", () {
+            partialCleanupDrops = 0;
+            partialCleanupOrder = 0;
+            var caught = false;
+            try partialCleanupAfterConstructor() catch error: string { caught = error == "slot-layout"; }
+            assert(caught && partialCleanupDrops == 1 && partialCleanupOrder == 7,
+                "explicit initialization takes ownership of constructor results");
+        });
+        test("last-field failure cleans every earlier field", () {
+            partialCleanupDrops = 0;
+            partialCleanupOrder = 0;
+            var caught = false;
+            try partialCleanupLast() catch error: string { caught = error == "slot-layout"; }
+            assert(caught && partialCleanupDrops == 2 && partialCleanupOrder == 32,
+                "initialized fields follow the existing pointer-slot unwind order");
+        });
+        test("borrowed field preserves its outside owner", () {
+            partialCleanupDrops = 0;
+            partialCleanupOrder = 0;
+            {
+                let ref = PartialCleanupRef { id: 1 };
+                var caught = false;
+                try partialCleanupBorrowed(ref) catch error: string { caught = error == "slot-layout"; }
+                assert(caught && partialCleanupDrops == 0 && ref.id == 1,
+                    "failed construction releases only its own reference");
+            }
+            assert(partialCleanupDrops == 1 && partialCleanupOrder == 1, "outer owner releases once");
+        });
+        test("non-throwing early return cleans unfinished value", () {
+            partialCleanupDrops = 0;
+            partialCleanupOrder = 0;
+            assert(partialCleanupEarly() == 31, "return keeps its control-flow destination");
+            assert(partialCleanupDrops == 1 && partialCleanupOrder == 2, "return cleans the prior field");
+        });
+        test("early return retires an installed unwind guard", () {
+            partialCleanupDrops = 0;
+            partialCleanupOrder = 0;
+            assert(partialCleanupGuardedEarly(true) == 31, "guarded return preserves its result");
+            assert(partialCleanupDrops == 1 && partialCleanupOrder == 2, "guarded return releases once");
+            partialCleanupDrops = 0;
+            partialCleanupOrder = 0;
+            var caught = false;
+            try partialCleanupGuardedEarly(false) catch error: string { caught = error == "slot-layout"; }
+            assert(caught && partialCleanupDrops == 1 && partialCleanupOrder == 2,
+                "the alternate throwing path uses the same ownership exactly once");
+        });
+        test("initializer rethrow abandons the partial value", () {
+            partialCleanupDrops = 0;
+            partialCleanupOrder = 0;
+            var caught = false;
+            try partialCleanupRethrow() catch error: string { caught = error == "slot-layout"; }
+            assert(caught && partialCleanupDrops == 1 && partialCleanupOrder == 2,
+                "rethrow retains the field boundary's cleanup obligation");
+        });
+        test("managed return preserves the returned ownership", () {
+            partialCleanupDrops = 0;
+            partialCleanupOrder = 0;
+            {
+                let ref = PartialCleanupRef { id: 8 };
+                let result = partialCleanupReturnOwner(ref);
+                assert(partialCleanupDrops == 0 && result.id == 8, "returned value stays alive");
+            }
+            assert(partialCleanupDrops == 1 && partialCleanupOrder == 8, "returned ownership releases once");
+        });
+        test("inner break and continue preserve construction ownership", () {
+            partialCleanupDrops = 0;
+            partialCleanupOrder = 0;
+            partialCleanupLoop();
+            assert(partialCleanupDrops == 4 && partialCleanupOrder == 1132,
+                "loop locals are cleaned first, completed fields afterwards");
+        });
+        test("internal catch completes initialization", () {
+            partialCleanupDrops = 0;
+            partialCleanupOrder = 0;
+            partialCleanupCaughtInside();
+            assert(partialCleanupDrops == 2 && partialCleanupOrder == 23,
+                "complete value releases fields in their ordinary order");
+        });
+        test("nested partial values unwind from inner to outer", () {
+            partialCleanupDrops = 0;
+            partialCleanupOrder = 0;
+            var caught = false;
+            try partialCleanupNested() catch error: string { caught = error == "slot-layout"; }
+            assert(caught && partialCleanupDrops == 2 && partialCleanupOrder == 32,
+                "inner construction unwinds before the outer value");
+        });
+        test("non-throwing generic copies preserve ownership", () {
+            partialCleanupDrops = 0;
+            partialCleanupOrder = 0;
+            partialCleanupQuietGeneric();
+            assert(partialCleanupDrops == 1 && partialCleanupOrder == 4,
+                "all copies release exactly their own ownership");
+        });
+    });
+}

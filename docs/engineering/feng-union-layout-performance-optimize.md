@@ -173,7 +173,7 @@ Review，不能在实现中自行增加另一套实例元数据或 FT 协议。
 对应回归用例和必要规范更新分别拆出。当前处理状态如下；详细根因、方案及验证
 记录仅维护在各自文档中：
 
-- [值对象字面量构造期清理](feng-value-literal-conditional-cleanup-bugfix.md)：旧无条件登记方案已废弃，patch 已删除；新方案待 Review，未实施。
+- [值对象字面量构造期清理](feng-value-literal-conditional-cleanup-bugfix.md)：原 patch 已删除；按人工决定先补齐登记，通用登记优化另立文档，实际实施及验证状态见该文档。
 - [union 成员引用的静态循环识别](feng-union-cycle-detection-bugfix.md)：独立 patch 保留，未应用。
 - [DAP 内联数组元素类型与步长](feng-dap-array-element-types-bugfix.md)：已独立提交，原 patch 已删除。
 

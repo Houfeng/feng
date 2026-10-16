@@ -33071,6 +33071,7 @@ static void test_dap_launch_frame_format_defaults(void) {
 #include "try_breakpoints.inc"
 #include "source_breakpoints.inc"
 #include "native_exception.inc"
+#include "test_value_literal_partial_cleanup.h"
 #include "argv_lifetime.inc"
 #include "binary_lifetime.inc"
 #include "tuple_lifetime.inc"
@@ -33108,6 +33109,7 @@ int main(void) {
     test_main_argv_lifetime();
     test_binary_operand_lifetime();
     test_tuple_initializer_lifetime();
+    test_value_literal_partial_cleanup_package();
     test_imported_cycle_lifetime();
     test_union_slot_package_lifetime();
     test_union_slot_debug_layout();

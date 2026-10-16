@@ -1,0 +1,59 @@
+module partial_value_consumer;
+
+import fcts_lib.test.partial_value;
+
+@cdecl("libc", "exit") extern func quit(code: i32): void;
+var dropped: int = 0;
+var order: int = 0;
+
+/** Count only observable resources; sanitizer also checks default instances. */
+type Ref {
+    let id: int;
+    func ~Ref() {
+        if self.id > 0 { dropped += 1; order = order * 10 + self.id; }
+    }
+}
+/** The caller owns one field before it enters a source-hidden initializer. */
+@value type Local { let ref: Ref; let n: int; }
+/** Report a distinct process failure without depending on std. */
+func require(ok: bool, code: i32) { if !ok { quit(code); } }
+/** Throw from the later field in the source-hidden shared body. */
+func failRef(): Ref { throw "partial"; }
+/** Invoke the throwing producer through the provider's callable parameter. */
+func failedGeneric() {
+    let pair = makePartialPair<Ref>(Ref { id: 1 }, () { return failRef(); });
+}
+/** An imported throwing function must protect a caller's earlier field. */
+func failedLocal() {
+    let pair = Local { ref: Ref { id: 2 }, n: partialThrowNumber() };
+}
+/** An internal catch completes construction using an imported fallback. */
+func caughtLocal() {
+    let pair = Local {
+        ref: Ref { id: 3 }, n: try partialThrowNumber() catch { partialQuietNumber(); }
+    };
+    require(pair.ref.id == 3 && pair.n == 4 && dropped == 0, 31);
+}
+/** No-throw shared construction preserves pointer and nested aggregate copies. */
+func quietGeneric() {
+    let ref = Ref { id: 4 };
+    let pair = makeQuietPartialPair<Ref>(ref);
+    let nested = makeQuietPartialPair<PartialPair<Ref>>(pair);
+    let value = Local { ref: ref, n: partialQuietNumber() };
+    require(nested.second.second.id == 4 && value.n == 4 && dropped == 0, 41);
+}
+/** Run the same lifecycle checks under every provider/consumer build pairing. */
+func main(args: string[]) {
+    var caught = false;
+    try failedGeneric() catch error: string { caught = error == "partial"; }
+    require(caught && dropped == 1 && order == 1, 11);
+    dropped = 0; order = 0; caught = false;
+    try failedLocal() catch error: string { caught = error == "partial-number"; }
+    require(caught && dropped == 1 && order == 2, 21);
+    dropped = 0; order = 0;
+    caughtLocal();
+    require(dropped == 1 && order == 3, 32);
+    dropped = 0; order = 0;
+    quietGeneric();
+    require(dropped == 1 && order == 4, 42);
+}
