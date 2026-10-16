@@ -8,7 +8,7 @@
  * import, including private edges and acyclic controls. */
 static void imported_cycle_expect(const FengSemanticAnalysis *analysis) {
     static const struct { const char *name; bool cyclic; } expected[] = {
-        {"Leaf", false}, {"Chain", false}, {"Pointer", false},
+        {"Leaf", false}, {"Chain", true}, {"Pointer", false},
         {"Loop", true}, {"Self", true}, {"Left", true}, {"Right", true},
         {"Outer", true}, {"Inner", true}
     };

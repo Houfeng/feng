@@ -3068,9 +3068,11 @@ void test_exception_lsda(void);
 /* Dynamic input strings must be released through ordinary ARC ownership. */
 void test_string_owned_utf8(void);
 void test_aggregate_slot_choice(void);
+void test_array_cycle_candidates(void);
 
 int main(void) {
     test_aggregate_slot_choice();
+    test_array_cycle_candidates();
     test_nested_exception_runtime();
     test_exception_lsda();
     test_string_owned_utf8();

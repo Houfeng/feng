@@ -66,6 +66,10 @@ void feng_array_slice_copy_into(struct FengArray *dst,
     }
 }
 
+/* Arrays without managed element slots cannot own a back-edge. Keep their
+ * existing shared descriptor and collector-free ARC path. This public symbol
+ * also supplies the nominal array identity for generic/diagnostic metadata;
+ * lifecycle decisions use the actual instance header's descriptor. */
 const FengTypeDescriptor feng_array_descriptor = {
     .name = "feng.builtin.array",
     .size = 0U, /* variable layout per instance */
@@ -74,6 +78,15 @@ const FengTypeDescriptor feng_array_descriptor = {
     .reified_field_offset_count = 0,   .reified_field_offsets = NULL,
     .reified_agg_deps_count = 0,       .reified_agg_deps = NULL,
     .reified_type_deps_count = 0,      .reified_type_deps = NULL,
+};
+
+/* Arrays with managed element slots may be the last externally owned member
+ * of a mixed cycle. Their existing header.desc selects this private constant
+ * so a nonzero release can register a candidate. It adds no instance fields,
+ * and array traversal/destruction still uses the existing array tag hooks. */
+static const FengTypeDescriptor feng_array_managed_descriptor = {
+    .name = "feng.builtin.array",
+    .is_potentially_cyclic = true,
 };
 
 /* Produce an empty array from the element metadata carried by one closed
@@ -251,7 +264,10 @@ FengArray *feng_array_new_storage_kinded(
         feng_panic("feng_array_new_storage_kinded: out of memory for %zu bytes", total_size);
     }
 
-    a->header.desc = &feng_array_descriptor;
+    a->header.desc = element_kind == FENG_VALUE_MANAGED_POINTER ||
+        (element_kind == FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS &&
+         element_aggregate->managed_slot_count > 0U)
+        ? &feng_array_managed_descriptor : &feng_array_descriptor;
     a->header.tag = FENG_TYPE_TAG_ARRAY;
     a->header.refcount = 1U;
     a->length = length;

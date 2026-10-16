@@ -86,11 +86,9 @@ typedef struct FengSemanticModule {
     bool (*populate_semantic_metadata)(const void *user, struct FengSemanticAnalysis *analysis);
 } FengSemanticModule;
 
-/* Per-`type` marker computed from the static managed-reference graph.
- * `is_potentially_cyclic` is true iff the type sits in a non-trivial strongly
- * connected component (self-loop or 2+ node cycle). Codegen consults this to
- * set FengTypeDescriptor.is_potentially_cyclic so the runtime cycle collector
- * can skip acyclic objects. */
+/* Declaration summary of the static strong-reference graph. SCC membership
+ * or a reachable unknown relation prevents an acyclic proof. Open generic
+ * parameters remain unknown; concrete instances use the instance query. */
 typedef struct FengSemanticTypeMarker {
     const FengSemanticModule *module;
     const FengDecl *type_decl;
@@ -709,11 +707,18 @@ bool feng_semantic_is_builtin_type_name(FengSlice name);
  * Used by the CLI layer to fill FengSemanticAnalyzeOptions.pointer_size. */
 size_t feng_get_host_pointer_size(void);
 
-/* Returns true iff `type_decl` is a `type` declaration that the static
- * managed-reference graph places in a non-trivial SCC. Returns false for any
- * unknown decl (including non-type decls and out-of-analysis decls). */
+/* Query a declaration summary. Missing/unknown facts conservatively return
+ * true; concrete generic arguments require the instance query below. */
 bool feng_semantic_type_is_potentially_cyclic(const FengSemanticAnalysis *analysis,
                                               const FengDecl *type_decl);
+
+/* Apply the same graph analysis to one concrete generic instance. Arguments
+ * borrow their original lexical provenance; no FT or runtime metadata is added.
+ * Unknown relations and allocation failures conservatively return true. */
+bool feng_semantic_type_instance_is_potentially_cyclic(
+    const FengSemanticAnalysis *analysis, const FengDecl *type_decl,
+    const FengProgram *argument_program, const FengTypeRef *const *type_args,
+    size_t type_arg_count);
 
 bool feng_semantic_record_type_fact(const FengSemanticAnalysis *analysis,
                                     const void *site,

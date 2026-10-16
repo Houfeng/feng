@@ -15622,6 +15622,7 @@ static void test_for_in_loop_non_array_rejected(void) {
 /* ============================================================== */
 
 void test_imported_cyclicity(void);
+void test_cycle_type_graph(void);
 
 static const FengDecl *find_type_decl_by_name(
         const FengSemanticAnalysis *analysis, const char *name) {
@@ -35630,6 +35631,7 @@ int main(void) {
     test_cyclicity_three_node_cycle_marks_all();
     test_cyclicity_array_mediated_cycle_marks_both();
     test_imported_cyclicity();
+    test_cycle_type_graph();
     test_spec_relation_declared_head_recorded();
     test_spec_relation_declared_parent_transitive();
     test_spec_relation_fit_head_and_parent();

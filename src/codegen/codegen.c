@@ -19185,22 +19185,21 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
         buf_append_cstr(td, "};\n\n");
     }
 
-    /* Subject FengTypeDescriptor — hidden default subjects are never user
-     * finalisers and conservatively marked acyclic (default zero values
-     * cannot reference back into themselves: every initialiser is a fresh
-     * default of its own type). */
+    /* A default subject's managed fields can later be rebound. A fresh
+     * default value does not prove its lifetime reference graph acyclic. */
     buf_append_fmt(td,
         "static const FengTypeDescriptor %s = {\n"
         "    .name = \"%s.%s.<spec_default>\",\n"
         "    .size = sizeof(struct %s),\n"
         "    .finalizer = NULL,\n"
         "    .release_children = %s,\n"
-        "    .is_potentially_cyclic = false,\n"
+        "    .is_potentially_cyclic = %s,\n"
         "    .managed_field_count = %zu,\n",
         s->c_default_subject_desc_name,
         cg->module_dot_name, s->feng_name,
         s->c_default_subject_struct_name,
         subject_release_name ? subject_release_name : "NULL",
+        subject_managed_count > 0U ? "true" : "false",
         subject_managed_count);
     if (subject_managed_count > 0U) {
         buf_append_fmt(td, "    .managed_fields = %s__managed_fields,\n",
@@ -62738,10 +62737,13 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
         cg->cur_program = saved_program;
     }
 
-    /* Look up Phase 1B cyclicity marker for this type. Acyclic types yield
-     * zero collector overhead at runtime: feng_release skips the candidate
-     * buffer entirely when descriptor->is_potentially_cyclic == false. */
-    bool is_cyclic = feng_semantic_type_is_potentially_cyclic(cg->analysis, t->decl);
+    /* Concrete descriptors need the actual storage arguments; the open
+     * declaration summary cannot classify every generic instance. */
+    bool is_cyclic = !has_concrete_layout || (t->is_generic_instance
+        ? feng_semantic_type_instance_is_potentially_cyclic(cg->analysis,
+            t->generic_origin_decl, t->instantiation_program,
+            (const FengTypeRef *const *)t->generic_type_args, t->generic_type_arg_count)
+        : feng_semantic_type_is_potentially_cyclic(cg->analysis, t->decl));
 
     buf_append_fmt(td,
         "%sconst FengTypeDescriptor %s = {\n"

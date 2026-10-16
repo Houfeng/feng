@@ -1,368 +1,383 @@
-/* Phase 1B static type-cyclicity analysis.
- *
- * For every user `type` declared in the analysis, build the directed graph of
- * managed references between user types and run Tarjan's strongly-connected-
- * components algorithm. Any type sitting in a non-trivial SCC (self-loop or a
- * cycle of size >= 2) is marked `is_potentially_cyclic`. Codegen forwards the
- * marker to the runtime so the cycle collector only ever inspects objects
- * whose static type can actually participate in a cycle; acyclic objects keep
- * their Phase 1A zero-overhead deterministic ARC release path.
- *
- * Edge model:
- *   - Each user `type` decl is a node.
- *   - For each field of node T, we walk the field's declared type and add an
- *     edge from T to every user-type node referenced by that field.
- *   - Container types (`T[]` and arbitrarily nested arrays) are unwrapped to
- *     their leaf element type before the lookup; an array of T is treated as
- *     a managed reference to T for cyclicity purposes.
- *   - `string`, primitive scalar types and `*T` pointer types contribute no
- *     edges. Unknown / unresolved type names are silently ignored — the
- *     normal semantic pass has already rejected those before we run.
- *
- * Closures are not user-type decls and are not part of this graph; they are
- * handled by codegen-emitted descriptors directly when 1B-3 cycle collector
- * needs to inspect them.
- *
- * Tarjan is implemented iteratively to avoid stack overflow on adversarial
- * inputs. The implementation is O(V + E). */
-
+/* Static strong-reference analysis. Source and imported declarations share
+ * the same graph; concrete generic arguments are substituted before edges
+ * are collected. SCCs and unknown outgoing relations are conservative cycle
+ * risks. This pass changes classification only, not ownership or scheduling. */
 #include "semantic/semantic.h"
 
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* --- Node table -------------------------------------------------------- */
+/* Canonical storage-type expressions form a finite DAG, independent of graph
+ * edges. Nominal arguments distinguish instances; array writability does not
+ * alter owned-reference shape. Unused arguments do not create graph edges. */
+typedef struct CycType {
+    const FengDecl *decl;
+    FengSlice builtin;
+    FengTypeRefKind kind;
+    size_t inner;
+    size_t *args;
+    size_t arg_count;
+} CycType;
 
+/* A reached storage type, with an expansion parent and iterative SCC state. */
 typedef struct CycNode {
-    const FengSemanticModule *module;
-    const FengProgram        *owner_program;
-    const FengDecl           *decl;          /* FENG_DECL_TYPE */
-    /* Out-edges into Edges[] (range [edge_begin, edge_end)). */
+    size_t type;
+    size_t parent;
     size_t edge_begin;
     size_t edge_end;
-    /* Tarjan state. */
-    int    index;       /* -1 if unvisited */
-    int    lowlink;
-    bool   on_stack;
-    bool   is_cyclic;
+    int index;
+    int lowlink;
+    bool on_stack;
+    bool is_cyclic;
+    bool unknown;
+    bool declaration_root;
 } CycNode;
 
+/* All scratch storage is owned by one analysis/query. Type zero is unknown. */
 typedef struct CycGraph {
+    const FengSemanticAnalysis *analysis;
+    CycType *types;
+    size_t type_count;
+    size_t type_capacity;
     CycNode *nodes;
-    size_t   node_count;
-    size_t   node_capacity;
-    /* Flat edge target index list. */
-    size_t  *edges;
-    size_t   edge_count;
-    size_t   edge_capacity;
+    size_t node_count;
+    size_t node_capacity;
+    size_t *edges;
+    size_t edge_count;
+    size_t edge_capacity;
 } CycGraph;
 
+/* Release canonical arguments, graph nodes and edge storage. */
 static void cyc_graph_free(CycGraph *g) {
+    for (size_t i = 0; i < g->type_count; ++i) free(g->types[i].args);
+    free(g->types);
     free(g->nodes);
     free(g->edges);
-    g->nodes = NULL;
-    g->edges = NULL;
-    g->node_count = g->node_capacity = 0U;
-    g->edge_count = g->edge_capacity = 0U;
 }
 
-static bool cyc_nodes_reserve(CycGraph *g, size_t additional) {
-    size_t needed = g->node_count + additional;
-    if (needed <= g->node_capacity) {
-        return true;
-    }
-    size_t new_capacity = g->node_capacity ? g->node_capacity : 8U;
-    while (new_capacity < needed) {
-        if (new_capacity > SIZE_MAX / 2U) {
-            return false;
-        }
-        new_capacity *= 2U;
-    }
-    CycNode *p = (CycNode *)realloc(g->nodes, new_capacity * sizeof(*p));
-    if (p == NULL) {
-        return false;
-    }
-    g->nodes = p;
-    g->node_capacity = new_capacity;
-    return true;
-}
-
-static bool cyc_edges_reserve(CycGraph *g, size_t additional) {
-    size_t needed = g->edge_count + additional;
-    if (needed <= g->edge_capacity) {
-        return true;
-    }
-    size_t new_capacity = g->edge_capacity ? g->edge_capacity : 16U;
-    while (new_capacity < needed) {
-        if (new_capacity > SIZE_MAX / 2U) {
-            return false;
-        }
-        new_capacity *= 2U;
-    }
-    size_t *p = (size_t *)realloc(g->edges, new_capacity * sizeof(*p));
-    if (p == NULL) {
-        return false;
-    }
-    g->edges = p;
-    g->edge_capacity = new_capacity;
-    return true;
-}
-
+/* Compare source spelling only where no nominal identity is involved. */
 static bool cyc_slice_equals(FengSlice a, FengSlice b) {
     return a.length == b.length &&
            (a.length == 0U || memcmp(a.data, b.data, a.length) == 0);
 }
 
+/* Compare complete module paths. */
 static bool cyc_path_equals(const FengSlice *a, size_t an,
                             const FengSlice *b, size_t bn) {
     if (an != bn) return false;
-    for (size_t i = 0U; i < an; ++i) {
-        if (!cyc_slice_equals(a[i], b[i])) {
-            return false;
-        }
-    }
+    for (size_t i = 0; i < an; ++i)
+        if (!cyc_slice_equals(a[i], b[i])) return false;
     return true;
 }
 
-static const FengSemanticModule *cyc_find_module_by_segments(
-    const FengSemanticAnalysis *analysis,
-    const FengSlice *segments,
-    size_t segment_count) {
-    if (analysis == NULL) {
-        return NULL;
+/* Return declaration name/parameters without treating signatures as storage. */
+static FengSlice cyc_decl_name(const FengDecl *decl) {
+    switch (decl->kind) {
+        case FENG_DECL_TYPE: return decl->as.type_decl.name;
+        case FENG_DECL_SPEC: return decl->as.spec_decl.name;
+        case FENG_DECL_ENUM: return decl->as.enum_decl.name;
+        default: return (FengSlice){0};
     }
-    for (size_t module_index = 0U; module_index < analysis->module_count; ++module_index) {
-        const FengSemanticModule *module = &analysis->modules[module_index];
+}
 
-        if (cyc_path_equals(module->segments,
-                            module->segment_count,
-                            segments,
-                            segment_count)) {
-            return module;
+/* Borrow the generic parameter list of a storage declaration. */
+static const FengTypeParam *cyc_decl_params(const FengDecl *decl, size_t *count) {
+    *count = 0U;
+    if (decl != NULL && decl->kind == FENG_DECL_TYPE) {
+        *count = decl->as.type_decl.type_param_count;
+        return decl->as.type_decl.type_params;
+    }
+    if (decl != NULL && decl->kind == FENG_DECL_SPEC) {
+        *count = decl->as.spec_decl.type_param_count;
+        return decl->as.spec_decl.type_params;
+    }
+    return NULL;
+}
+
+/* Locate the declaration's lexical program, including source-hidden FT ASTs. */
+static const FengProgram *cyc_decl_program(const CycGraph *g, const FengDecl *decl,
+                                         const FengSemanticModule **module_out) {
+    for (size_t m = 0; m < g->analysis->module_count; ++m) {
+        const FengSemanticModule *module = &g->analysis->modules[m];
+        for (size_t p = 0; p < module->program_count; ++p) {
+            const FengProgram *program = module->programs[p];
+            for (size_t d = 0; d < program->declaration_count; ++d) {
+                if (program->declarations[d] != decl) continue;
+                if (module_out != NULL) *module_out = module;
+                return program;
+            }
         }
     }
     return NULL;
 }
 
-static const FengSemanticModule *cyc_find_alias_target_module(
-    const FengSemanticAnalysis *analysis,
-    const FengProgram *owner_program,
-    FengSlice alias) {
-    if (analysis == NULL || owner_program == NULL) {
-        return NULL;
-    }
-    for (size_t use_index = 0U; use_index < owner_program->use_count; ++use_index) {
-        const FengUseDecl *use_decl = &owner_program->uses[use_index];
-
-        if (!use_decl->has_alias || !cyc_slice_equals(use_decl->alias, alias)) {
-            continue;
+/* Resolve an unbound FT reference in its own lexical scope. Resolved nominal
+ * identities take precedence; an ambiguous or absent fallback stays unknown. */
+static const FengDecl *cyc_resolve_named(const CycGraph *g,
+    const FengProgram *program, const FengTypeRef *ref) {
+    if (ref->resolution_decl != NULL) return ref->resolution_decl;
+    if (ref->resolution_program != NULL) program = ref->resolution_program;
+    if (program == NULL || ref->as.named.segment_count == 0U) return NULL;
+    const FengSlice *segments = ref->as.named.segments;
+    size_t count = ref->as.named.segment_count;
+    const FengDecl *found = NULL;
+    bool found_local = false;
+    for (size_t m = 0; m < g->analysis->module_count; ++m) {
+        const FengSemanticModule *module = &g->analysis->modules[m];
+        bool local = cyc_path_equals(program->module_segments,
+            program->module_segment_count, module->segments, module->segment_count);
+        bool visible = count == 1U && local;
+        if (count > 1U) visible = cyc_path_equals(segments, count - 1U,
+                                                module->segments, module->segment_count);
+        for (size_t u = 0; u < program->use_count && !visible; ++u) {
+            const FengUseDecl *use = &program->uses[u];
+            if (!cyc_path_equals(use->segments, use->segment_count,
+                                  module->segments, module->segment_count)) continue;
+            visible = (count == 1U && !use->has_alias) ||
+                (count == 2U && use->has_alias && cyc_slice_equals(segments[0], use->alias));
         }
-        return cyc_find_module_by_segments(analysis,
-                                           use_decl->segments,
-                                           use_decl->segment_count);
-    }
-    return NULL;
-}
-
-static bool cyc_module_visible_by_full_path(const FengProgram *owner_program,
-                                            const FengSemanticModule *target) {
-    if (owner_program == NULL || target == NULL) {
-        return false;
-    }
-    if (cyc_path_equals(owner_program->module_segments,
-                        owner_program->module_segment_count,
-                        target->segments,
-                        target->segment_count)) {
-        return true;
-    }
-    return target->visibility == FENG_VISIBILITY_PUBLIC;
-}
-
-static bool cyc_decl_visible_from_program(const FengProgram *owner_program,
-                                          const FengSemanticModule *target_module,
-                                          const FengDecl *decl) {
-    if (owner_program == NULL || target_module == NULL || decl == NULL) {
-        return false;
-    }
-    if (cyc_path_equals(owner_program->module_segments,
-                        owner_program->module_segment_count,
-                        target_module->segments,
-                        target_module->segment_count)) {
-        return true;
-    }
-    return target_module->visibility == FENG_VISIBILITY_PUBLIC &&
-           decl->visibility == FENG_VISIBILITY_PUBLIC;
-}
-
-/* --- Type lookup ------------------------------------------------------- */
-
-static const FengTypeRef *cyc_unwrap_array(const FengTypeRef *ref) {
-    while (ref != NULL && ref->kind == FENG_TYPE_REF_ARRAY) {
-        ref = ref->as.inner;
-    }
-    return ref;
-}
-
-/* Resolve `ref` (after array unwrapping) to a user-type node index, or
- * SIZE_MAX if it does not refer to a known user type. Resolution honours
- * the `use` aliases visible to the program that owns the referencing type.
- * Full module paths resolve directly to public modules/types and do not
- * require `use`. Ambiguity is already rejected by the regular semantic pass,
- * so the first visible match is the intended target. */
-static size_t cyc_resolve_named(const CycGraph *g,
-                                const FengSemanticAnalysis *analysis,
-                                const FengProgram *owner_program,
-                                const FengTypeRef *ref) {
-    const FengSlice *segments;
-    size_t segment_count;
-    FengSlice name;
-
-    if (ref == NULL || ref->kind != FENG_TYPE_REF_NAMED) {
-        return SIZE_MAX;
-    }
-    segments = ref->as.named.segments;
-    segment_count = ref->as.named.segment_count;
-    if (segment_count == 0U) {
-        return SIZE_MAX;
-    }
-
-    name = segments[segment_count - 1U];
-    if (segment_count == 1U) {
-        for (size_t node_index = 0U; node_index < g->node_count; ++node_index) {
-            const CycNode *node = &g->nodes[node_index];
-
-            if (cyc_slice_equals(node->decl->as.type_decl.name, name) &&
-                cyc_decl_visible_from_program(owner_program, node->module, node->decl)) {
-                return node_index;
+        if (!visible) continue;
+        for (size_t p = 0; p < module->program_count; ++p) {
+            const FengProgram *owner = module->programs[p];
+            for (size_t d = 0; d < owner->declaration_count; ++d) {
+                const FengDecl *decl = owner->declarations[d];
+                size_t arity;
+                (void)cyc_decl_params(decl, &arity);
+                if (!cyc_slice_equals(cyc_decl_name(decl), segments[count - 1U]) ||
+                    arity != ref->as.named.type_arg_count) continue;
+                if (!local && decl->visibility != FENG_VISIBILITY_PUBLIC) continue;
+                if (count == 1U && found_local && !local) continue;
+                if (count == 1U && local && !found_local) found = NULL;
+                if (found != NULL && found != decl) return NULL;
+                found = decl;
+                found_local = local;
             }
         }
-        return SIZE_MAX;
     }
+    return found;
+}
 
-    if (segment_count == 2U) {
-        const FengSemanticModule *alias_target =
-            cyc_find_alias_target_module(analysis, owner_program, segments[0]);
-
-        if (alias_target != NULL) {
-            for (size_t node_index = 0U; node_index < g->node_count; ++node_index) {
-                const CycNode *node = &g->nodes[node_index];
-
-                if (node->module == alias_target &&
-                    cyc_slice_equals(node->decl->as.type_decl.name, name) &&
-                    cyc_decl_visible_from_program(owner_program, node->module, node->decl)) {
-                    return node_index;
-                }
-            }
+/* Intern one type expression, consuming its owned argument array. */
+static size_t cyc_type_intern(CycGraph *g, CycType type) {
+    for (size_t i = 1; i < g->type_count; ++i) {
+        const CycType *existing = &g->types[i];
+        if (existing->decl != type.decl || existing->kind != type.kind ||
+            existing->inner != type.inner || existing->arg_count != type.arg_count ||
+            !cyc_slice_equals(existing->builtin, type.builtin)) continue;
+        if (type.arg_count != 0U &&
+            memcmp(existing->args, type.args, type.arg_count * sizeof(*type.args)) != 0) continue;
+        free(type.args);
+        return i;
+    }
+    if (g->type_count == g->type_capacity) {
+        size_t cap = g->type_capacity == 0U ? 16U : g->type_capacity * 2U;
+        if (cap < g->type_capacity || cap > SIZE_MAX / sizeof(*g->types)) {
+            free(type.args);
             return SIZE_MAX;
         }
+        CycType *types = realloc(g->types, cap * sizeof(*types));
+        if (types == NULL) { free(type.args); return SIZE_MAX; }
+        g->types = types;
+        g->type_capacity = cap;
     }
-
-    const FengSemanticModule *target_module =
-        cyc_find_module_by_segments(analysis, segments, segment_count - 1U);
-    if (target_module == NULL ||
-        !cyc_module_visible_by_full_path(owner_program, target_module)) {
-        return SIZE_MAX;
-    }
-    for (size_t node_index = 0U; node_index < g->node_count; ++node_index) {
-        const CycNode *node = &g->nodes[node_index];
-
-        if (node->module == target_module &&
-            cyc_slice_equals(node->decl->as.type_decl.name, name) &&
-            cyc_decl_visible_from_program(owner_program, node->module, node->decl)) {
-            return node_index;
-        }
-    }
-    return SIZE_MAX;
+    g->types[g->type_count] = type;
+    return g->type_count++;
 }
 
-/* --- Build phase ------------------------------------------------------- */
+/* Initialize the sole unknown expression; it is never an acyclic leaf. */
+static bool cyc_graph_init(CycGraph *g, const FengSemanticAnalysis *analysis) {
+    g->analysis = analysis;
+    return cyc_type_intern(g, (CycType){0}) == 0U;
+}
 
-static bool cyc_collect_nodes(CycGraph *g, const FengSemanticAnalysis *analysis) {
-    size_t mi;
-    for (mi = 0U; mi < analysis->module_count; ++mi) {
-        const FengSemanticModule *mod = &analysis->modules[mi];
-        size_t pi;
-        /* Imported modules expose field types through their synthesized AST.
-         * They must participate in the same graph as source declarations. */
-        for (pi = 0U; pi < mod->program_count; ++pi) {
-            const FengProgram *prog = mod->programs[pi];
-            size_t di;
-            for (di = 0U; di < prog->declaration_count; ++di) {
-                const FengDecl *d = prog->declarations[di];
-                if (d->kind != FENG_DECL_TYPE) {
-                    continue;
-                }
-                if (!cyc_nodes_reserve(g, 1U)) {
-                    return false;
-                }
-                CycNode *n = &g->nodes[g->node_count++];
-                n->module = mod;
-                n->owner_program = prog;
-                n->decl = d;
-                n->edge_begin = 0U;
-                n->edge_end = 0U;
-                n->index = -1;
-                n->lowlink = 0;
-                n->on_stack = false;
-                n->is_cyclic = false;
-            }
+/* Substitute only the active declaration's formal parameters. Arguments have
+ * already been resolved in their caller's scope, so substitution cannot capture
+ * another declaration's parameter/name. */
+static size_t cyc_type_ref(CycGraph *g, const FengProgram *program,
+    const FengTypeRef *ref, const FengTypeParam *params, const size_t *args,
+    size_t param_count) {
+    if (ref == NULL) return 0U;
+    if (ref->kind != FENG_TYPE_REF_NAMED) {
+        size_t inner = cyc_type_ref(g, program, ref->as.inner, params, args, param_count);
+        if (inner == SIZE_MAX) return SIZE_MAX;
+        return cyc_type_intern(g, (CycType){.kind = ref->kind, .inner = inner});
+    }
+    if (ref->resolution_decl == NULL && ref->as.named.segment_count == 1U) {
+        FengSlice name = ref->as.named.segments[0];
+        if (ref->as.named.type_arg_count == 0U) {
+            for (size_t i = 0; i < param_count; ++i)
+                if (cyc_slice_equals(name, params[i].name)) return args[i];
+            if (feng_semantic_is_builtin_type_name(name))
+                return cyc_type_intern(g, (CycType){.builtin = name});
         }
     }
+    const FengDecl *decl = cyc_resolve_named(g, program, ref);
+    if (decl == NULL) return 0U;
+    CycType type = {.decl = decl, .arg_count = ref->as.named.type_arg_count};
+    if (type.arg_count > 0U) {
+        type.args = calloc(type.arg_count, sizeof(*type.args));
+        if (type.args == NULL) return SIZE_MAX;
+        for (size_t i = 0; i < type.arg_count; ++i) {
+            type.args[i] = cyc_type_ref(g, program, ref->as.named.type_args[i],
+                                       params, args, param_count);
+            if (type.args[i] == SIZE_MAX) { free(type.args); return SIZE_MAX; }
+        }
+    }
+    return cyc_type_intern(g, type);
+}
+
+/* Create a declaration root. Missing open arguments remain unknown; a closed
+ * caller supplies each argument with its original resolution provenance. */
+static size_t cyc_root_type(CycGraph *g, const FengDecl *decl,
+    const FengProgram *argument_program, const FengTypeRef *const *args, size_t count) {
+    if (decl == NULL) return 0U;
+    size_t arity;
+    (void)cyc_decl_params(decl, &arity);
+    if (count != 0U && (count != arity || args == NULL)) return 0U;
+    CycType type = {.decl = decl, .arg_count = arity};
+    if (arity > 0U) {
+        type.args = calloc(arity, sizeof(*type.args));
+        if (type.args == NULL) return SIZE_MAX;
+        for (size_t i = 0; i < count; ++i) {
+            type.args[i] = cyc_type_ref(g, argument_program, args[i], NULL, NULL, 0U);
+            if (type.args[i] == SIZE_MAX) { free(type.args); return SIZE_MAX; }
+        }
+    }
+    return cyc_type_intern(g, type);
+}
+
+/* A strict syntactic subterm permits finite nesting such as Box<Box<int>>.
+ * Type expressions are interned bottom-up and cannot contain graph cycles. */
+static bool cyc_type_contains(const CycGraph *g, size_t outer, size_t inner) {
+    if (outer == inner) return true;
+    if (outer < inner) return false;
+    const CycType *type = &g->types[outer];
+    if (type->kind != FENG_TYPE_REF_NAMED)
+        return cyc_type_contains(g, type->inner, inner);
+    for (size_t i = 0; i < type->arg_count; ++i)
+        if (cyc_type_contains(g, type->args[i], inner)) return true;
+    return false;
+}
+
+/* Reuse exact instances. A changing recursive instantiation is widened to
+ * unknown unless its expression strictly shrinks, ensuring finite expansion. */
+static size_t cyc_node(CycGraph *g, size_t type, size_t parent) {
+    if (type == SIZE_MAX) return SIZE_MAX;
+    for (size_t i = 0; i < g->node_count; ++i)
+        if (g->nodes[i].type == type) return i;
+    const FengDecl *decl = g->types[type].decl;
+    if (decl != NULL) {
+        for (size_t a = parent; a != SIZE_MAX; a = g->nodes[a].parent) {
+            size_t ancestor = g->nodes[a].type;
+            if (g->types[ancestor].decl == decl &&
+                !cyc_type_contains(g, ancestor, type))
+                return cyc_node(g, 0U, parent);
+        }
+    }
+    if (g->node_count == g->node_capacity) {
+        size_t cap = g->node_capacity == 0U ? 16U : g->node_capacity * 2U;
+        if (cap < g->node_capacity || cap > INT_MAX || cap > SIZE_MAX / sizeof(*g->nodes))
+            return SIZE_MAX;
+        CycNode *nodes = realloc(g->nodes, cap * sizeof(*nodes));
+        if (nodes == NULL) return SIZE_MAX;
+        g->nodes = nodes;
+        g->node_capacity = cap;
+    }
+    g->nodes[g->node_count] = (CycNode){.type = type, .parent = parent,
+                                      .index = -1, .unknown = type == 0U};
+    return g->node_count++;
+}
+
+/* Add one owned storage relation, deduplicating this node's contiguous edges. */
+static bool cyc_edge(CycGraph *g, size_t source, size_t type) {
+    size_t target = cyc_node(g, type, source);
+    if (target == SIZE_MAX) return false;
+    for (size_t e = g->nodes[source].edge_begin; e < g->edge_count; ++e)
+        if (g->edges[e] == target) return true;
+    if (g->edge_count == g->edge_capacity) {
+        size_t cap = g->edge_capacity == 0U ? 16U : g->edge_capacity * 2U;
+        if (cap < g->edge_capacity || cap > SIZE_MAX / sizeof(*g->edges)) return false;
+        size_t *edges = realloc(g->edges, cap * sizeof(*edges));
+        if (edges == NULL) return false;
+        g->edges = edges;
+        g->edge_capacity = cap;
+    }
+    g->edges[g->edge_count++] = target;
     return true;
 }
 
-static bool cyc_collect_edges(CycGraph *g, const FengSemanticAnalysis *analysis) {
-    size_t i;
-    for (i = 0U; i < g->node_count; ++i) {
-        CycNode *node = &g->nodes[i];
-        node->edge_begin = g->edge_count;
+/* Resolve declared or inferred field storage through the existing type facts. */
+static size_t cyc_field_type(CycGraph *g, const FengProgram *program,
+    const FengTypeMember *field, const FengTypeParam *params,
+    const size_t *args, size_t count) {
+    const FengTypeRef *ref = field->as.field.type;
+    if (ref != NULL) return cyc_type_ref(g, program, ref, params, args, count);
+    const FengSemanticTypeFact *fact = feng_semantic_lookup_type_fact(g->analysis, field);
+    if (fact == NULL) return 0U;
+    switch (fact->kind) {
+        case FENG_SEMANTIC_TYPE_FACT_TYPE_REF:
+            return cyc_type_ref(g, program, fact->type_ref, params, args, count);
+        case FENG_SEMANTIC_TYPE_FACT_BUILTIN:
+            return feng_semantic_is_builtin_type_name(fact->builtin_name)
+                ? cyc_type_intern(g, (CycType){.builtin = fact->builtin_name}) : 0U;
+        case FENG_SEMANTIC_TYPE_FACT_DECL:
+            return cyc_root_type(g, fact->type_decl, program, NULL, 0U);
+        default: return 0U;
+    }
+}
 
-        const FengDecl *d = node->decl;
-        size_t mc = d->as.type_decl.member_count;
-        size_t k;
-        for (k = 0U; k < mc; ++k) {
-            const FengTypeMember *m = d->as.type_decl.members[k];
-            if (m->kind != FENG_TYPE_MEMBER_FIELD) {
-                continue;
-            }
-            const FengTypeRef *fref = cyc_unwrap_array(m->as.field.type);
-            size_t target = cyc_resolve_named(g, analysis, node->owner_program, fref);
-            if (target == SIZE_MAX) {
-                continue;
-            }
-            /* Suppress duplicate edges T->U so Tarjan's lowlink stays
-             * minimal and the SCC result is unaffected. Cheap O(degree)
-             * lookback over edges added so far for this node. */
-            bool dup = false;
-            size_t e;
-            for (e = node->edge_begin; e < g->edge_count; ++e) {
-                if (g->edges[e] == target) {
-                    dup = true;
-                    break;
+/* Expand only instance storage. Arrays and inline aggregates retain their own
+ * graph nodes; specs with an erased subject have unknown outgoing references. */
+static bool cyc_collect_edges(CycGraph *g) {
+    for (size_t i = 0; i < g->node_count; ++i) {
+        CycType type = g->types[g->nodes[i].type];
+        g->nodes[i].edge_begin = g->edge_count;
+        if (type.kind == FENG_TYPE_REF_ARRAY) {
+            if (!cyc_edge(g, i, type.inner)) return false;
+        } else if (type.kind == FENG_TYPE_REF_NAMED && type.decl != NULL) {
+            const FengDecl *decl = type.decl;
+            const FengProgram *program = cyc_decl_program(g, decl, NULL);
+            size_t count;
+            const FengTypeParam *params = cyc_decl_params(decl, &count);
+            if (program == NULL || count != type.arg_count) {
+                g->nodes[i].unknown = true;
+            } else if (decl->kind == FENG_DECL_TYPE) {
+                for (size_t f = 0; f < decl->as.type_decl.member_count; ++f) {
+                    const FengTypeMember *field = decl->as.type_decl.members[f];
+                    if (field->kind != FENG_TYPE_MEMBER_FIELD || field->is_static) continue;
+                    size_t target = cyc_field_type(g, program, field, params, type.args, count);
+                    if (!cyc_edge(g, i, target)) return false;
                 }
+            } else if (decl->kind == FENG_DECL_SPEC) {
+                if (decl->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
+                    for (size_t u = 0; u < decl->as.spec_decl.as.union_form.member_count; ++u) {
+                        size_t target = cyc_type_ref(g, program,
+                            decl->as.spec_decl.as.union_form.members[u], params, type.args, count);
+                        if (!cyc_edge(g, i, target)) return false;
+                    }
+                } else {
+                    g->nodes[i].unknown = true;
+                }
+            } else if (decl->kind != FENG_DECL_ENUM) {
+                g->nodes[i].unknown = true;
             }
-            if (dup) {
-                continue;
-            }
-            if (!cyc_edges_reserve(g, 1U)) {
-                return false;
-            }
-            g->edges[g->edge_count++] = target;
         }
-
-        node->edge_end = g->edge_count;
+        g->nodes[i].edge_end = g->edge_count;
     }
     return true;
 }
 
 /* --- Tarjan SCC (iterative) ------------------------------------------- */
 
+/* Iterative DFS frame for Tarjan traversal. */
 typedef struct CycFrame {
     size_t node;
     size_t next_edge; /* next index into g->edges[] to consider */
 } CycFrame;
 
+/* Explicit traversal and component stacks avoid recursive graph walking. */
 typedef struct CycStacks {
     CycFrame *call;
     size_t    call_top;
@@ -372,6 +387,7 @@ typedef struct CycStacks {
     size_t    scc_capacity;
 } CycStacks;
 
+/* Dispose both Tarjan stacks. */
 static void cyc_stacks_free(CycStacks *s) {
     free(s->call);
     free(s->scc);
@@ -381,6 +397,7 @@ static void cyc_stacks_free(CycStacks *s) {
     s->scc_top = s->scc_capacity = 0U;
 }
 
+/* Push an explicit DFS frame. */
 static bool cyc_call_push(CycStacks *s, size_t node) {
     if (s->call_top + 1U > s->call_capacity) {
         size_t cap = s->call_capacity ? s->call_capacity * 2U : 16U;
@@ -395,6 +412,7 @@ static bool cyc_call_push(CycStacks *s, size_t node) {
     return true;
 }
 
+/* Record one node on the open SCC stack. */
 static bool cyc_scc_push(CycStacks *s, size_t node) {
     if (s->scc_top + 1U > s->scc_capacity) {
         size_t cap = s->scc_capacity ? s->scc_capacity * 2U : 16U;
@@ -409,6 +427,7 @@ static bool cyc_scc_push(CycStacks *s, size_t node) {
     return true;
 }
 
+/* Mark SCCs and propagate unknown relations through the component DAG. */
 static bool cyc_run_tarjan(CycGraph *g) {
     CycStacks stacks = {0};
     int next_index = 0;
@@ -493,12 +512,22 @@ static bool cyc_run_tarjan(CycGraph *g) {
                     }
                 }
                 bool component_is_cyclic = (component_size > 1U) || has_self_loop;
+                bool component_unknown = false;
+                /* Successor SCCs have already completed. Unknown relations
+                 * propagate backwards; known descendant cycles do not. */
+                for (size_t j = scc_start; j < stacks.scc_top; ++j) {
+                    const CycNode *member = &g->nodes[stacks.scc[j]];
+                    component_unknown |= member->unknown;
+                    for (size_t e = member->edge_begin; e < member->edge_end; ++e)
+                        component_unknown |= g->nodes[g->edges[e]].unknown;
+                }
 
                 /* Pop and mark. */
                 while (stacks.scc_top > scc_start) {
                     size_t w = stacks.scc[--stacks.scc_top];
                     g->nodes[w].on_stack = false;
-                    if (component_is_cyclic) {
+                    g->nodes[w].unknown = component_unknown;
+                    if (component_is_cyclic || component_unknown) {
                         g->nodes[w].is_cyclic = true;
                     }
                 }
@@ -522,6 +551,7 @@ static bool cyc_run_tarjan(CycGraph *g) {
 
 /* --- Public API -------------------------------------------------------- */
 
+/* Reserve the declaration summary table. */
 static bool markers_reserve(FengSemanticAnalysis *analysis, size_t additional) {
     size_t needed = analysis->type_marker_count + additional;
     if (needed <= analysis->type_marker_capacity) {
@@ -544,61 +574,68 @@ static bool markers_reserve(FengSemanticAnalysis *analysis, size_t additional) {
     return true;
 }
 
+/* Classify all declaration roots; open parameters are unknown only when a
+ * stored field actually reaches them. The temporary graph also contains the
+ * concrete instances reached by non-generic declarations. */
 bool feng_semantic_compute_type_cyclicity(FengSemanticAnalysis *analysis) {
-    if (analysis == NULL) {
-        return true;
-    }
-
-    /* Reset markers (idempotent). */
+    if (analysis == NULL) return true;
     analysis->type_marker_count = 0U;
-
     CycGraph g = {0};
-    bool ok = true;
-
-    if (!cyc_collect_nodes(&g, analysis)) {
-        ok = false;
-        goto done;
+    bool ok = cyc_graph_init(&g, analysis);
+    for (size_t m = 0; ok && m < analysis->module_count; ++m) {
+        const FengSemanticModule *module = &analysis->modules[m];
+        for (size_t p = 0; ok && p < module->program_count; ++p) {
+            const FengProgram *program = module->programs[p];
+            for (size_t d = 0; ok && d < program->declaration_count; ++d) {
+                const FengDecl *decl = program->declarations[d];
+                if (decl->kind != FENG_DECL_TYPE) continue;
+                size_t type = cyc_root_type(&g, decl, program, NULL, 0U);
+                size_t node = cyc_node(&g, type, SIZE_MAX);
+                ok = node != SIZE_MAX;
+                if (ok) g.nodes[node].declaration_root = true;
+            }
+        }
     }
-    if (g.node_count == 0U) {
-        goto done;
+    if (ok) ok = cyc_collect_edges(&g) && cyc_run_tarjan(&g);
+    for (size_t i = 0; ok && i < g.node_count; ++i) {
+        if (!g.nodes[i].declaration_root) continue;
+        ok = markers_reserve(analysis, 1U);
+        if (!ok) break;
+        const FengDecl *decl = g.types[g.nodes[i].type].decl;
+        const FengSemanticModule *module = NULL;
+        (void)cyc_decl_program(&g, decl, &module);
+        analysis->type_markers[analysis->type_marker_count++] =
+            (FengSemanticTypeMarker){.module = module, .type_decl = decl,
+                                     .is_potentially_cyclic = g.nodes[i].is_cyclic};
     }
-    if (!cyc_collect_edges(&g, analysis)) {
-        ok = false;
-        goto done;
-    }
-    if (!cyc_run_tarjan(&g)) {
-        ok = false;
-        goto done;
-    }
-
-    if (!markers_reserve(analysis, g.node_count)) {
-        ok = false;
-        goto done;
-    }
-    size_t i;
-    for (i = 0U; i < g.node_count; ++i) {
-        FengSemanticTypeMarker *m =
-            &analysis->type_markers[analysis->type_marker_count++];
-        m->module = g.nodes[i].module;
-        m->type_decl = g.nodes[i].decl;
-        m->is_potentially_cyclic = g.nodes[i].is_cyclic;
-    }
-
-done:
     cyc_graph_free(&g);
     return ok;
 }
 
+/* Missing facts cannot establish an acyclic representation. */
 bool feng_semantic_type_is_potentially_cyclic(const FengSemanticAnalysis *analysis,
-                                              const FengDecl *type_decl) {
-    if (analysis == NULL || type_decl == NULL) {
-        return false;
-    }
-    size_t i;
-    for (i = 0U; i < analysis->type_marker_count; ++i) {
-        if (analysis->type_markers[i].type_decl == type_decl) {
+                                             const FengDecl *type_decl) {
+    if (analysis == NULL || type_decl == NULL) return true;
+    for (size_t i = 0; i < analysis->type_marker_count; ++i)
+        if (analysis->type_markers[i].type_decl == type_decl)
             return analysis->type_markers[i].is_potentially_cyclic;
-        }
+    return true;
+}
+
+/* Query a concrete instance without changing the declaration summary or FT.
+ * Allocation/lookup failure conservatively retains collector participation. */
+bool feng_semantic_type_instance_is_potentially_cyclic(
+    const FengSemanticAnalysis *analysis, const FengDecl *decl,
+    const FengProgram *argument_program, const FengTypeRef *const *args, size_t count) {
+    if (analysis == NULL || decl == NULL) return true;
+    CycGraph g = {0};
+    bool cyclic = true;
+    if (cyc_graph_init(&g, analysis)) {
+        size_t type = cyc_root_type(&g, decl, argument_program, args, count);
+        size_t node = cyc_node(&g, type, SIZE_MAX);
+        if (node != SIZE_MAX && cyc_collect_edges(&g) && cyc_run_tarjan(&g))
+            cyclic = g.nodes[node].is_cyclic;
     }
-    return false;
+    cyc_graph_free(&g);
+    return cyclic;
 }

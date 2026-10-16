@@ -17499,6 +17499,7 @@ void test_defer_generic_context_codegen(void (*compile_c)(const char *));
 void test_arc_ownership_codegen(void (*compile_c)(const char *));
 /* Aggregate borrows preserve mutable and unknown ownership boundaries. */
 void test_aggregate_borrow_codegen(void (*compile_c)(const char *));
+void test_cycle_type_graph_codegen(void (*compile_c)(const char *));
 /* Static slot lowering shares copy, transfer and destruction contracts. */
 void test_aggregate_lifecycle_codegen(void (*compile_c)(const char *));
 /* Generic receiver binding is independent of its ARC representation. */
@@ -17789,6 +17790,7 @@ int main(void) {
     test_loop_tuple_destructuring_codegen();
     test_arc_ownership_codegen(compile_generated_c_or_die);
     test_aggregate_borrow_codegen(compile_generated_c_or_die);
+    test_cycle_type_graph_codegen(compile_generated_c_or_die);
     test_aggregate_lifecycle_codegen(compile_generated_c_or_die);
     test_receiver_binding_codegen(compile_generated_c_or_die);
     test_spec_registration_growth_codegen(compile_generated_c_or_die);

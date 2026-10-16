@@ -301,10 +301,8 @@ static void cyc_aggregate_for_each_pointer_slot(
  *                    walks each element via element_aggregate's slot table.
  *   STRING         — has no managed children.
  *
- * Note: array/string descriptors are themselves !is_potentially_cyclic, so
- * arrays/strings never enter the candidate buffer directly. They are only
- * encountered as transitively-reachable children of a user object whose
- * cyclic SCC includes them. */
+ * Arrays with managed element slots can also enter the candidate buffer
+ * directly. Strings and arrays without managed slots remain acyclic. */
 static void cyc_visit_pointer_only(FengManagedHeader **slot,
                                     FengManagedHeader *child,
                                     void *ctx) {

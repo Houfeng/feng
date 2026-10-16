@@ -1,0 +1,56 @@
+module fcts_bin;
+import std.test;
+
+var cycleGraphDrops: int = 0;
+
+/** Generic inline ownership with an empty default value. */
+spec CycleGraphMaybe<T>: bool | T;
+
+/** No array edge assists classification of this union-only node. */
+type CycleGraphNode {
+    var next: CycleGraphMaybe<CycleGraphNode>;
+    let id: int;
+    func ~CycleGraphNode() { cycleGraphDrops += 1; }
+}
+
+/** Concrete storage parameters must participate in the graph. */
+type CycleGraphBox<T> { var value: CycleGraphMaybe<T>; }
+type CycleGraphOwner {
+    var box: CycleGraphMaybe<CycleGraphBox<CycleGraphOwner>>;
+    func ~CycleGraphOwner() { cycleGraphDrops += 1; }
+}
+
+/** These language checks do not assume a particular collection threshold. */
+open func test_cycle_type_graph() {
+    describe("strong reference type graph", () {
+        test("live union-only rings remain usable and breaking them preserves ARC", () {
+            cycleGraphDrops = 0;
+            {
+                let first = CycleGraphNode { id: 11 };
+                let second = CycleGraphNode { id: 12 };
+                first.next = second;
+                second.next = first;
+                assert(cycleGraphDrops == 0, "live ring is retained");
+                assert(match first.next { node: CycleGraphNode { node.id == 12 } else { false } },
+                       "union payload remains usable");
+                first.next = false;
+                second.next = false;
+                assert(cycleGraphDrops == 0, "local owners retain both nodes");
+            }
+            assert(cycleGraphDrops == 2, "broken ring uses deterministic ARC");
+        });
+        test("generic storage retains the owner until the actual edge is removed", () {
+            cycleGraphDrops = 0;
+            {
+                let owner = CycleGraphOwner();
+                let box = CycleGraphBox<CycleGraphOwner> { value: owner };
+                owner.box = box;
+                assert(cycleGraphDrops == 0, "generic cycle stays live");
+                box.value = false;
+                owner.box = false;
+                assert(cycleGraphDrops == 0, "local owner stays live");
+            }
+            assert(cycleGraphDrops == 1, "generic cycle broken before last owner exits");
+        });
+    });
+}

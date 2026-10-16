@@ -23,7 +23,7 @@ static void cg_result_borrows_local(ExprResult *result, Scope *scope,
 
 /* Only a nonzero release without collector effects can be paired away.
  * This mirrors existing descriptor facts; opaque subjects/layouts remain
- * conservative. Array handles themselves do not enter the candidate buffer. */
+ * conservative. Managed-element arrays can now nominate a cycle themselves. */
 static bool cg_ownership_pair_has_no_effect(CG *cg, const CGType *type) {
     if (type == NULL || type->kind == CG_TYPE_UNKNOWN ||
         type->kind == CG_TYPE_GENERIC_PARAM ||
@@ -38,8 +38,13 @@ static bool cg_ownership_pair_has_no_effect(CG *cg, const CGType *type) {
     }
     switch (type->kind) {
         case CG_TYPE_STRING:
-        case CG_TYPE_ARRAY:
             return true;
+        case CG_TYPE_ARRAY:
+            return type->element != NULL &&
+                type->element->kind != CG_TYPE_GENERIC_PARAM &&
+                type->element->kind != CG_TYPE_UNKNOWN &&
+                !cg_type_uses_reified_storage(cg, type->element) &&
+                cgtype_value_kind(type->element) == CG_VK_TRIVIAL;
         case CG_TYPE_OBJECT:
             return type->user != NULL && type->user->decl != NULL &&
                 cg_program_origin(cg, type->user->owner_program) !=

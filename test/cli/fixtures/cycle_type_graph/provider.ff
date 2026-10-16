@@ -1,0 +1,13 @@
+open module cycle_graph_provider;
+
+/** The empty alternative breaks default construction recursion. */
+open spec GraphMaybe<T>: bool | T;
+
+/** The consumer must classify this actual stored argument, without source. */
+open type GraphBox<T> { open var payload: GraphMaybe<T>; }
+
+/** Exercise the source-hidden shared body and its closed descriptor. */
+open func graphBox<T>(value: T): GraphBox<T> {
+    let payload: GraphMaybe<T> = value;
+    return GraphBox<T> { payload: payload };
+}

@@ -167,12 +167,9 @@ typedef struct FengTypeDescriptor {
 
     /* --- Phase 1B reference-graph metadata ----------------------------- */
 
-    /* True iff the static type-reference graph places this type in a
-     * non-trivial strongly-connected component (i.e. self-loop or part of a
-     * cycle). The cycle collector only ever enqueues objects whose descriptor
-     * has this flag set; acyclic objects bypass the candidate buffer entirely
-     * and follow the deterministic ARC release path with zero collector
-     * overhead. */
+    /* True when the static strong-reference graph is cyclic or unknown.
+     * Only a proven acyclic representation may bypass candidate registration.
+     * This is a conservative type/representation fact, not an instance scan. */
     bool is_potentially_cyclic;
 
     /* Static trace table: enumeration of every managed reference slot

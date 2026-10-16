@@ -1,0 +1,162 @@
+module cycle_graph_consumer;
+import cycle_graph_provider;
+
+var graphDrops: int = 0;
+var graphRevive: bool = false;
+var graphSaved: GraphMaybe<GraphNode>;
+
+/** Fail without a std dependency or test harness context. */
+func require(ok: bool) { if !ok { throw "cycle-type-graph"; } }
+
+/** All edges of this ring pass through union storage. */
+type GraphNode {
+    var next: GraphMaybe<GraphNode>;
+    func ~GraphNode() {
+        graphDrops += 1;
+        if graphRevive { graphRevive = false; graphSaved = self; }
+    }
+}
+
+/** A concrete generic container is itself a member of the reference cycle. */
+type GraphOwner {
+    var box: GraphMaybe<GraphBox<GraphOwner>>;
+    func ~GraphOwner() { graphDrops += 1; }
+}
+
+/** The default subject has mutable managed storage despite starting empty. */
+spec GraphView { var value: GraphMaybe<GraphSubjectNode>; }
+type GraphSubjectNode {
+    let subject: GraphView;
+    func ~GraphSubjectNode() { graphDrops += 1; }
+}
+
+/** A closure's captured object can point back through callable storage. */
+spec GraphCallback(): int;
+type GraphClosureNode {
+    var callback: GraphMaybe<GraphCallback>;
+    let number: int;
+    func ~GraphClosureNode() { graphDrops += 1; }
+}
+
+/** A boxed value and an intersection retain the same managed subject graph. */
+spec GraphRead { func number(): int; }
+spec GraphFlag { func flag(): bool; }
+spec GraphBoth: GraphRead & GraphFlag;
+@value type GraphPayload {
+    let node: GraphBoxedNode;
+    func number(): int { return self.node.number; }
+    func flag(): bool { return true; }
+}
+fit GraphPayload: GraphRead, GraphFlag;
+type GraphBoxedNode {
+    var view: GraphMaybe<GraphRead>;
+    let number: int;
+    func ~GraphBoxedNode() { if self.number > 0 { graphDrops += 1; } }
+}
+
+/** Inline value and tuple layers must expose their actual managed payload. */
+@value type GraphInline { var next: GraphMaybe<GraphValueNode>; }
+type GraphTuple(GraphInline, int);
+type GraphValueNode {
+    var next: GraphMaybe<GraphTuple>;
+    func ~GraphValueNode() { graphDrops += 1; }
+}
+
+/** Keep the generic box as the final external owner after a live scan. */
+func makeBoxRoot(): GraphBox<GraphOwner> {
+    let node = GraphOwner();
+    let box = graphBox<GraphOwner>(node);
+    node.box = box;
+    return box;
+}
+
+/** Keep the synthesized default subject as the final external owner. */
+func makeSubjectRoot(): GraphView {
+    let view: GraphView;
+    let node = GraphSubjectNode { subject: view };
+    view.value = node;
+    return view;
+}
+
+/** Preserve a captured object after its ordinary local owner leaves. */
+func makeClosureRoot(): GraphCallback {
+    let node = GraphClosureNode { number: 19 };
+    let callback: GraphCallback = () { return node.number; };
+    node.callback = callback;
+    return callback;
+}
+
+/** A mutable captured binding adds the existing managed capture cell. */
+func makeCapturedRoot(): GraphCallback {
+    var node = GraphClosureNode { number: 23 };
+    let callback: GraphCallback = () { return node.number; };
+    node.callback = callback;
+    return callback;
+}
+
+/** The final root is a value box rather than the ordinary object. */
+func makeBoxedRoot(): GraphRead {
+    let node = GraphBoxedNode { number: 29 };
+    let view: GraphRead = GraphPayload { node: node };
+    node.view = view;
+    return view;
+}
+
+/** Intersection projection preserves the subject and its back-edge. */
+func makeIntersectionRoot(): GraphBoth {
+    let node = GraphBoxedNode { number: 31 };
+    let view: GraphBoth = GraphPayload { node: node };
+    node.view = (GraphRead)view;
+    return view;
+}
+
+/** Normal union cycles, externally rooted scans, and resurrection. */
+func unionCycles() {
+    graphDrops = 0;
+    {
+        let a = GraphNode();
+        let b = GraphNode();
+        a.next = b;
+        b.next = a;
+        require(graphDrops == 0);
+    }
+    require(graphDrops == 2);
+    graphRevive = true;
+    {
+        let a = GraphNode();
+        let b = GraphNode();
+        a.next = b;
+        b.next = a;
+    }
+    require(graphDrops == 4);
+    require(match graphSaved { node: GraphNode {
+        match node.next { peer: GraphNode { true } else { false } }
+    } else { false } });
+    graphSaved = false;
+    require(graphDrops == 6);
+}
+
+/** The test process uses threshold one; no production scheduling changes. */
+func main(args: string[]) {
+    unionCycles();
+    graphDrops = 0;
+    { let box = makeBoxRoot(); require(graphDrops == 0); }
+    require(graphDrops == 1);
+    { let view = makeSubjectRoot(); require(graphDrops == 1); }
+    require(graphDrops == 2);
+    { let callback = makeClosureRoot(); require(callback() == 19 && graphDrops == 2); }
+    require(graphDrops == 3);
+    { let callback = makeCapturedRoot(); require(callback() == 23 && graphDrops == 3); }
+    require(graphDrops == 4);
+    { let view = makeBoxedRoot(); require(view.number() == 29 && graphDrops == 4); }
+    require(graphDrops == 5);
+    { let view = makeIntersectionRoot(); require(view.number() == 31 && view.flag() && graphDrops == 5); }
+    require(graphDrops == 6);
+    {
+        let node = GraphValueNode();
+        let tuple: GraphTuple = (GraphInline { next: node }, 7);
+        node.next = tuple;
+        require(graphDrops == 6);
+    }
+    require(graphDrops == 7);
+}
