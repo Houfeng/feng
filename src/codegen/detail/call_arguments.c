@@ -215,6 +215,12 @@ static bool cg_materialize_call_storage(CG *cg, ExprResult *result,
                                          const char *prefix) {
     if (result->call_operand_prepared && result->is_addressable)
         return true;
+    /* A prepared tag-only union expression may still need a C address. Its
+     * stable source already protects the payload; creating storage must not
+     * reintroduce the owning copy eliminated by operand preparation. */
+    if (result->call_operand_prepared &&
+        cg_result_has_stable_aggregate_borrow(cg, result))
+        return cg_materialize_ownership_alias(cg, result, prefix);
     return cg_materialize_to_local(cg, result, prefix);
 }
 

@@ -114,11 +114,14 @@ static CGOwnedLocal cg_stable_result_owner(CG *cg, const ExprResult *result) {
     return (CGOwnedLocal){0};
 }
 
-/* Closed union alternatives can prove a read-only borrow independently of
- * the existing whole-local transfer rules. Recurse only through inline
- * storage; reference pointees use the established collector-effect proof. */
+/* A proven owner can lend fixed storage independently of whole-local transfer
+ * rules. Recurse through inline storage, stopping at reference handles: their
+ * pointees may be cyclic without needing another temporary owner. Real owner
+ * releases still nominate candidates; incidental scans are not a borrow effect. */
 static bool cg_borrow_pair_has_no_effect(CG *cg, const CGType *type) {
-    if (type == NULL || cg_type_uses_reified_storage(cg, type)) return false;
+    if (type == NULL || type->kind == CG_TYPE_UNKNOWN ||
+        type->kind == CG_TYPE_GENERIC_PARAM ||
+        cg_type_uses_reified_storage(cg, type)) return false;
     const UserSpec *union_spec = cg_union_match_view(cg, type);
     if (union_spec != NULL) {
         for (size_t i = 0U; i < union_spec->union_member_count; ++i) {
@@ -135,12 +138,12 @@ static bool cg_borrow_pair_has_no_effect(CG *cg, const CGType *type) {
         }
         return true;
     }
-    return cg_ownership_pair_has_no_effect(cg, type);
+    return true;
 }
 
 /* Borrowing does not transfer the caller's token. An immutable parameter or
  * field path can lend a fixed aggregate while its existing owner stays live;
- * every copied slot must remain unchanged and its paired release effect-free.
+ * every copied slot must remain unchanged and protected by that real owner.
  * Address-selected generic storage retains its original conservative path. */
 static bool cg_result_has_stable_aggregate_borrow(CG *cg,
                                                 const ExprResult *result) {

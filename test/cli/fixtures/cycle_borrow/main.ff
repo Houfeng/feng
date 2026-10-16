@@ -1,0 +1,72 @@
+module cycle_borrow_consumer;
+import cycle_borrow_provider;
+
+/** Fail without std or a dependency on assertion implementation details. */
+func require(ok: bool) { if !ok { throw "cycle-borrow"; } }
+/** Imported descriptors and fixed union injection must permit a safe borrow. */
+func importedRead(node: BorrowNode): int { return borrowNestedRead(node); }
+/** Return a closure whose source owner has already left scope. */
+func makeReader(): BorrowCallback {
+    let node = BorrowNode { n: 11 };
+    return borrowCapture(node);
+}
+/** Unknown generic inline storage carries its own ownership across the package. */
+func genericResult(): BorrowGeneric<BorrowInline> {
+    let inlineValue = BorrowInline { node: BorrowNode { n: 13 } };
+    let value: BorrowGeneric<BorrowInline> = inlineValue;
+    return borrowGenericReturn<BorrowInline>(value);
+}
+/** Build a ring whose final external root crosses a function boundary. */
+func makeRing(): BorrowNode {
+    let left = BorrowNode { n: 17 };
+    let right = BorrowNode { n: 19 };
+    left.next = right;
+    right.next = left;
+    return left;
+}
+/** A real mutable owner disappearing can scan a still externally rooted ring. */
+func scanLive(root: BorrowNode) { var alias: BorrowChoice = root; alias = false; }
+/** Only the array remains an external owner after this factory returns. */
+func makeArrayRoot(): BorrowNode[] { let root = makeRing(); return [root]; }
+/** Borrowing is safe through repeated calls, exceptions, escapes and real cycles. */
+func main(args: string[]) {
+    {
+        let node = BorrowNode { n: 7 };
+        require(importedRead(node) == 7 && borrowInject(node) == 7);
+        require(borrowDrops() == 0);
+        let error = try borrowThrow(node) catch e: int { e };
+        require(error == 7 && borrowDrops() == 0);
+    }
+    require(borrowDrops() == 1);
+    { let reader = makeReader(); require(reader() == 11 && borrowDrops() == 1); }
+    require(borrowDrops() == 2);
+    {
+        let generic = genericResult();
+        require(match generic { value: BorrowInline { value.node.n == 13 } else { false } });
+        require(borrowDrops() == 2);
+    }
+    require(borrowDrops() == 3);
+    {
+        let holder = BorrowHolder { value: BorrowNode { n: 23 } };
+        let selected = borrowConsume(holder.value, borrowReplace(holder));
+        require(selected == 23);
+        require(borrowDrops() == 3);
+    }
+    require(borrowDrops() == 4);
+    {
+        let root = makeRing();
+        scanLive(root);
+        require(importedRead(root) == 17 && borrowDrops() == 4);
+        scanLive(root);
+        require(borrowRead(root.next) == 19 && borrowDrops() == 4);
+    }
+    require(borrowDrops() == 6);
+    borrowRevive();
+    { let root = makeRing(); require(importedRead(root) == 17); }
+    require(borrowDrops() == 8);
+    require(borrowSavedNumber() == 17 || borrowSavedNumber() == 19);
+    borrowClearSaved();
+    require(borrowDrops() == 10);
+    { let roots = makeArrayRoot(); scanLive(roots[0]); require(importedRead(roots[0]) == 17); }
+    require(borrowDrops() == 12);
+}

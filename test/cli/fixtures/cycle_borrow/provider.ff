@@ -1,0 +1,59 @@
+open module cycle_borrow_provider;
+
+var drops: int = 0;
+var revive: bool = false;
+var saved: BorrowChoice;
+
+/** A concrete imported cyclic type must use the same borrowing proof as source. */
+open type BorrowNode {
+    open let n: int;
+    open var next: BorrowChoice;
+    func ~BorrowNode() {
+        if self.n > 0 { drops += 1; }
+        if revive { revive = false; saved = self; }
+    }
+}
+/** Both fixed and shared generic layouts cross a source-hidden package boundary. */
+open spec BorrowChoice: bool | BorrowNode;
+open spec BorrowNested: BorrowChoice | i64;
+open spec BorrowGeneric<T>: bool | T;
+/** An immutable value payload still owns its reference when returned. */
+@value open type BorrowInline { open let node: BorrowNode; }
+/** Mutable storage provides the alias-replacement counterexample. */
+open type BorrowHolder { open var value: BorrowChoice; }
+/** Capture and indirect dispatch must preserve their existing ownership. */
+open spec BorrowCallback(): int;
+
+/** Read-only matches can borrow even when the descriptor's cycle flag is true. */
+open func borrowRead(value: BorrowChoice): int {
+    return match value { node: BorrowNode { node.n } else { 0 } };
+}
+/** Nested fixed wrappers carry the same caller-owned protection. */
+open func borrowNestedRead(value: BorrowNested): int {
+    return match value { inner: BorrowChoice { borrowRead(inner) } else { 0 } };
+}
+/** Direct injection adds a tag without introducing a new resource. */
+open func borrowInject(node: BorrowNode): int { return borrowNestedRead(node); }
+/** Dynamic generic storage retains the established owning-copy path. */
+open func borrowGenericReturn<T>(value: BorrowGeneric<T>): BorrowGeneric<T> { return value; }
+/** An escaped closure owns the projected payload independently. */
+open func borrowCapture(value: BorrowChoice): BorrowCallback {
+    match value { node: BorrowNode { return () { return node.n; }; }
+        else { return () { return 0; }; } }
+}
+/** A callee may throw while reading a borrowed payload. */
+open func borrowThrow(value: BorrowChoice): int {
+    match value { node: BorrowNode { throw node.n; } else { throw 0; } }
+}
+/** Keep the first argument valid after a later argument changes its source. */
+open func borrowConsume(value: BorrowChoice, unused: int): int { return borrowRead(value); }
+/** Mutate the shared source, not the already evaluated argument. */
+open func borrowReplace(holder: BorrowHolder): int { holder.value = false; return 0; }
+/** Read destruction without prescribing a cycle collector scheduling strategy. */
+open func borrowDrops(): int { return drops; }
+/** Enable exactly one resurrection by a real finalizer. */
+open func borrowRevive() { revive = true; }
+/** Check that the resurrected group remains usable. */
+open func borrowSavedNumber(): int { return borrowRead(saved); }
+/** Releasing the final external root must nominate the group again. */
+open func borrowClearSaved() { saved = false; }

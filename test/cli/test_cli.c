@@ -33078,6 +33078,7 @@ static void test_dap_launch_frame_format_defaults(void) {
 #include "cycle_lifetime.inc"
 #include "test_union_slot_layout.h"
 #include "test_cycle_type_graph.h"
+#include "test_cycle_borrow.h"
 
 /* Additional fit completion coverage shares this executable and both test phases. */
 void test_lsp_fit_completion(void);
@@ -33115,6 +33116,7 @@ int main(void) {
     test_union_slot_package_lifetime();
     test_union_slot_debug_layout();
     test_cycle_type_graph_package();
+    test_cycle_borrow_package();
     test_native_exception_release_reproducer();
     test_native_exception_source_hidden_optimization_matrix();
     test_dap_try_breakpoints_once_per_evaluation();

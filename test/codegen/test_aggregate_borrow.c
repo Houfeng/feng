@@ -32,7 +32,7 @@ static void aggregate_borrow_expect(const char *source, const char *name,
 }
 
 /* Closed, immutable inline storage shares one proof across match and calls;
- * mutable, cyclic, dynamic and opaque boundaries keep their owning copies. */
+ * mutable, dynamic and opaque boundaries keep their owning copies. */
 void test_aggregate_borrow_codegen(void (*compile_c)(const char *)) {
     const char *source =
         "open module aggregate.borrow;"
@@ -97,9 +97,9 @@ void test_aggregate_borrow_codegen(void (*compile_c)(const char *)) {
     THROW_CHECK(emitted && output.c_source != NULL);
     compile_c(output.c_source);
     const char *borrowed[] = {"__read__", "__forward__", "__field__",
-                             "__statement__", "__exiting__"};
+                             "__statement__", "__exiting__", "__cyclic__"};
     const char *owned[] = {"__mutableField__", "__mutableSource__", "__mutableTarget__",
-        "__indirect__", "__mutableBinding__", "__mutablePayload__", "__cyclic__"};
+        "__indirect__", "__mutableBinding__", "__mutablePayload__"};
     for (size_t i = 0U; i < sizeof borrowed / sizeof *borrowed; ++i)
         aggregate_borrow_expect(output.c_source, borrowed[i], true);
     for (size_t i = 0U; i < sizeof owned / sizeof *owned; ++i)

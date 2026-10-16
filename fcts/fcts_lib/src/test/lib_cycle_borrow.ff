@@ -1,0 +1,9 @@
+open module fcts_lib.test.cycle_borrow;
+
+/** A source-hidden generic result has runtime-selected payload representation. */
+open spec CycleBorrowImported<T>: bool | T;
+
+/** Returning a borrowed parameter still establishes independent ownership. */
+open func cycle_borrow_identity<T>(value: CycleBorrowImported<T>): CycleBorrowImported<T> {
+    return value;
+}

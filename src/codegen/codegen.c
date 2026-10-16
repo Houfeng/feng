@@ -25623,6 +25623,15 @@ static bool cg_emit_union_spec_coercion(CG *cg,
         return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
     out->owns_ref = payload_owns_ref;
+    /* Fixed union injection only wraps the selected payload. Preserve its
+     * existing lifetime proof, not its whole-value ownership token: source and
+     * target have different types. New resources and dynamic storage stay owned
+     * or conservative; consumers still check immutable slots and call contracts. */
+    out->managed_identity_is_stable = !payload_owns_ref &&
+        !source.is_storage_address && !source.uses_erased_generic_storage &&
+        !source.uses_reified_storage &&
+        (source.managed_identity_is_stable ||
+         cg_stable_result_owner(cg, &source).scope != NULL);
     er_free(&source);
     return true;
 }

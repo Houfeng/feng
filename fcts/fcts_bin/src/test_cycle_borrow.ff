@@ -1,0 +1,199 @@
+module fcts_bin;
+import std.test;
+import fcts_lib.test.cycle_borrow;
+
+var cycleBorrowDrops: int = 0;
+var cycleBorrowDeferred: int = -1;
+var cycleBorrowRevive: bool = false;
+var cycleBorrowSaved: CycleBorrowChoice;
+
+/** Mutable back-edges make the type potentially cyclic even for acyclic values. */
+type CycleBorrowNode {
+    let n: int;
+    var next: CycleBorrowChoice;
+    /** Real owners, including resurrection, retain their original release points. */
+    func ~CycleBorrowNode() {
+        if self.n > 0 { cycleBorrowDrops += 1; }
+        if cycleBorrowRevive { cycleBorrowRevive = false; cycleBorrowSaved = self; }
+    }
+}
+/** Empty, direct and nested union wrappers do not invent an owning root. */
+spec CycleBorrowChoice: bool | CycleBorrowNode;
+spec CycleBorrowNested: CycleBorrowChoice | i64;
+/** Stable and unstable source paths require different borrowing decisions. */
+type CycleBorrowHolder { let value: CycleBorrowChoice; }
+type CycleBorrowMutable { var value: CycleBorrowChoice; }
+/** Fixed inline values borrow only when all managed slots are immutable. */
+@value type CycleBorrowInline { let node: CycleBorrowNode; }
+spec CycleBorrowInlineChoice: bool | CycleBorrowInline;
+spec CycleBorrowArrayChoice: bool | CycleBorrowNode[];
+/** Opaque calls and captures retain their normal ownership contracts. */
+spec CycleBorrowReader(): int;
+spec CycleBorrowConsumer(value: CycleBorrowChoice, unused: int): int;
+
+/** Read a borrowed match projection without changing its owner. */
+func cycleBorrowRead(value: CycleBorrowChoice): int {
+    return match value { let node: CycleBorrowNode { node.n } else { 0 } };
+}
+/** Exercise both union injection levels in one read-only call. */
+func cycleBorrowNestedRead(value: CycleBorrowNested): int {
+    return match value { inner: CycleBorrowChoice { cycleBorrowRead(inner) } else { 0 } };
+}
+/** Read immutable inline storage containing a cyclic reference handle. */
+func cycleBorrowInlineRead(value: CycleBorrowInlineChoice): int {
+    return match value { item: CycleBorrowInline { item.node.n } else { 0 } };
+}
+/** An array handle may borrow without making mutable array elements immutable. */
+func cycleBorrowArrayRead(value: CycleBorrowArrayChoice): int {
+    return match value { items: CycleBorrowNode[] { items[0].n } else { 0 } };
+}
+/** The later operand must not invalidate the selected earlier value. */
+func cycleBorrowConsume(value: CycleBorrowChoice, unused: int): int { return cycleBorrowRead(value); }
+/** Replace a mutable source path after an earlier operand has been selected. */
+func cycleBorrowReplace(holder: CycleBorrowMutable): int { holder.value = false; return 0; }
+/** Binding mutation remains a separate owning match snapshot. */
+func cycleBorrowVar(value: CycleBorrowChoice): int {
+    return match value { var node: CycleBorrowNode {
+        node = CycleBorrowNode { n: 2 };
+        node.n
+    } else { 0 } };
+}
+/** Explicit var stays correct even when this branch never assigns to it. */
+func cycleBorrowUnusedVar(value: CycleBorrowChoice): int {
+    match value { var node: CycleBorrowNode { return node.n; } else { return 0; } }
+}
+/** Infix mutable bindings follow the same owning snapshot rule. */
+func cycleBorrowInfixVar(value: CycleBorrowChoice): int {
+    if value match var node: CycleBorrowNode { node = CycleBorrowNode { n: 3 }; return node.n; }
+    return 0;
+}
+/** A return creates the ownership needed beyond the caller's current borrow. */
+func cycleBorrowReturn(value: CycleBorrowNode): CycleBorrowNested { return value; }
+/** A closure owns an escaped projection after the original scope exits. */
+func cycleBorrowCapture(value: CycleBorrowChoice): CycleBorrowReader {
+    match value { node: CycleBorrowNode { return () { return node.n; }; }
+        else { return () { return 0; }; } }
+}
+/** Return a projection captured from a temporary union. */
+func cycleBorrowMakeReader(): CycleBorrowReader {
+    let node = CycleBorrowNode { n: 3 };
+    return cycleBorrowCapture(node);
+}
+/** Throw while the projected node is protected by its caller. */
+func cycleBorrowThrow(value: CycleBorrowChoice): int {
+    match value { node: CycleBorrowNode { throw node.n; } else { throw 0; } }
+}
+/** The unchanged cleanup chain executes defer before releasing the real owner. */
+func cycleBorrowFailure(): int {
+    let node = CycleBorrowNode { n: 4 };
+    defer { cycleBorrowDeferred = cycleBorrowDrops; }
+    return cycleBorrowThrow(node);
+}
+/** A captured var can replace the only source owner during argument evaluation. */
+func cycleBorrowCallbackScope() {
+    var node = CycleBorrowNode { n: 5 };
+    let change: CycleBorrowReader = () { node = CycleBorrowNode { n: 6 }; return 0; };
+    let selected = cycleBorrowConsume(node, change());
+    assert(selected == 5, "earlier injected argument keeps its identity");
+    assert(cycleBorrowDrops == 0, "owning argument preserves its lexical lifetime");
+}
+/** A mutable field loses its reference after the first operand is evaluated. */
+func cycleBorrowFieldScope() {
+    let holder = CycleBorrowMutable { value: CycleBorrowNode { n: 7 } };
+    let selected = cycleBorrowConsume(holder.value, cycleBorrowReplace(holder));
+    assert(selected == 7, "field snapshot survives replacement");
+    assert(cycleBorrowRead(holder.value) == 0 && cycleBorrowDrops == 0, "temporary owns the old payload");
+}
+/** An imported shared generic body must transport ownership, not a borrowed token. */
+func cycleBorrowGenericResult(): CycleBorrowImported<CycleBorrowNode> {
+    let node = CycleBorrowNode { n: 8 };
+    let wrapped: CycleBorrowImported<CycleBorrowNode> = node;
+    return cycle_borrow_identity<CycleBorrowNode>(wrapped);
+}
+
+/** Behavioral coverage is independent of emitted helper names or ARC counts. */
+func test_cycle_borrow() {
+    describe("Cycle-independent ARC borrowing", () {
+        test("stable owner paths and nested injections stay alive", () {
+            cycleBorrowDrops = 0;
+            {
+                let node = CycleBorrowNode { n: 1 };
+                let holder = CycleBorrowHolder { value: node };
+                assert(cycleBorrowRead(node) == 1 && cycleBorrowRead(holder.value) == 1, "direct and field reads");
+                assert(cycleBorrowNestedRead(node) == 1 && cycleBorrowNestedRead(node) == 1, "repeated nested wrapping");
+                assert(cycleBorrowInlineRead(CycleBorrowInline { node: node }) == 1, "inline value payload");
+                let items = [node];
+                assert(cycleBorrowArrayRead(items) == 1, "managed array payload");
+                assert(cycleBorrowDrops == 0, "true owners cover every borrowed read");
+            }
+            assert(cycleBorrowDrops == 1, "last real owner releases exactly once");
+        });
+        test("var match bindings preserve the original union", () {
+            cycleBorrowDrops = 0;
+            {
+                let original: CycleBorrowChoice = CycleBorrowNode { n: 1 };
+                assert(cycleBorrowVar(original) == 2, "mutable branch reads its replacement");
+                assert(cycleBorrowRead(original) == 1 && cycleBorrowUnusedVar(original) == 1, "source identity is unchanged");
+                assert(cycleBorrowDrops == 1, "only branch replacement has been destroyed");
+                assert(cycleBorrowInfixVar(original) == 3 && cycleBorrowRead(original) == 1, "infix binding owns its replacement");
+            }
+            assert(cycleBorrowDrops == 3, "source retains its original lifetime");
+        });
+        test("later field replacement keeps the earlier argument", () {
+            cycleBorrowDrops = 0;
+            cycleBorrowFieldScope();
+            assert(cycleBorrowDrops == 1, "old field payload released once");
+        });
+        test("captured var replacement keeps the earlier injection", () {
+            cycleBorrowDrops = 0;
+            cycleBorrowCallbackScope();
+            assert(cycleBorrowDrops == 2, "both selected objects released once");
+        });
+        test("opaque calls retain source snapshots", () {
+            cycleBorrowDrops = 0;
+            {
+                let holder = CycleBorrowMutable { value: CycleBorrowNode { n: 7 } };
+                let consume: CycleBorrowConsumer = cycleBorrowConsume;
+                assert(consume(holder.value, cycleBorrowReplace(holder)) == 7, "indirect call sees selected value");
+            }
+            assert(cycleBorrowDrops == 1, "opaque call ownership is balanced");
+        });
+        test("returning injected values establishes independent ownership", () {
+            cycleBorrowDrops = 0;
+            {
+                let result = cycleBorrowReturn(CycleBorrowNode { n: 2 });
+                assert(cycleBorrowNestedRead(result) == 2 && cycleBorrowDrops == 0, "returned payload remains live");
+            }
+            assert(cycleBorrowDrops == 1, "returned payload eventually released");
+        });
+        test("escaped match captures keep their own lifetime", () {
+            cycleBorrowDrops = 0;
+            { let read = cycleBorrowMakeReader(); assert(read() == 3 && cycleBorrowDrops == 0, "capture survives its source"); }
+            assert(cycleBorrowDrops == 1, "capture is the final real owner");
+        });
+        test("exception and defer preserve normal cleanup order", () {
+            cycleBorrowDrops = 0;
+            cycleBorrowDeferred = -1;
+            let error = try cycleBorrowFailure() catch e: int { e };
+            assert(error == 4 && cycleBorrowDeferred == 0, "exception value and defer order");
+            assert(cycleBorrowDrops == 1, "exception releases the real owner once");
+        });
+        test("shared generic returns keep their payload", () {
+            cycleBorrowDrops = 0;
+            {
+                let value = cycleBorrowGenericResult();
+                let n = match value { node: CycleBorrowNode { node.n } else { 0 } };
+                assert(n == 8 && cycleBorrowDrops == 0, "imported result owns its payload");
+            }
+            assert(cycleBorrowDrops == 1, "generic result releases once");
+        });
+        test("ordinary ARC resurrection is unchanged", () {
+            cycleBorrowDrops = 0;
+            cycleBorrowRevive = true;
+            { let node = CycleBorrowNode { n: 9 }; assert(cycleBorrowRead(node) == 9, "borrow before resurrection"); }
+            assert(cycleBorrowDrops == 1 && cycleBorrowRead(cycleBorrowSaved) == 9, "real release invokes resurrection");
+            cycleBorrowSaved = false;
+            assert(cycleBorrowDrops == 2, "revived object finalizes again after its new owner disappears");
+        });
+    });
+}
