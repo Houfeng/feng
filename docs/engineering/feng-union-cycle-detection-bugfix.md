@@ -1,9 +1,11 @@
 # Union 成员引用的静态循环识别修复
 
-> **状态：从 union 布局优化中拆出，修复和回归用例保存为独立 patch，当前未应用。日期：2026-10-16。**
+> **状态：已废弃，作为历史缺陷与诊断记录保留。日期：2026-10-16。**
 >
-> 补丁：[feng-union-cycle-detection-bugfix.patch](feng-union-cycle-detection-bugfix.patch)。
-> 应用基线：第一阶段提交 `65672f13` 加本轮纯 union 布局变更。
+> 后续统一以[类型成环分析与循环回收优化方案](feng-cycle-collection-optimization.md)为准。
+> 历史补丁：[feng-union-cycle-detection-bugfix.patch](feng-union-cycle-detection-bugfix.patch)，
+> 不应用到正式代码；仅可作为隔离诊断及测试复用的参考，不能代表新方案已完整实现。
+> 原应用基线：第一阶段提交 `65672f13` 加当时纯 union 布局变更。
 
 ## 1. 发现过程与根因
 
@@ -39,19 +41,25 @@
 
 ## 4. 已知性能影响
 
+本节保留拆分时的结论；新的分项量化与后续方案见
+[类型成环分析与循环回收优化方案 §6](feng-cycle-collection-optimization.md#6-成本与优化方向)。
+
 正确识别后，相关对象的释放进入已有循环收集路径；现有借用证明也排除潜在循环
 类型，恢复 aggregate retain／release 和清理登记。最终 IR 中相关调用仍存在，
-并影响一处递归到循环的转换。尚未单独量化这两部分各占多少成本。
+并影响一处递归到循环的转换。当时尚未单独量化这两部分各占多少成本。
 
 拆分前 Linux ARM64 的受控诊断中，旧布局从 0.360 s 变为 1.792 s，新布局从
 0.313 s 变为 1.723 s。新布局 RSS 约为 17.27 MiB。旧识别版本含已知缺陷，仅用于
 归因；这些数字也不是三项修复全部拆出后的正式评测。
 
-本补丁解决正确性问题，但性能成本仍待人工决策。恢复时需单独评测，不能沿用
-纯布局版本的成绩宣称修复后的性能达标。证据索引见
+本补丁修复 union 漏判，但当时的性能成本未获接受。不能沿用纯布局版本的成绩
+宣称修复后的性能达标；后续不直接恢复旧补丁，按新优化文档推进。历史证据索引见
 [布局优化记录 §8.5](feng-union-layout-performance-optimize.md#85-第二阶段-linux-性能结果与退化归因2026-10-16)。
 
-## 5. 应用与验证
+## 5. 历史应用方式与验证记录（已停用）
+
+以下命令仅保留历史记录，不再作为正式实施步骤。诊断如需复现旧补丁效果，必须
+在隔离副本中进行；正式修复按新优化文档逐阶段设计、Review 和验证。
 
 ```sh
 git apply --check docs/engineering/feng-union-cycle-detection-bugfix.patch
@@ -64,7 +72,9 @@ git apply docs/engineering/feng-union-cycle-detection-bugfix.patch
 - [x] 核验独立补丁应用及反向还原；三份补丁的六种应用顺序均通过，组合后的实现与拆分前备份逐字节一致。
 - [x] 在 Linux ARM64 隔离目录仅应用本补丁，静态引用及递归求解用例通过；
       仅经 union 成环、跨包泛型和复活用例在四种构建组合下通过。
-- [ ] 人工决定应用后，执行全量回归和独立性能评测。
+
+原计划“直接应用补丁后执行全量回归和独立性能评测”已取消，由新优化文档的
+分阶段计划替代。
 
 拆分后专项验证退出码为 0，记录为
 `temp/union-layout-split-20261016/cycle-focused.log` 和 `cycle-focused.status`。
