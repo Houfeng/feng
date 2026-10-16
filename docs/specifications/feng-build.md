@@ -38,6 +38,11 @@ LLD 继续接受原生对象和 bitcode 混合输入，因此当前 bin 关闭 L
 依赖库或 runtime；已有二进制包不因本次选项而重编。显式 Debug ThinLTO 仍保留调试
 信息，但已优化的预编译依赖不能恢复成未优化的源码单步行为。
 
+所有目标平台的 bin/lib 生成 C 编译统一使用 `-ffp-contract=off`，不把浮点乘法与
+加减法自动融合为单次舍入的 FMA；该规则覆盖 Debug/Release 和 LTO off/thin，
+不改变向量化设置。已有预编译库需重新编译后应用该设置，显式调用 `fma` 等库函数
+不受此设置影响。
+
 macOS `target=bin` 的 Debug 链接显式传入 `-object_path_lto`，使已有 bitcode 依赖
 生成的机器码对象具有独立的调试映射路径；该规则同时覆盖本次代码的 LTO 未指定、
 `off` 和 `thin`。目录在本次 `ir/c/` 工作目录下以 `mkdtemp` 创建，并以绝对路径通过

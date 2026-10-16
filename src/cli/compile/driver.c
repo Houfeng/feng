@@ -1955,7 +1955,8 @@ static char *locate_macos_target_sdk(char **out_error_message) {
 static bool argv_push_mode_flags(ArgVec *av, bool release,
                                  FengCliLtoMode lto,
                                  const char *target_platform) {
-    if (!argv_push(av, release ? "-O2" : "-O0")) {
+    if (!argv_push(av, release ? "-O2" : "-O0") ||
+        !argv_push(av, "-ffp-contract=off")) {
         return false;
     }
     if (!release && !argv_push(av, "-g")) {
