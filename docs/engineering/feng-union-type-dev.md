@@ -7,7 +7,7 @@
 
 - union-form 语法已确定为 `spec Name: A | B | C;`，不引入新关键字，不允许 `{}` 块体。
 - union-form 的成员收窄已确定复用 `match 目标值 { ... }` 条件匹配语法，不引入独立 `is`。
-- union-form 的值级基线表示已确定为：一个 `tag`、一个运行时转发槽 `_fwd`、一个 inline payload 区域。
+- union-form 的值级布局及静态生命周期表统一见[联合主规范 §4.4](../specifications/feng-union-type.md#44-union-form-的运行时基线表示)。
 - 当前阶段不支持 `union -> common spec` 投影，即使全部 member 都满足同一个 object-form `spec`。
 - 首版不为 `all-trivial union` 或 `all-managed-pointer union` 再开顶层值模型特例；统一走 `aggregate-with-managed-slots`。
 - **已确认**：union-form 的 match 类型匹配与 union-form 主体必须在同一轮交付；若 union-form 可声明但 match 类型匹配未落地，则 union 值在收窄前完全不可操作，不得作为独立里程碑先行完成。
@@ -92,94 +92,17 @@
 
 ### 2.6 基于现有 runtime 的布局接入与生命周期
 
-#### 2.6.1 C 值布局草案
+布局、成员表与默认值的唯一规则见[联合主规范 §4.4](../specifications/feng-union-type.md#44-union-form-的运行时基线表示)。
+通用按值选择机制见[值模型说明 §3.2.1](feng-value-model-delivered.md#321-按值选择活动-slot)。
+从实例转发槽迁移到静态成员表的施工及验证状态见[布局优化方案](feng-union-layout-performance-optimize.md)。
 
-每个 union-form spec 在 codegen 阶段生成一个对应的 C struct。首版布局固定为 `tag + _fwd + payload`；变化的只有 struct 名称和 payload 宽度/对齐，均由归一化 member 集合决定：
+已交付的语言行为继续保持：
 
-```c
-typedef struct {
-    uint32_t tag;                    /* active member 在归一化列表中的 0-based 序号 */
-    FengManagedSlotDescriptor _fwd;  /* 当前 active payload 的生命周期转发描述 */
-    union {
-        /* codegen 按归一化 member 生成足够容纳各 member 的 inline payload */
-    } payload;
-} FengUnion_SpecName;
-```
-
-布局不变量：
-- `tag` 是语言层 active member identity；match 的类型分支只依据 `tag` 判别。
-- `_fwd` 是 runtime 生命周期描述，不参与语言层 member 判别；它只告诉 aggregate walker 当前应如何 retain / release / assign / take / 扫描 payload。
-- `_fwd.offset` 始终相对当前 union aggregate 值的基地址，通常指向 `payload` 内当前 active member 的起始偏移。
-- payload 必须 inline 容纳归一化 member 中最大的值表示；aggregate member 首版不装箱。
-- 切换 active member 时，必须先按旧 `_fwd` 释放旧 payload，再覆盖 `tag`、`_fwd` 与新 payload；不得遗留上一 member 的托管槽位状态。
-
-#### 2.6.2 各 member 种类的 `_fwd` 策略
-
-| member 种类 | payload 存什么 | `_fwd` 写什么 |
-|---|---|---|
-| trivial（`int`、`bool` 等） | 值本身 | `{ .offset = payload_offset, .kind = FENG_SLOT_NONE, .nested = NULL }` |
-| managed-pointer（用户定义托管对象） | 对象托管指针 | `{ .offset = payload_offset, .kind = FENG_SLOT_POINTER, .nested = NULL }` |
-| object-form `spec` fat value（`{subject, witness}`） | spec fat value 的完整 inline 表示 | 指向该 spec fat value 内部 managed slot 的描述，通常为 `FENG_SLOT_NESTED_AGGREGATE` |
-| aggregate member（tuple / inline aggregate 等） | aggregate 的完整 inline 表示 | `{ .offset = payload_offset, .kind = FENG_SLOT_NESTED_AGGREGATE, .nested = &member_desc }` |
-
-关键点：
-- `_fwd.kind = FENG_SLOT_NONE` 表示当前 payload 没有需要 runtime 管理的托管槽位。
-- `_fwd.kind = FENG_SLOT_POINTER` 表示 payload 起始处是一根托管指针。
-- `_fwd.kind = FENG_SLOT_NESTED_AGGREGATE` 表示 payload 起始处是一个可由 `nested` 描述的 aggregate 值。
-- runtime 已支持 `FENG_SLOT_FORWARD`，union 自身的静态 aggregate descriptor 只需包含一个指向 `_fwd` 字段的 `FENG_SLOT_FORWARD` 槽位。
-- 不允许 `_fwd.kind` 再写成 `FENG_SLOT_FORWARD`；嵌套 forward 是 runtime 防御性 panic 场景。
-
-#### 2.6.3 描述符草案
-
-每个 union-form spec 在 codegen 阶段生成一个静态 `FengAggregateDescriptor`，复用现有 aggregate 通用路径：
-
-```c
-static const FengManagedSlotDescriptor kUnionSpecName_slots[] = {
-    { .offset = offsetof(FengUnion_SpecName, _fwd),
-      .kind = FENG_SLOT_FORWARD,
-      .nested = NULL },
-};
-
-static const FengAggregateDescriptor kUnionSpecName_desc = {
-    .name = "pkg.SpecName",
-    .size = sizeof(FengUnion_SpecName),
-    .default_zero_init = &kUnionSpecName_default_zero_init,
-    .managed_slot_count = 1,
-    .managed_slots = kUnionSpecName_slots,
-    .equal_fn = NULL,
-};
-```
-
-`default_init` 策略取决于归一化后第一个 member 的类型：
-- `tag` 固定初始化为 `0`。
-- payload 按第一个 member 的默认零值规则初始化。
-- `_fwd` 按第一个 member 的生命周期分类写入 `NONE` / `POINTER` / `NESTED_AGGREGATE`。
-- 若第一个 member 无合法默认零值，则该 union-form 也无合法默认零值。
-
-#### 2.6.4 方案讨论结论
-
-- 不能只保留 `_fwd + payload` 而省略 `tag`。`_fwd` 只能表达生命周期路径，无法区分两个同生命周期分类但语义 member 不同的 active variant。
-- 不采用固定单根 `managed_ptr`。该方案会迫使 aggregate member 装箱，破坏 inline 值模型，也会把 object-form `spec` 与 aggregate payload 拆成特例。
-- 不新增 `FengUnionDescriptor`。现有 `FengAggregateDescriptor + FENG_SLOT_FORWARD` 已能覆盖生命周期；union member 列表、tag 映射和收窄规则由 semantic/codegen 元数据负责。
-- value/range match 与 union type match 在语义上必须分离。union 目标未收窄前没有统一值比较入口，因此 union target 的 match body 只能写 member type label 与 `else`。
-- 异常 cleanup 链需要支持“按 aggregate descriptor 清理一个 by-value aggregate”这一通用能力。原因是 union-form 的 active payload 由 `_fwd` 动态决定，不能在编译期展开成固定 `void **` 指针槽；该扩展面向所有 aggregate local，不新增 union 专用 runtime 分支，也不改变三类顶层值模型。
-- cleanup 链中的 frame marker 必须同时满足 `slot == NULL` 且 `aggregate_desc == NULL`；aggregate cleanup node 的 `slot` 也为 `NULL`，但其 `aggregate_desc` 非空，释放到 frame marker 时不得被误判为 marker。
-
-#### 2.6.5 TODO
-
-- [x] 在 codegen / descriptor 层固定 union-form 的值布局：一个 `tag`、一个 `_fwd`、一个 inline payload 区域。
-- [x] 定义 `tag` 到 active member 的映射与必要的描述符元信息。
-- [x] 定义默认零值时如何初始化 `tag`、`_fwd` 与 payload。
-- [x] 明确无托管槽位的 variant 在运行时写入 `FENG_SLOT_NONE`。
-- [x] 复用 `feng_aggregate_retain`、`feng_aggregate_release`、`feng_aggregate_assign`、`feng_aggregate_take` 与 `feng_aggregate_default_zero_init` 完成 union 生命周期；异常路径通过通用 aggregate cleanup 节点调用同一 descriptor，不新增 union 专用 API。
-- [x] 验证 aggregate walker 经由 `FENG_SLOT_FORWARD` 在该布局下即可正确处理复制、销毁与托管扫描。
-- [x] 验证该实现不引入第四类顶层值模型，也不需要在 `src/runtime/` 中新增 union 专用生命周期分支。
-
-验收口径：
-
-- 同一 union 值在构造、复制、销毁、扫描路径上的行为一致。
-- runtime 不需要重新搜索“当前对象还满足哪些 spec”。
-- `src/runtime/` 无需为 union-form 新增专用生命周期分支；通用 cleanup 链扩展只依赖 `FengAggregateDescriptor`。
+- 构造、复制、移动、销毁与扫描均只处理当前 active member。
+- 保留既有 aggregate API；异常 cleanup 节点通过相同描述符清理，不新增 union 专用入口。
+- cleanup frame marker 同时满足 `slot == NULL` 且 `aggregate_desc == NULL`，不能将 aggregate 节点误判为 marker。
+- 共享泛型函数体与跨包调用使用具化点的具体描述符；`match` 的成员身份仍由 tag 决定。
+- runtime 不搜索对象满足的 spec，不增加第四类顶层值模型。
 
 ### 2.7 Codegen
 

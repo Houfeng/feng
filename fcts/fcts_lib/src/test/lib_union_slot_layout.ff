@@ -1,0 +1,45 @@
+open module fcts_lib.test.union_slots;
+
+/** A trivial first member keeps small closed payloads independent of pointers. */
+@value open type SlotEmpty {}
+/** Every instantiation shares the same tag and payload prefix. */
+open spec SlotOption<T>: SlotEmpty | T;
+/** Preserve nested member identity, with a second independently managed choice. */
+open spec SlotNested<T>: SlotOption<T> | string;
+/** Generic fields exercise descriptor offsets and complete array strides. */
+@value open type SlotRecord<T> {
+    open var first: SlotOption<T>;
+    open var second: SlotNested<T>;
+    open var tail: string;
+}
+/** Construct a union in a source-hidden shared body. */
+open func slotWrap<T>(value: T): SlotOption<T> { return value; }
+/** Read the same shared prefix with a closed scalar, pointer or aggregate. */
+open func slotRead<T>(value: SlotOption<T>, fallback: T): T {
+    return match value { item: T { item } else { fallback } };
+}
+/** Rebinding a mutable parameter must not change the caller's union. */
+open func slotReplace<T>(var value: SlotOption<T>, next: T): SlotOption<T> {
+    value = next;
+    return value;
+}
+/** Closed descriptors, not the erased C carrier, determine default values. */
+open func slotDefault<T>(): T { let value: T; return value; }
+/** Nest complete unions, including their own tags. */
+open func slotNest<T>(value: T): SlotNested<T> {
+    let inner = slotWrap<T>(value);
+    return inner;
+}
+/** A chained generic projection must use the new offsets at both levels. */
+open func slotNestedRead<T>(value: SlotNested<T>, fallback: T): T {
+    return match value { item: SlotOption<T> -> T { item } else { fallback } };
+}
+/** Store repeated concrete unions in a descriptor-sized generic array. */
+open func slotArray<T>(value: T): SlotOption<T>[] {
+    let first = slotWrap<T>(value);
+    return [first, first, first];
+}
+/** A nested value with a managed tail verifies the entire closed field layout. */
+open func slotRecord<T>(value: T): SlotRecord<T> {
+    return SlotRecord<T> { first: slotWrap<T>(value), second: slotNest<T>(value), tail: "tail" };
+}

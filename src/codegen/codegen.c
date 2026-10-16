@@ -17846,6 +17846,8 @@ static void cg_append_union_payload_field_name(Buf *b, size_t member_index) {
     buf_append_fmt(b, "m%zu", member_index);
 }
 
+/* Emit one static table entry per direct member, including trivial choices,
+ * so the existing tag is also the descriptor's slot index. */
 static bool cg_append_union_member_slot_descriptor(CG *cg,
                                                    Buf *b,
                                                    const UserSpec *s,
@@ -17859,18 +17861,15 @@ static bool cg_append_union_member_slot_descriptor(CG *cg,
     }
     member_type = s->union_member_types[member_index];
     value_kind = cgtype_value_kind(member_type);
+    buf_append_fmt(b,
+                   "{ .offset = offsetof(struct %s, payload), ",
+                   s->c_value_struct_name);
     if (value_kind == CG_VK_TRIVIAL) {
-        buf_append_cstr(b,
-                        "(FengManagedSlotDescriptor){ .offset = 0, "
-                        ".kind = FENG_SLOT_NONE, .nested = NULL }");
+        buf_append_cstr(b, ".kind = FENG_SLOT_NONE, .nested = NULL }");
         return true;
     }
-    buf_append_fmt(b,
-                   "(FengManagedSlotDescriptor){ .offset = offsetof(struct %s, payload.",
-                   s->c_value_struct_name);
-    cg_append_union_payload_field_name(b, member_index);
     if (value_kind == CG_VK_MANAGED_POINTER) {
-        buf_append_cstr(b, "), .kind = FENG_SLOT_POINTER, .nested = NULL }");
+        buf_append_cstr(b, ".kind = FENG_SLOT_POINTER, .nested = NULL }");
         return true;
     }
     if (value_kind == CG_VK_AGGREGATE) {
@@ -17882,7 +17881,7 @@ static bool cg_append_union_member_slot_descriptor(CG *cg,
                            "CE0055", "codegen: union-form aggregate member is missing a descriptor");
         }
         buf_append_fmt(b,
-                       "), .kind = FENG_SLOT_NESTED_AGGREGATE, .nested = %s }",
+                       ".kind = FENG_SLOT_NESTED_AGGREGATE, .nested = %s }",
                        aggregate_desc);
         free(aggregate_desc);
         return true;
@@ -18982,8 +18981,6 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
         return;
     }
     if (s->form == FENG_SPEC_FORM_UNION) {
-        Buf slot_descriptor;
-
         /* Shared generic bodies use this instance only as a C overlay for
          * fixed metadata/payload offsets. The final call site places the
          * closed union descriptor in reified_agg_deps; do not manufacture a
@@ -18992,39 +18989,31 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
             return;
         }
 
-        buf_init(&slot_descriptor);
         if (s->union_member_count == 0U) {
             (void)cg_fail(cg, s->decl->token,
                           "CE0056", "codegen: union-form spec has no members");
             return;
         }
-        if (!cg_append_union_member_slot_descriptor(cg,
-                                                    &slot_descriptor,
-                                                    s,
-                                                    0U,
-                                                    s->decl->token)) {
-            buf_free(&slot_descriptor);
-            return;
-        }
-
         buf_append_fmt(td,
-            "static const FengManagedSlotDescriptor %s[] = {\n"
-            "    { offsetof(struct %s, _fwd), FENG_SLOT_FORWARD, NULL },\n"
-            "};\n",
-            s->c_aggregate_slots_name,
-            s->c_value_struct_name);
+            "static const FengManagedSlotDescriptor %s[] = {\n",
+            s->c_aggregate_slots_name);
+        for (size_t i = 0U; i < s->union_member_count; ++i) {
+            buf_append_cstr(td, "    ");
+            if (!cg_append_union_member_slot_descriptor(cg, td, s, i, s->decl->token)) {
+                return;
+            }
+            buf_append_cstr(td, ",\n");
+        }
+        buf_append_cstr(td, "};\n");
 
         buf_append_fmt(td,
             "static void %s(void *_value_out) {\n"
             "    struct %s *_v = (struct %s *)_value_out;\n"
             "    memset(_v, 0, sizeof *_v);\n"
-            "    _v->tag = 0U;\n"
-            "    _v->_fwd = %s;\n",
+            "    _v->tag = 0U;\n",
             s->c_aggregate_init_fn_name,
             s->c_value_struct_name,
-            s->c_value_struct_name,
-            slot_descriptor.data);
-        buf_free(&slot_descriptor);
+            s->c_value_struct_name);
 
         if (s->union_member_types[0U] != NULL &&
             s->union_member_types[0U]->kind != CG_TYPE_VOID) {
@@ -19081,15 +19070,18 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
             "    .name = \"%s\",\n"
             "    .size = sizeof(struct %s),\n"
             "    .default_zero_init = &%s,\n"
-            "    .managed_slot_count = 1,\n"
+            "    .managed_slot_count = %zu,\n"
             "    .managed_slots = %s,\n"
+            "    .managed_slot_choice_offset = offsetof(struct %s, tag) + 1,\n"
             "    .equal_fn = NULL,\n"
             "    .reified_generic_params_count = 0,\n"
             "};\n\n",
             s->feng_name,
             s->c_value_struct_name,
             s->c_aggregate_default_name,
-            s->c_aggregate_slots_name);
+            s->union_member_count,
+            s->c_aggregate_slots_name,
+            s->c_value_struct_name);
         return;
     }
     /* Witness struct body already emitted in cg_emit_user_spec_forward. */
@@ -25275,94 +25267,28 @@ static bool cg_emit_callable_spec_coercion(CG *cg,
         "CE0117", "codegen: callable-form lambda/method coercion not yet supported in this step");
 }
 
-/* Emit the active tag and forwarding slot for one union value held in
- * address-form storage. The payload offset is part of the generated union
- * carrier ABI and remains fixed even when the payload's concrete size is
- * supplied by a descriptor. */
+/* Emit the existing active tag into descriptor-sized union storage. The
+ * concrete descriptor supplied by the caller owns the member slot table. */
 static bool cg_emit_reified_union_header(CG *cg,
                                          const UserSpec *spec,
                                          size_t member_index,
-                                         const char *storage_expr,
-                                         FengToken blame) {
-    const CGType *member_type;
-    Buf slot_descriptor;
-
+                                         const char *storage_expr) {
     if (cg == NULL || spec == NULL ||
         spec->form != FENG_SPEC_FORM_UNION ||
         member_index >= spec->union_member_count || storage_expr == NULL) {
         return false;
     }
-    member_type = spec->union_member_types[member_index];
     cg_emit_current_stmt_line_directive_force(cg);
     buf_append_fmt(cg->cur_body,
                    "    ((struct %s *)(void *)%s)->tag = %zuU;\n",
                    spec->c_value_struct_name,
                    storage_expr,
                    member_index);
-
-    if (member_type != NULL &&
-        member_type->kind == CG_TYPE_GENERIC_PARAM) {
-        const char *descriptor = cg_generic_param_desc_name(
-            cg, member_type->generic_param_index);
-
-        if (descriptor == NULL) {
-            return cg_fail(cg,
-                           blame,
-                           "CE0237", "codegen: union member is missing its generic descriptor");
-        }
-        buf_append_fmt(cg->cur_body,
-            "    switch (%s->kind) {\n"
-            "        case FENG_VALUE_TRIVIAL:\n"
-            "            ((struct %s *)(void *)%s)->_fwd = "
-            "(FengManagedSlotDescriptor){ .offset = 0, .kind = FENG_SLOT_NONE, .nested = NULL };\n"
-            "            break;\n"
-            "        case FENG_VALUE_MANAGED_POINTER:\n"
-            "            ((struct %s *)(void *)%s)->_fwd = "
-            "(FengManagedSlotDescriptor){ .offset = offsetof(struct %s, payload.m%zu), "
-            ".kind = FENG_SLOT_POINTER, .nested = NULL };\n"
-            "            break;\n"
-            "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
-            "            ((struct %s *)(void *)%s)->_fwd = "
-            "(FengManagedSlotDescriptor){ .offset = offsetof(struct %s, payload.m%zu), "
-            ".kind = FENG_SLOT_NESTED_AGGREGATE, "
-            ".nested = feng_generic_aggregate_descriptor(%s) };\n"
-            "            break;\n"
-            "    }\n",
-            descriptor,
-            spec->c_value_struct_name,
-            storage_expr,
-            spec->c_value_struct_name,
-            storage_expr,
-            spec->c_value_struct_name,
-            member_index,
-            spec->c_value_struct_name,
-            storage_expr,
-            spec->c_value_struct_name,
-            member_index,
-            descriptor);
-        return true;
-    }
-
-    buf_init(&slot_descriptor);
-    if (!cg_append_union_member_slot_descriptor(cg,
-                                                &slot_descriptor,
-                                                spec,
-                                                member_index,
-                                                blame)) {
-        buf_free(&slot_descriptor);
-        return false;
-    }
-    buf_append_fmt(cg->cur_body,
-                   "    ((struct %s *)(void *)%s)->_fwd = %s;\n",
-                   spec->c_value_struct_name,
-                   storage_expr,
-                   slot_descriptor.data);
-    buf_free(&slot_descriptor);
     return true;
 }
 
 /* Construct one selected union path directly in descriptor-sized storage.
- * Each nesting level owns only its own tag/forward metadata; the selected
+ * Each nesting level owns only its own tag; the selected
  * leaf is copied or moved according to its own value representation. */
 static bool cg_emit_reified_union_path_store(CG *cg,
                                              const UserSpec *spec,
@@ -25387,8 +25313,7 @@ static bool cg_emit_reified_union_path_store(CG *cg,
     if (!cg_emit_reified_union_header(cg,
                                       spec,
                                       member_index,
-                                      storage_expr,
-                                      blame)) {
+                                      storage_expr)) {
         return false;
     }
 
@@ -25532,7 +25457,6 @@ static bool cg_append_nested_union_coercion(CG *cg,
                                              const char *source_c_expr,
                                              bool *out_payload_owns_ref,
                                              FengToken blame) {
-    Buf slot_descriptor;
     size_t member_index;
     const CGType *member_type;
 
@@ -25543,18 +25467,10 @@ static bool cg_append_nested_union_coercion(CG *cg,
                        "CE0118", "codegen: union coercion path is invalid");
     }
     member_index = site->path_indices[path_level];
-    buf_init(&slot_descriptor);
-    if (!cg_append_union_member_slot_descriptor(cg, &slot_descriptor, spec, member_index, blame)) {
-        buf_free(&slot_descriptor);
-        return false;
-    }
-
     buf_append_fmt(expr,
-                   "((struct %s){ .tag = %zuU, ._fwd = %s",
+                   "((struct %s){ .tag = %zuU",
                    spec->c_value_struct_name,
-                   member_index,
-                   slot_descriptor.data);
-    buf_free(&slot_descriptor);
+                   member_index);
 
     member_type = spec->union_member_types[member_index];
     if (member_type != NULL && member_type->kind != CG_TYPE_VOID) {
@@ -59283,8 +59199,9 @@ static void cg_emit_union_spec_struct_body(CG *cg, const UserSpec *s) {
     }
     buf_append_fmt(&cg->headers, "struct %s {\n", s->c_value_struct_name);
     buf_append_cstr(&cg->headers, "    uint32_t tag;\n");
-    buf_append_cstr(&cg->headers, "    FengManagedSlotDescriptor _fwd;\n");
-    buf_append_cstr(&cg->headers, "    union {\n");
+    /* Small closed members and erased generic pointers must share the same
+     * payload offset. Every supported member ABI fits pointer alignment. */
+    buf_append_cstr(&cg->headers, "    _Alignas(void *) union {\n");
     if (s->union_member_count == 0U) {
         buf_append_cstr(&cg->headers, "        char _empty;\n");
     }
@@ -61622,9 +61539,8 @@ static bool cg_type_default_zero_is_zero_bytes(const CG *cg,
             return true;
         case CG_TYPE_SPEC: {
             const UserSpec *spec = type->user_spec;
-            /* The zero tag selects the first alternative. A trivial payload
-             * uses the all-zero NONE forwarding descriptor; managed/nested
-             * payloads require real metadata even when their bytes are zero. */
+            /* Preserve the existing trivial-first zero-byte proof. Managed
+             * and nested first members retain their normal default factory. */
             return spec != NULL && spec->form == FENG_SPEC_FORM_UNION &&
                 spec->generic_context_type_param_count == 0U &&
                 spec->union_member_count > 0U &&

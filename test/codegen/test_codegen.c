@@ -14092,7 +14092,8 @@ static void test_union_form_spec_codegen(void) {
     }
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source, "uint32_t tag;") != NULL);
-    ASSERT(strstr(out.c_source, "FENG_SLOT_FORWARD") != NULL);
+    ASSERT(strstr(out.c_source, ".managed_slot_choice_offset = offsetof(") != NULL);
+    ASSERT(strstr(out.c_source, "_fwd") == NULL);
     ASSERT(strstr(out.c_source, "FENG_SLOT_POINTER") != NULL);
     ASSERT(strstr(out.c_source, "FENG_SLOT_NESTED_AGGREGATE") != NULL);
     ASSERT(strstr(out.c_source, ".tag = 0U") != NULL);
@@ -14220,7 +14221,8 @@ static void test_generic_union_form_spec_codegen(void) {
         ASSERT(cg_ok);
     }
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source, "FENG_SLOT_FORWARD") != NULL);
+    ASSERT(strstr(out.c_source, ".managed_slot_choice_offset = offsetof(") != NULL);
+    ASSERT(strstr(out.c_source, "_fwd") == NULL);
     ASSERT(strstr(out.c_source, ".tag = 1U") != NULL);
     ASSERT(strstr(out.c_source, "FengSpecAgg__feng__codegen__uniongeneric__Result") != NULL);
     compile_generated_c_or_die(out.c_source);
@@ -14327,8 +14329,14 @@ static void test_generic_union_reified_storage_and_array_source_codegen(void) {
     }
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source, "_Alignas(max_align_t) char _union") != NULL);
+    ASSERT(count_substr(out.c_source, "->tag = 1U;") == 2U);
     ASSERT(strstr(out.c_source,
-                  ".nested = ((const FengAggregateDescriptor *)_desc->reified_agg_deps[") != NULL);
+                  "offsetof(struct FengSpecValue__feng__codegen__unionreified__Maybe__G__T__CTX__T, payload.m1))), "
+                  "(void *)_p_first, ((const FengAggregateDescriptor *)_desc->reified_agg_deps[0]));") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "offsetof(struct FengSpecValue__feng__codegen__unionreified__Maybe__G__T__CTX__T, payload.m1))), "
+                  "(void *)_p_second, ((const FengAggregateDescriptor *)_desc->reified_agg_deps[0]));") != NULL);
+    ASSERT(strstr(out.c_source, "_fwd") == NULL);
     ASSERT(strstr(out.c_source,
                   "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, _desc->reified_agg_deps[") != NULL);
     ASSERT(strstr(out.c_source, "&_p_first") == NULL);
@@ -17500,6 +17508,9 @@ void test_spec_registration_growth_codegen(void (*compile_c)(const char *));
 /* Source callable entries share local-storage visibility, including erased bodies. */
 void test_callable_debug_storage_codegen(void (*compile_c)(const char *));
 
+/* Compact unions preserve static ownership, generic offsets and tag identity. */
+void test_union_slot_layout_codegen(void (*compile_c)(const char *));
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -17743,6 +17754,7 @@ int main(void) {
     test_tuple_destructuring_evaluation_codegen();
     test_tuple_managed_slots_codegen();
     test_union_form_spec_codegen();
+    test_union_slot_layout_codegen(compile_generated_c_or_die);
     test_union_object_spec_leaf_coercion_codegen();
     test_generic_union_form_spec_codegen();
     test_generic_union_literal_adaptation_type_lifetime();

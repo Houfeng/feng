@@ -1,0 +1,90 @@
+module union_slot_consumer;
+
+import fcts_lib.test.union_slots;
+
+var dropped: int = 0;
+var cycleDrops: int = 0;
+var revive: bool = false;
+var saved: SlotOption<Cycle>;
+
+/** Fail independently of an active std.test context. */
+func require(ok: bool) { if !ok { throw "union-slot-layout"; } }
+/** A positive ID identifies one actual owned resource. */
+type Ref {
+    let id: int;
+    func ~Ref() { if self.id > 0 { dropped += 1; } }
+}
+/** The selected aggregate owns multiple pointers at the same payload base. */
+@value type Pair { let first: Ref; let second: Ref; }
+/** The collector must follow both selected fields and clear only live edges. */
+type Cycle {
+    // Existing analysis recognizes array edges, whose default is an empty array.
+    var links: Cycle[] = [];
+    var next: SlotOption<Cycle>;
+    var payload: SlotOption<Pair>;
+    func ~Cycle() {
+        cycleDrops += 1;
+        if revive { revive = false; saved = self; }
+    }
+}
+
+/** Build a two-node ring, with an independently owned external child. */
+func ring(external: Ref) {
+    let first = Cycle();
+    let second = Cycle();
+    first.links = [second];
+    second.links = [first];
+    first.next = second;
+    second.next = first;
+    first.payload = Pair { first: external, second: Ref { id: 2 } };
+    second.payload = Pair { first: external, second: Ref { id: 3 } };
+}
+
+/** Check resurrection and later collection using only language-visible state. */
+func cycles() {
+    let external = Ref { id: 1 };
+    revive = true;
+    ring(external);
+    // Collection runs all component finalizers once before testing resurrection.
+    require(cycleDrops == 2 && dropped == 2);
+    match saved {
+        node: Cycle {
+            require(match node.next { other: Cycle { true } else { false } });
+            require(match node.payload { pair: Pair { pair.first.id == 1 && pair.second.id > 1 } else { false } });
+        }
+        else { require(false); }
+    }
+    saved = SlotEmpty();
+    // A resurrected component runs its finalizers again on the next collection.
+    require(cycleDrops == 4 && dropped == 4 && external.id == 1);
+    ring(external);
+    require(cycleDrops == 6 && dropped == 6 && external.id == 1);
+}
+
+/** Source-hidden shared construction, defaults, arrays and nested projections. */
+func values() {
+    let empty = slotDefault<SlotOption<u8>>();
+    require(slotRead<u8>(empty, (u8)11) == (u8)11);
+    let byte = slotWrap<u8>((u8)255);
+    require(slotRead<u8>(byte, (u8)0) == (u8)255);
+    let changed = slotReplace<u8>(byte, (u8)7);
+    require(slotRead<u8>(byte, (u8)0) == (u8)255 && slotRead<u8>(changed, (u8)0) == (u8)7);
+    let record = slotRecord<i64>(9000000001);
+    require(slotNestedRead<i64>(record.second, 0) == 9000000001 && record.tail == "tail");
+    let nested = slotNest<SlotOption<u8>>(byte);
+    let selected = slotNestedRead<SlotOption<u8>>(nested, empty);
+    require(slotRead<u8>(selected, (u8)0) == (u8)255);
+    let pair = Pair { first: Ref { id: 4 }, second: Ref { id: 5 } };
+    let items = slotArray<Pair>(pair);
+    let item = slotRead<Pair>(items[2], pair);
+    require(item.first.id == 4 && item.second.id == 5);
+}
+
+/** The test sets a deterministic collector threshold before process startup. */
+func main(args: string[]) {
+    values();
+    require(dropped == 2);
+    dropped = 0;
+    cycles();
+    require(dropped == 7);
+}

@@ -518,10 +518,9 @@ match body {
 
 本次讨论已确认：union-form 的值级实现统一采用 `aggregate-with-managed-slots` 基线表示。
 
-首版固定包含三个逻辑组成部分：
+值中固定包含两个逻辑组成部分，具体布局及生命周期表见 §4.4：
 
 - 一个 `tag`，用于表达当前 active variant。
-- 一个运行时转发槽 `_fwd`，用于把 aggregate walker 转发到当前 active payload 的托管槽位描述。
 - 一个 inline payload 区域，用于承载当前 active member 的按值表示。
 
 其中，member 本身既可以是基础类型、用户定义类型，也可以是其他 `spec`；这些类别的混合并不改变 union-form 统一落到既有 `aggregate-with-managed-slots` 这一顶层值模型的原则。
@@ -545,22 +544,39 @@ match body {
 
 ### 4.4 union-form 的运行时基线表示
 
-当前讨论已确认：
+union-form 统一属于 `aggregate-with-managed-slots`，实例只保存 `uint32_t tag`、
+inline payload 及必要的对齐填充，不保存 `_fwd` 或实例描述符指针。
 
-- 把 `aggregate-with-managed-slots` 作为 union-form 的**统一基线表示**；
-- 其首版固定布局为“一个 `tag`、一个 `FengManagedSlotDescriptor _fwd`、一个 inline payload 区域”；
-- `tag` 负责表达当前 active member 在直接成员列表中的序号，供 `match` member 匹配与收窄发码使用；
-- `_fwd` 负责表达当前 active payload 的生命周期槽位，供 aggregate walker 在 retain / release / assign / take / 托管扫描路径中转发使用；
-- `_fwd` 不承载语言层 member identity；多个 member 可以拥有相同的 `_fwd.kind` 与 payload offset，但仍必须用不同 `tag` 区分；
-- inline payload 区域必须能内联容纳直接成员中尺寸与对齐需求最大的 member 表示；不允许为 aggregate member 采用装箱作为首版通用路径；
-- 当前 active member 不含托管槽位时，`_fwd.kind` 写为 `FENG_SLOT_NONE`；active member 是托管指针时，`_fwd.kind` 写为 `FENG_SLOT_POINTER`；active member 是内联 aggregate 时，`_fwd.kind` 写为 `FENG_SLOT_NESTED_AGGREGATE` 且 `nested` 指向对应 aggregate descriptor；
-- 复制、销毁与托管扫描只按 `_fwd` 指向的当前 active payload 生命周期规则处理；这套生命周期继续复用现有 aggregate 通用能力，由相应描述符驱动，不要求为 union-form 新增专用 runtime 分支或新的通用 API；
-- 即使未来对某些受限子集做优化，也不影响 union-form 在抽象层面归类为既有三类之一。
+```c
+struct FengUnion_SpecName {
+    uint32_t tag;
+    _Alignas(void *) union {
+        /* 每个直接 member 的完整按值表示，名称为 m0、m1…… */
+    } payload;
+};
+```
 
-这条结论的含义是：
+- `tag` 是归一化直接成员列表中的 0-based 序号；成员身份、顺序及嵌套层次保持不变。
+- payload 内联容纳所有 member，不装箱；其起始处至少按指针对齐。当前支持目标上，
+  Feng 标量、指针及其按值组合的对齐均不超过指针对齐，因此开放泛型载体与闭合载体
+  的 payload 偏移一致。生成代码用 `offsetof` 获取偏移，不硬编码目标字节数。
+- 每个实际使用的闭合 union 生成静态 `FengAggregateDescriptor`。`managed_slots`
+  按 tag 顺序为每个直接 member 保留一项，所有项的 offset 都指向 payload 起点。
+  trivial 对应 `FENG_SLOT_NONE`，托管指针对应 `FENG_SLOT_POINTER`，aggregate 对应
+  `FENG_SLOT_NESTED_AGGREGATE` 并引用该 member 的具体描述符。不能删除 NONE 项，
+  不能合并生命周期分类相同但身份不同的 member。
+- 描述符的 `managed_slot_choice_offset` 为 `offsetof(UnionType, tag) + 1`。
+  通用选择协议由[值模型说明 §3.2.1](../engineering/feng-value-model-delivered.md#321-按值选择活动-slot)
+  定义；复制、释放及循环扫描只处理 tag 选中的项。`FENG_SLOT_FORWARD` 机制保持不变，
+  union 不再使用实例转发槽。
+- 共享泛型函数体使用具化点传入的具体描述符确定大小和生命周期，开放 C 载体只提供
+  固定前缀及 payload 地址。继续使用既有 FT 与具化依赖，不新增实例元数据。
+- 默认值仍按 §3.9 初始化第一个 member，tag 为 0；非零默认值不能用清零替代。
+  替换值时先按旧 tag 处理原 payload，复制／移动继续遵循原有所有权和清空次序。
+  已知类型可静态展开的生命周期处理仍保留。
 
-- 联合类型**不需要新增第四类顶层运行时结构**；
-- 首版主要新增的是 codegen 发出的固定布局与描述符元信息，而不是修改现有 runtime 的通用 aggregate 生命周期实现。
+这是生成代码的私有 ABI 变更；依赖库及项目缓存必须重建，不混用旧、新 union 布局。
+不改变语言语义、顶层值分类、`feng_release` 或 aggregate API 签名。
 
 ## 5 关于开销的评估结论
 
@@ -685,21 +701,8 @@ match body {
 
 ### 7.4 aggregate union 的条件性槽位
 
-当前讨论已确认：union-form 的值级实现固定包含：
-
-- 一个 `tag`。
-- 一个运行时转发槽 `_fwd`。
-- 一个 inline payload 区域。
-
-对应语义为：
-
-- `tag` 负责表达当前 active member 在直接成员列表中的序号，供 member 匹配与收窄发码使用。
-- `_fwd` 负责表达当前 active payload 的生命周期槽位，供 aggregate walker 转发到 `NONE` / `POINTER` / `NESTED_AGGREGATE` 路径。
-- inline payload 区域按值承载当前 active member，必须能容纳直接成员中尺寸与对齐需求最大的表示。
-- 复制、销毁与托管扫描仅按 `_fwd` 指向的当前 active payload 规则处理。
-- 该设计仍属于既有 `aggregate-with-managed-slots` 顶层值模型，不构成第四类运行时结构。
-
-当前阶段无剩余未决项。
+值布局、tag 到静态生命周期表的对应关系及泛型偏移约束统一见 §4.4。
+运行时只处理当前活动项，仍属于既有 `aggregate-with-managed-slots` 顶层值模型。
 
 ### 7.5 重叠 member 的路径选择与转换成本
 
@@ -761,7 +764,7 @@ let t: Display = s;
 
 1. 先落 parser / AST，补齐 union-form 语法、form 边界与成员集合承载。
 2. 再落语义层，完成成员收集（保持声明时层次）、进入站点多级链路查找、显式转换边界与 `match` 收窄规则。
-3. 再落 codegen / 描述符接入，基于现有 aggregate runtime 能力按”一个 `tag`、一个 `_fwd`、一个 inline payload 区域”的固定布局完成构造、判别、复制、销毁与扫描。
+3. 再落 codegen / 描述符接入，基于 §4.4 的布局及现有 aggregate runtime 完成构造、判别、复制、销毁与扫描。
 4. 最后补齐 diagnostics、测试与主规范并入。
 
 原因：

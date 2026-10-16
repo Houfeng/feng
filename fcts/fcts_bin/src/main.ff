@@ -58,6 +58,7 @@ func main(args: string[]) {
       test_fit();
       test_g23_spec_fit();
       test_union();
+      test_union_slot_layout();
       test_nested_union();
       test_g24_union_entry_paths();
       test_g24_union_projection_predicates();

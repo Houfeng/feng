@@ -152,8 +152,9 @@ release-and-clear 仍逐槽先清空后释放，自赋值／自移动仍直接�
 
 `FENG_SLOT_FORWARD` 的布局、相对偏移及禁止直接再次 forward 的规则不变；新旧模式
 可通过 nested aggregate 相互嵌套，选择项也可采用原有 forward。该机制不增加公共
-runtime 函数、不改变 `feng_release` 或 aggregate API 签名。第一阶段不改变 union
-的生成布局及 forward 用法；迁移计划见 [union 布局优化方案](feng-union-layout-performance-optimize.md)。
+runtime 函数、不改变 `feng_release` 或 aggregate API 签名。union 的具体使用及布局见
+[联合主规范 §4.4](../specifications/feng-union-type.md#44-union-form-的运行时基线表示)；
+实施状态见 [union 布局优化方案](feng-union-layout-performance-optimize.md)。
 
 新增字段追加于完整描述符末尾，未指定时自动为零。这是私有 ABI 变更，必须重建
 受影响的 runtime、生成代码和依赖库，不能将旧描述符二进制与新 runtime 混用。

@@ -1,0 +1,151 @@
+module fcts_bin;
+
+import std;
+import std.collections;
+import std.test;
+import fcts_lib.test.union_slots;
+
+var slotLayoutDrops: int = 0;
+var slotLayoutOrder: int = 0;
+
+/** Observe each owned resource exactly once and in actual destruction order. */
+type SlotLayoutRef {
+    let id: int;
+    func ~SlotLayoutRef() {
+        if self.id > 0 {
+            slotLayoutDrops += 1;
+            slotLayoutOrder = slotLayoutOrder * 10 + self.id;
+        }
+    }
+}
+/** Two pointer fields ensure the selected slot recursively visits all leaves. */
+@value type SlotLayoutPair { let first: SlotLayoutRef; let second: SlotLayoutRef; }
+/** Same ownership class does not imply the same member identity. */
+type SlotLayoutOther { let id: int; }
+/** An object-form spec stores both subject and witness in the inline payload. */
+spec SlotLayoutView { func read(): int; }
+/** A concrete view has an observable owned child. */
+type SlotLayoutViewed: SlotLayoutView {
+    let ref: SlotLayoutRef;
+    func read(): int { return self.ref.id; }
+}
+/** A captured union must remain alive until the callable is released. */
+spec SlotLayoutThunk(): int;
+/** NONE entries between managed entries must not compress tag numbering. */
+spec SlotLayoutChoice: i8 | SlotLayoutRef | bool | SlotLayoutPair | SlotLayoutOther | SlotLayoutView | SlotLayoutThunk;
+/** Default initialization is semantic, including nonzero enum defaults. */
+enum SlotLayoutNonzero { First = 17 }
+/** Exercise a nonzero scalar as the first member. */
+spec SlotLayoutDefault: SlotLayoutNonzero | SlotLayoutRef;
+/** Exercise a managed first-member default. */
+spec SlotLayoutManagedDefault: SlotLayoutViewed | i8;
+/** Mutating a union field must release only its previous active payload. */
+type SlotLayoutHolder { var value: SlotLayoutChoice; }
+
+/** Match every direct member without merging equal ownership classes. */
+func slotLayoutRead(value: SlotLayoutChoice): int {
+    return match value {
+        item: i8 { (int)item }
+        item: SlotLayoutRef { item.id }
+        item: bool { if item { 1 } else { 0 } }
+        item: SlotLayoutPair { item.first.id + item.second.id }
+        item: SlotLayoutOther { item.id + 100 }
+        item: SlotLayoutView { item.read() }
+        item: SlotLayoutThunk { item() }
+        else { -1 }
+    };
+}
+
+/** Walk every source/destination pair through a shared mutable parameter. */
+func slotLayoutTransitions() {
+    let first = SlotLayoutRef { id: 1 };
+    let second = SlotLayoutRef { id: 2 };
+    let view: SlotLayoutView = SlotLayoutViewed { ref: first };
+    let callback: SlotLayoutThunk = () { return second.id; };
+    let values: SlotLayoutChoice[] = [(i8)7, first, true,
+        SlotLayoutPair { first: first, second: second }, SlotLayoutOther { id: 4 }, view, callback];
+    let expected: int[] = [7, 1, 1, 3, 104, 1, 2];
+    for var i = 0; i < 7; i += 1 {
+        for var j = 0; j < 7; j += 1 {
+            let original = slotWrap<SlotLayoutChoice>(values[i]);
+            let changed = slotReplace<SlotLayoutChoice>(original, values[j]);
+            assert(slotLayoutRead(slotRead<SlotLayoutChoice>(original, values[0])) == expected[i],
+                "mutable parameter does not overwrite its caller");
+            assert(slotLayoutRead(slotRead<SlotLayoutChoice>(changed, values[0])) == expected[j],
+                "selected slot copies the entire new member");
+            let holder = SlotLayoutHolder { value: values[i] };
+            holder.value = values[j];
+            holder.value = holder.value;
+            assert(slotLayoutRead(holder.value) == expected[j], "field replacement and self assignment");
+        }
+    }
+    assert(slotLayoutDrops == 0, "all independent source owners remain alive");
+}
+
+/** Moving a pair through array/record/closure storage preserves both leaves. */
+func slotLayoutOwnedScope() {
+    let pair = SlotLayoutPair { first: SlotLayoutRef { id: 3 }, second: SlotLayoutRef { id: 4 } };
+    let record = slotRecord<SlotLayoutPair>(pair);
+    let items = slotArray<SlotLayoutPair>(pair);
+    let captured: SlotLayoutThunk = () {
+        let selected = slotRead<SlotLayoutPair>(record.first, pair);
+        return selected.first.id + slotNestedRead<SlotLayoutPair>(record.second, pair).second.id;
+    };
+    assert(captured() == 7 && record.tail == "tail", "closure captures nested selected aggregates");
+    for var i = 0; i < 3; i += 1 {
+        let selected = slotRead<SlotLayoutPair>(items[i], pair);
+        assert(selected.first.id == 3 && selected.second.id == 4, "generic array stride and payload");
+    }
+    assert(slotLayoutDrops == 0, "copied and captured payloads remain owned");
+}
+
+/** A completed union keeps its existing exception cleanup responsibility. */
+func slotLayoutCompletedThrow() {
+    let value: SlotLayoutChoice = SlotLayoutRef { id: 5 };
+    throw "slot-layout";
+}
+
+/** Small payloads and nested choices share the same layout in binary packages. */
+func test_union_slot_layout() {
+    describe("union static slot layout", () {
+        test("small generic values, nested projections and trailing fields", () {
+            let small = slotRecord<i8>((i8)-7);
+            let wide = slotRecord<i64>(9000000001);
+            assert(slotRead<i8>(small.first, (i8)0) == (i8)-7, "closed small payload offset");
+            assert(slotNestedRead<i8>(small.second, (i8)0) == (i8)-7, "nested small payload offset");
+            assert(slotRead<i64>(wide.first, 0) == 9000000001 && wide.tail == "tail", "wide value and tail");
+            let items = slotArray<u8>((u8)255);
+            assert(items.length() == 3 && slotRead<u8>(items[2], (u8)0) == (u8)255, "small array stride");
+            let empty = slotDefault<SlotOption<i8>>();
+            assert(slotRead<i8>(empty, (i8)9) == (i8)9, "trivial default member");
+        });
+        test("semantic scalar and managed defaults", () {
+            let nonzero = slotDefault<SlotLayoutDefault>();
+            assert(match nonzero { item: SlotLayoutNonzero { item == SlotLayoutNonzero.First } else { false } },
+                "first member keeps its nonzero default");
+            let managed = slotDefault<SlotLayoutManagedDefault>();
+            assert(match managed { item: SlotLayoutViewed { item.read() == 0 } else { false } },
+                "managed first member receives its usable default");
+        });
+        test("all direct member transitions and independent ownership", () {
+            slotLayoutDrops = 0;
+            slotLayoutOrder = 0;
+            slotLayoutTransitions();
+            assert(slotLayoutDrops == 2, "each referenced resource is released once");
+        });
+        test("nested aggregate array and closure lifetimes", () {
+            slotLayoutDrops = 0;
+            slotLayoutOrder = 0;
+            slotLayoutOwnedScope();
+            assert(slotLayoutDrops == 2 && slotLayoutOrder == 34, "ordered nested leaf destruction");
+        });
+        test("completed union exception cleanup", () {
+            slotLayoutDrops = 0;
+            slotLayoutOrder = 0;
+            var caught = false;
+            try slotLayoutCompletedThrow() catch error: string { caught = error == "slot-layout"; }
+            assert(caught && slotLayoutDrops == 1 && slotLayoutOrder == 5,
+                "completed union releases its selected payload during unwind");
+        });
+    });
+}
