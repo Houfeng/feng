@@ -1,0 +1,687 @@
+diff --git a/docs/engineering/feng-dap-dev.md b/docs/engineering/feng-dap-dev.md
+index 83848e4ffa9b80a53a6959c494badd559bc7b7b2..fe37a1d5d080f8e252bbbf864aa924635ad9d7cb 100644
+--- a/docs/engineering/feng-dap-dev.md
++++ b/docs/engineering/feng-dap-dev.md
+@@ -362,7 +362,7 @@
+
+ - `frame_backend_symbol_strid`
+   - 该映射所属的 callable / frame。
+-  - `kind = field` 的字段模板记录此项为 0（不属于任何具体 frame）。
++  - `kind = field` / `type` 的记录此项为 0（不属于任何具体 frame）。
+ - `backend_name_strid`
+   - `lldb-dap` 可见的原始变量名。
+   - `kind = field` 的字段模板记录此项为 0。
+@@ -372,8 +372,12 @@
+   - 用户可见的静态类型文本，为必填字段。
+   - 数组沿用 Feng 语法显示为 `T[]` 或 `T[!]`，不写运行时长度摘要。
+ - `kind`
+-  - `param` / `local` / `capture` / `self` / `field`。
++  - `param` / `local` / `capture` / `self` / `field` / `type`。
+   - `field`：字段模板记录，不属于任何具体 frame，描述某 Feng 用户类型的一个字段。
++  - `type`：具化后的 Feng 类型与 C 表示的映射，不属于 frame。`display_name` 与
++    `display_type` 均为完整 Feng 类型名，`backend_name` 为真实 C 类型；frame、
++    `read_expr`、parent 均为空。按 `display_type` 去重，跨包合并时拒绝冲突的 C 表示。
++    复用现有 ENTS 记录宽度，不新增 section；开放泛型占位载体不作为具体类型记录。
+ - `read_expr_strid`
+   - 顶层变量：可选；当 `backend_name` 指向 carrier 而非最终用户值时，提供最小后端读取表达式。
+   - 字段模板记录：必填；C 成员访问后缀（含点号或箭头），例如 `.feng_age`；代理层将其拼接到父 `read_expr` 后，构造子变量完整读取表达式：`"(" + parent_read_expr + ")" + field_read_expr`。
+@@ -502,7 +506,8 @@ LLDB 对 `FengArray *` / `FengString *` 等 runtime 载体只理解 C struct 内
+
+ - 对 DAP client（VS Code）完全透明，client 只认 DAP 协议，代理合成的 children 与 LLDB 原生 children 无法区分。
+ - 代理层维护一个 **synthetic variablesReference** 注册表，拦截子变量请求，绕过 LLDB 直接返回合成 children 列表。
+-- 数组元素展开完全在代理层动态合成，不写入 `.fd`；代理层利用 `display_type` 后缀和 `feng_array_data` 表达式生成。
++- 数组元素数量与内容由代理层动态读取。具名元素的 C 表示通过 ENTS 的 `type`
++  记录取得，使用真实元素类型作下标访问；不把 union／值对象按 `void *` 步长读取。
+ - 用户类型字段展开通过在 `ENTS` 中写入 `kind = field` 的字段模板记录实现；codegen 将每个 spec 类型的字段写为 `parent_strid = 父类型名 strid` 的 ENTS 记录，代理层按 `parent_strid` 查找字段列表，不新增 section。
+ - string 不做字符级展开，顶层显示实际字符串值即可。
+
+@@ -537,7 +542,7 @@ LLDB 对 `FengArray *` / `FengString *` 等 runtime 载体只理解 C struct 内
+ | `bool` | `((uint8_t *)feng_array_data(PARENT))[INDEX]` |
+ | `string` | `((FengString **)feng_array_data(PARENT))[INDEX]` |
+ | `T[]` / `T[!]`（嵌套数组） | `((FengArray **)feng_array_data(PARENT))[INDEX]` |
+-| 用户类型元素 | 结合 `ENTS` 中 `parent_strid == 元素类型名 strid` 的字段模板记录展开子字段 |
++| 具名类型元素 | `((C_TYPE *)feng_array_data(PARENT))[INDEX]`，`C_TYPE` 来自 ENTS `type` 记录；后端返回的 children 继续使用现有载体或字段展示协议 |
+
+ 展开约束：
+
+diff --git a/src/codegen/codegen.c b/src/codegen/codegen.c
+index 15991644ef4efedff0c7efc1d3567d0390398392..60c9ea3e5e8591cb74e1a44001942dee2a43a590 100644
+--- a/src/codegen/codegen.c
++++ b/src/codegen/codegen.c
+@@ -66137,6 +66137,48 @@ static void cg_dispose(CG *cg) {
+     free(cg->expr_narrowings);
+ }
+
++/* Preserve concrete C representations for erased array elements in the debugger. */
++static bool cg_debug_add_type_record(CG *cg, const CGType *type,
++                                      const FengProgram *program, FengToken token) {
++    char *display = cg_debug_dup_display_type_from_cgtype_from_program(cg, type, program, token);
++    char *backend = cg_ctype_dup(type);
++    bool ok = display != NULL && backend != NULL &&
++        feng_codegen_maping_info_add_variable_with_display_type(&cg->debug_info, NULL,
++            backend, display, NULL, display, FENG_CODEGEN_MAPING_VARIABLE_TYPE);
++    free(display);
++    free(backend);
++    return ok || cg_fail(cg, token, "IE0001", "codegen: failed to record concrete debug type");
++}
++
++/* Open generic placeholders have no concrete array stride; closed instances do. */
++static bool cg_debug_add_concrete_type_records(CG *cg) {
++    if (!cg_debug_enabled(cg)) return true;
++    for (size_t i = 0U; i < cg->user_type_count; ++i) {
++        const UserType *user = &cg->user_types[i];
++        if (user->generic_context_type_param_count != 0U) continue;
++        CGType type = {.kind = CG_TYPE_OBJECT, .user = user};
++        if (!cg_debug_add_type_record(cg, &type,
++                user->instantiation_program != NULL ? user->instantiation_program : user->owner_program,
++                user->decl->token)) return false;
++    }
++    for (size_t i = 0U; i < cg->user_spec_count; ++i) {
++        const UserSpec *spec = &cg->user_specs[i];
++        if (spec->generic_context_type_param_count != 0U) continue;
++        CGType type = {.kind = spec->form == FENG_SPEC_FORM_CALLABLE ? CG_TYPE_CALLABLE : CG_TYPE_SPEC,
++                       .user_spec = spec};
++        if (!cg_debug_add_type_record(cg, &type,
++                spec->instantiation_program != NULL ? spec->instantiation_program : spec->owner_program,
++                spec->decl->token)) return false;
++    }
++    for (size_t i = 0U; i < cg->emitted_enum_decl_count; ++i) {
++        const FengDecl *decl = cg->emitted_enum_decls[i];
++        CGType type = {.kind = CG_TYPE_I32, .enum_decl = decl};
++        if (!cg_debug_add_type_record(cg, &type, cg_find_decl_owner_program(cg, decl), decl->token))
++            return false;
++    }
++    return true;
++}
++
+ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
+                                FengCompileTarget target,
+                                const FengCodegenOptions *options,
+@@ -66225,6 +66267,10 @@ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
+      * captured. The init prelude inside `main()` references these slots. */
+     cg_emit_string_literal_table(&cg);
+
++    if (!cg_debug_add_concrete_type_records(&cg)) {
++        cg_dispose(&cg);
++        return false;
++    }
+     char *src = cg_finalize(&cg);
+     if (!src) {
+         cg_fail(&cg, (FengToken){0}, "IE0001", "codegen: out of memory finalizing output");
+diff --git a/src/codegen/mapping.c b/src/codegen/mapping.c
+index 10e790dd9ce85c65203c0b09915248c787b0edeb..2f1dc469053ce31f37cfe65637acea138b9de5ad 100644
+--- a/src/codegen/mapping.c
++++ b/src/codegen/mapping.c
+@@ -293,7 +293,11 @@ bool feng_codegen_maping_info_add_variable_with_parent_display_type(
+         display_type[0] == '\0') {
+         return false;
+     }
+-    if (kind == FENG_CODEGEN_MAPING_VARIABLE_FIELD) {
++    if (kind == FENG_CODEGEN_MAPING_VARIABLE_TYPE) {
++        if (frame_backend_symbol != NULL || backend_name == NULL || backend_name[0] == '\0' ||
++            read_expr != NULL || parent_display_type != NULL || strcmp(display_name, display_type) != 0)
++            return false;
++    } else if (kind == FENG_CODEGEN_MAPING_VARIABLE_FIELD) {
+         if (frame_backend_symbol != NULL || backend_name != NULL || read_expr == NULL ||
+             read_expr[0] == '\0' || parent_display_type == NULL ||
+             parent_display_type[0] == '\0') {
+@@ -303,6 +307,13 @@ bool feng_codegen_maping_info_add_variable_with_parent_display_type(
+         return false;
+     }
+     for (index = 0U; index < info->variable_count; ++index) {
++        if (kind == FENG_CODEGEN_MAPING_VARIABLE_TYPE) {
++            if (info->variables[index].kind == kind &&
++                strcmp(info->variables[index].display_type, display_type) == 0)
++                return mapping_cstr_equals(info->variables[index].backend_name, backend_name);
++            continue;
++        }
++        if (info->variables[index].kind == FENG_CODEGEN_MAPING_VARIABLE_TYPE) continue;
+         if (kind == FENG_CODEGEN_MAPING_VARIABLE_FIELD) {
+             if (info->variables[index].kind != FENG_CODEGEN_MAPING_VARIABLE_FIELD ||
+                 !mapping_cstr_equals(info->variables[index].parent_display_type,
+@@ -346,7 +357,9 @@ bool feng_codegen_maping_info_add_variable_with_parent_display_type(
+     entry.display_type = mapping_dup_cstr(display_type);
+     entry.parent_display_type = mapping_dup_cstr(parent_display_type);
+     entry.kind = kind;
+-    if ((kind != FENG_CODEGEN_MAPING_VARIABLE_FIELD && entry.frame_backend_symbol == NULL) ||
++    if ((kind != FENG_CODEGEN_MAPING_VARIABLE_FIELD && kind != FENG_CODEGEN_MAPING_VARIABLE_TYPE &&
++         entry.frame_backend_symbol == NULL) ||
++        (backend_name != NULL && entry.backend_name == NULL) ||
+         entry.display_name == NULL ||
+         entry.display_type == NULL ||
+         (parent_display_type != NULL && entry.parent_display_type == NULL) ||
+diff --git a/src/codegen/mapping.h b/src/codegen/mapping.h
+index 7f746194db77d875fe9ae8c8384c821a7bce20e3..2b8864c64f6e7260a2459dcf4b586af4cfb75066 100644
+--- a/src/codegen/mapping.h
++++ b/src/codegen/mapping.h
+@@ -36,7 +36,9 @@ typedef enum FengCodegenMapingVariableKind {
+     FENG_CODEGEN_MAPING_VARIABLE_BINDING = 1,
+     FENG_CODEGEN_MAPING_VARIABLE_CAPTURE = 2,
+     FENG_CODEGEN_MAPING_VARIABLE_SELF = 3,
+-    FENG_CODEGEN_MAPING_VARIABLE_FIELD = 4
++    FENG_CODEGEN_MAPING_VARIABLE_FIELD = 4,
++    /* Concrete Feng type -> C representation; frame/read_expr/parent are NULL. */
++    FENG_CODEGEN_MAPING_VARIABLE_TYPE = 5
+ } FengCodegenMapingVariableKind;
+
+ /* Maps one backend frame symbol to a user-facing frame name and policy. */
+@@ -46,7 +48,7 @@ typedef struct FengCodegenMapingFrameRecord {
+     FengCodegenMapingFramePolicy policy;
+ } FengCodegenMapingFrameRecord;
+
+-/* Maps one backend variable slot, expression, or field template to a debug entity. */
++/* Maps one backend variable, field template, or concrete C type to a debug entity. */
+ typedef struct FengCodegenMapingVariableRecord {
+     char *frame_backend_symbol;
+     char *backend_name;
+diff --git a/src/dap/proxy.c b/src/dap/proxy.c
+index c7921fa91e56f8c3ca9fcd0961f0bd25be4f1ea6..1995a938e19968d68e62532c5f3498a4a33bb1ed 100644
+--- a/src/dap/proxy.c
++++ b/src/dap/proxy.c
+@@ -2388,7 +2388,7 @@ static const FengCodegenMapingVariableRecord *proxy_find_variable_record(
+     for (index = 0U; index < artifact->info.variable_count; ++index) {
+         const FengCodegenMapingVariableRecord *record = artifact->info.variables + index;
+
+-        if (record->backend_name == NULL) {
++        if (record->frame_backend_symbol == NULL || record->backend_name == NULL) {
+             continue;
+         }
+         if (strcmp(record->frame_backend_symbol, frame_backend_symbol) == 0 &&
+@@ -3371,7 +3371,7 @@ static bool proxy_resolve_evaluate_identifier(const FengDebugArtifact *artifact,
+         const FengCodegenMapingVariableRecord *record = artifact->info.variables + index;
+         const char *candidate_expression;
+
+-        if (record->kind == FENG_CODEGEN_MAPING_VARIABLE_FIELD ||
++        if (record->frame_backend_symbol == NULL ||
+             strcmp(record->frame_backend_symbol, frame_backend_symbol) != 0 ||
+             strcmp(record->display_name, identifier) != 0) {
+             continue;
+@@ -5466,12 +5466,22 @@ static char *proxy_array_summary_element_type(const FengCodegenMapingVariableRec
+     return proxy_array_display_element_type(record->display_type);
+ }
+
+-static const char *proxy_array_element_c_type(const char *element_display_type) {
++/* Resolve nominal element representations before falling back to builtin types. */
++static const char *proxy_array_element_c_type(const FengDebugArtifact *artifact,
++                                              const char *element_display_type) {
+     char *nested_element_type;
+
+     if (element_display_type == NULL) {
+         return NULL;
+     }
++    if (artifact != NULL) {
++        for (size_t i = 0U; i < artifact->info.variable_count; ++i) {
++            const FengCodegenMapingVariableRecord *record = &artifact->info.variables[i];
++            if (record->kind == FENG_CODEGEN_MAPING_VARIABLE_TYPE &&
++                strcmp(record->display_type, element_display_type) == 0)
++                return record->backend_name;
++        }
++    }
+     if (strcmp(element_display_type, "i64") == 0) return "int64_t";
+     if (strcmp(element_display_type, "i32") == 0) return "int32_t";
+     if (strcmp(element_display_type, "i16") == 0) return "int16_t";
+@@ -5492,10 +5502,12 @@ static const char *proxy_array_element_c_type(const char *element_display_type)
+     return "void *";
+ }
+
+-static char *proxy_build_array_element_expr(const char *parent_read_expr,
++/* Subscript the actual C type so inline values use their complete stride. */
++static char *proxy_build_array_element_expr(const FengDebugArtifact *artifact,
++                                            const char *parent_read_expr,
+                                             const char *element_display_type,
+                                             uint64_t index) {
+-    const char *element_c_type = proxy_array_element_c_type(element_display_type);
++    const char *element_c_type = proxy_array_element_c_type(artifact, element_display_type);
+
+     if (parent_read_expr == NULL || parent_read_expr[0] == '\0' || element_c_type == NULL) {
+         return NULL;
+@@ -5839,7 +5851,7 @@ static bool proxy_send_synthetic_array_variables_response(FengDapMessageReader *
+         uint64_t child_ref = 0U;
+         uint64_t request_id = 0U;
+
+-        element_expr = proxy_build_array_element_expr(synthetic_ref->parent_read_expr,
++        element_expr = proxy_build_array_element_expr(artifact, synthetic_ref->parent_read_expr,
+                                                       synthetic_ref->element_display_type,
+                                                       element_index);
+         element_name = proxy_dup_printf("[%llu]", (unsigned long long)element_index);
+@@ -5881,8 +5893,30 @@ static bool proxy_send_synthetic_array_variables_response(FengDapMessageReader *
+             proxy_report_error(error_fd, "failed to expand synthetic array variables", "out of memory");
+             goto cleanup;
+         }
++        char *carrier_summary = NULL;
++        if (!proxy_present_carrier_value(evaluated.type, element_expr,
++                                          synthetic_ref->element_display_type,
++                                          evaluated.variables_reference,
++                                          backend_reader, backend_stdin_fd, output_fd,
++                                          artifact, state, synthetic_ref->frame_id,
++                                          synthetic_ref->depth + 1U,
++                                          &carrier_summary, &child_ref, error_fd)) {
++            free(element_expr);
++            free(element_name);
++            free(element_value);
++            free(element_type);
++            proxy_evaluated_variable_dispose(&evaluated);
++            goto cleanup;
++        }
++        if (carrier_summary != NULL) {
++            free(element_value);
++            element_value = carrier_summary;
++        } else {
++            child_ref = evaluated.variables_reference;
++        }
+         if (strcmp(synthetic_ref->element_display_type, "string") == 0) {
+             char *string_value = NULL;
++            child_ref = 0U;
+
+             if (!proxy_try_read_runtime_string_value(backend_reader,
+                                                      backend_stdin_fd,
+diff --git a/src/debug/debug.c b/src/debug/debug.c
+index ec3b95ff5b2dc23a4c16e0a13aa1b959fb49ad05..06365866b79049438bdf2316fb73a7b179051ab5 100644
+--- a/src/debug/debug.c
++++ b/src/debug/debug.c
+@@ -483,6 +483,15 @@ static bool debug_merge_variable_record(FengCodegenMapingInfo *merged_info,
+         return false;
+     }
+     is_field = variable->kind == FENG_CODEGEN_MAPING_VARIABLE_FIELD;
++    if (variable->kind == FENG_CODEGEN_MAPING_VARIABLE_TYPE) {
++        if (feng_codegen_maping_info_add_variable_with_parent_display_type(merged_info,
++                variable->frame_backend_symbol, variable->backend_name, variable->display_name,
++                variable->read_expr, variable->display_type, variable->parent_display_type,
++                variable->kind)) return true;
++        debug_set_error(out_error_message, "%s provides an invalid or conflicting type '%s'",
++                        input_label != NULL ? input_label : "debug sidecar input", variable->display_type);
++        return false;
++    }
+     if (is_field) {
+         if (variable->frame_backend_symbol != NULL || variable->backend_name != NULL ||
+             variable->read_expr == NULL || variable->parent_display_type == NULL ||
+@@ -500,6 +509,7 @@ static bool debug_merge_variable_record(FengCodegenMapingInfo *merged_info,
+     }
+
+     for (index = 0U; index < merged_info->variable_count; ++index) {
++        if (merged_info->variables[index].kind == FENG_CODEGEN_MAPING_VARIABLE_TYPE) continue;
+         if (is_field) {
+             if (merged_info->variables[index].kind != FENG_CODEGEN_MAPING_VARIABLE_FIELD ||
+                 !debug_cstr_equals(merged_info->variables[index].parent_display_type,
+@@ -1233,11 +1243,17 @@ static bool debug_parse_variables_section(const FengDebugParsedSection *section,
+             : NULL;
+
+         if (display_name == NULL || display_type == NULL ||
+-            kind > (uint32_t)FENG_CODEGEN_MAPING_VARIABLE_FIELD) {
++            kind > (uint32_t)FENG_CODEGEN_MAPING_VARIABLE_TYPE) {
+             debug_set_error(out_error_message, "invalid debug variable record");
+             return false;
+         }
+-        if (kind == (uint32_t)FENG_CODEGEN_MAPING_VARIABLE_FIELD) {
++        if (kind == (uint32_t)FENG_CODEGEN_MAPING_VARIABLE_TYPE) {
++            if (frame_backend_symbol != NULL || backend_name == NULL || backend_name[0] == '\0' ||
++                read_expr != NULL || parent_display_type != NULL || strcmp(display_name, display_type) != 0) {
++                debug_set_error(out_error_message, "invalid debug type record");
++                return false;
++            }
++        } else if (kind == (uint32_t)FENG_CODEGEN_MAPING_VARIABLE_FIELD) {
+             if (frame_backend_symbol != NULL || backend_name != NULL || read_expr == NULL ||
+                 parent_display_type == NULL) {
+                 debug_set_error(out_error_message, "invalid debug field record");
+@@ -1255,7 +1271,9 @@ static bool debug_parse_variables_section(const FengDebugParsedSection *section,
+         info->variables[index].parent_display_type = debug_dup_cstr(parent_display_type);
+         info->variables[index].kind = (FengCodegenMapingVariableKind)kind;
+         if ((kind != (uint32_t)FENG_CODEGEN_MAPING_VARIABLE_FIELD &&
++             kind != (uint32_t)FENG_CODEGEN_MAPING_VARIABLE_TYPE &&
+              info->variables[index].frame_backend_symbol == NULL) ||
++            (backend_name != NULL && info->variables[index].backend_name == NULL) ||
+             info->variables[index].display_name == NULL ||
+             info->variables[index].display_type == NULL ||
+             (parent_display_type != NULL && info->variables[index].parent_display_type == NULL)) {
+diff --git a/test/cli/fixtures/dap_array_element_types/main.ff b/test/cli/fixtures/dap_array_element_types/main.ff
+new file mode 100644
+index 0000000000000000000000000000000000000000..6ce9719e9670ecbf7765a319c46463773fa172b3
+--- /dev/null
++++ b/test/cli/fixtures/dap_array_element_types/main.ff
+@@ -0,0 +1,26 @@
++module union_slot_debug;
++
++/** Closed small and pointer payloads are both visible through DAP. */
++@value type Empty {}
++/** A generic union retains its language tag and active payload. */
++spec Choice<T>: Empty | T;
++/** An object field exposes the same union view as a local. */
++type Holder { let value: Choice<i32>; }
++/** Inline values exercise the same concrete-type mapping without a union. */
++@value type Pair { let first: i64; let second: i64; }
++/** Keep the stop and later execution observable without a standard library. */
++@cdecl("libc", "puts") extern func puts(message: string*): i32;
++/** Standalone debugger fixture does not depend on std. */
++func main(args: string[]) {
++    let small: Choice<i32> = (i32)7;
++    let large: Choice<i64> = 9000000001;
++    let holder = Holder { value: small };
++    let items: Choice<i32>[] = [small, (i32)9];
++    let onlyArray: Choice<u16>[] = [(u16)42, (u16)65530];
++    let nested: Choice<i32>[][] = [items, [(i32)11]];
++    let empty: Choice<i32>[] = [];
++    let defaults = Choice<i32>[: (int)2];
++    let writable: Choice<i32>[!] = [(i32)13, (i32)15];
++    let pairs: Pair[] = [Pair { first: 1, second: 2 }, Pair { first: 3, second: 4 }];
++    puts(&"ready"); // breakpoint: ready
++}
+diff --git a/test/cli/test_cli.c b/test/cli/test_cli.c
+index 50a3152b3e60eac71447835613a1053b97565e9b..d9b7658cf65ba3019801c4530e1b77011e357bb0 100644
+--- a/test/cli/test_cli.c
++++ b/test/cli/test_cli.c
+@@ -33064,6 +33064,7 @@ static void test_dap_launch_frame_format_defaults(void) {
+
+ #include "dap_callable.inc"
+ #include "dap_union.inc"
++#include "test_dap_array_element_types.h"
+ #include "throw_constraint.inc"
+ #include "exception_info_routing.inc"
+ #include "defer_exception_effects.inc"
+@@ -33091,6 +33092,7 @@ int main(void) {
+     test_bundle_ft_diagnostic_lifetime();
+     test_debug_link_lto_object_lifetime();
+     test_dap_launch_frame_format_defaults();
++    test_dap_array_element_types();
+     test_thin_lto_option_diagnostics();
+     test_thin_lto_direct_mode_matrix();
+     test_thin_lto_project_dependency_matrix();
+diff --git a/test/cli/test_dap_array_element_types.h b/test/cli/test_dap_array_element_types.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..b8590c54702728f608412981d7b1d6a37bb52477
+--- /dev/null
++++ b/test/cli/test_dap_array_element_types.h
+@@ -0,0 +1,155 @@
++/* Independent array-element display regression uses existing DAP helpers. */
++#ifndef FENG_TEST_DAP_ARRAY_ELEMENT_TYPES_H
++#define FENG_TEST_DAP_ARRAY_ELEMENT_TYPES_H
++
++/* The union displays exactly tag/payload, with the selected member intact. */
++static void dap_array_debug_value(DapTestSession *session, DapTestJson variable,
++                                    const char *type, unsigned tag, const char *expected) {
++    ASSERT(dap_test_json_string_is(dap_test_json_get(variable, "type"), type));
++    long reference = dap_test_json_integer(dap_test_json_get(variable, "variablesReference"));
++    ASSERT(reference > 0);
++    char *arguments = dup_printf("{\"variablesReference\":%ld}", reference);
++    char *response = dap_test_request(session, "variables", arguments);
++    free(arguments);
++    DapTestJson fields = dap_test_json_get(dap_test_body(response), "variables");
++    ASSERT(dap_test_json_at(fields, 2U).begin == NULL);
++    char *tag_text = dup_printf("%u", tag);
++    dap_runtime_value(fields, "tag", tag_text);
++    free(tag_text);
++    DapTestJson payload = dap_callable_find_variable(fields, "payload");
++    reference = dap_test_json_integer(dap_test_json_get(payload, "variablesReference"));
++    ASSERT(reference > 0);
++    free(response);
++    arguments = dup_printf("{\"variablesReference\":%ld}", reference);
++    response = dap_test_request(session, "variables", arguments);
++    free(arguments);
++    fields = dap_test_json_get(dap_test_body(response), "variables");
++    char *member = dup_printf("m%u", tag);
++    if (expected != NULL) dap_runtime_value(fields, member, expected);
++    else ASSERT(dap_callable_find_variable(fields, member).begin != NULL);
++    free(member);
++    free(response);
++}
++
++/* Exercise local, object and array views with default Debug and explicit LTO. */
++static void test_dap_array_element_types(void) {
++    ThinLtoTestWorkspace work = thin_lto_test_workspace();
++    char *fixture = read_text_file("test/cli/fixtures/dap_array_element_types/main.ff");
++    char *project = thin_lto_test_project(&work, "union_slot_debug", "bin", fixture, NULL);
++    char *source = path_join(project, "src/main.ff");
++    char *escaped_source = json_escape_text(source);
++    char *binary = project_host_build_path(project, "bin/union_slot_debug");
++    char *repo = getcwd(NULL, 0);
++    ASSERT(repo != NULL);
++    char *backend = path_join(repo, "build/toolchain/llvm/bin/lldb-dap");
++    const char *modes[] = {"", "--lto=thin"};
++    for (size_t mode = 0U; mode < 2U; ++mode) {
++        char *argv[] = {project, (char *)modes[mode]};
++        ASSERT(feng_cli_project_build_main("feng", mode == 0U ? 1 : 2, argv) == 0);
++        thin_lto_test_debug_fingerprint(binary);
++        char *log = dup_printf("%s/dap-%zu.log", work.root, mode);
++        DapTestSession session;
++        dap_test_start(&session, work.root, backend, log);
++        free(dap_test_request(&session, "initialize", "{\"adapterID\":\"feng\"}"));
++        int launch = dap_test_launch_native(&session, binary, work.root, 0);
++        free(dap_test_wait(&session, 0, "initialized", NULL));
++        char *arguments = dup_printf("{\"source\":{\"path\":\"%s\"},\"breakpoints\":[{\"line\":%u}]}",
++            escaped_source, dap_test_breakpoint_line(fixture, "ready"));
++        char *response = dap_test_request(&session, "setBreakpoints", arguments);
++        free(arguments);
++        dap_test_json_require_true(dap_test_json_get(dap_test_json_at(
++            dap_test_json_get(dap_test_body(response), "breakpoints"), 0U), "verified"));
++        free(response);
++        free(dap_test_request(&session, "configurationDone", "{}"));
++        free(dap_test_response(&session, launch));
++        DapTestStepLocation location = dap_test_step_location(&session, "breakpoint", source, "main");
++        arguments = dup_printf("{\"frameId\":%ld}", location.frame_id);
++        response = dap_test_request(&session, "scopes", arguments);
++        free(arguments);
++        DapTestJson scopes = dap_test_json_get(dap_test_body(response), "scopes");
++        long locals_reference = 0;
++        for (size_t i = 0U;; ++i) {
++            DapTestJson scope = dap_test_json_at(scopes, i);
++            if (scope.begin == NULL) break;
++            if (dap_test_json_string_is(dap_test_json_get(scope, "name"), "Locals"))
++                locals_reference = dap_test_json_integer(dap_test_json_get(scope, "variablesReference"));
++        }
++        ASSERT(locals_reference > 0);
++        free(response);
++        arguments = dup_printf("{\"variablesReference\":%ld}", locals_reference);
++        char *locals = dap_test_request(&session, "variables", arguments);
++        free(arguments);
++        DapTestJson values = dap_test_json_get(dap_test_body(locals), "variables");
++        dap_array_debug_value(&session, dap_callable_find_variable(values, "small"),
++            "union_slot_debug.Choice<i32>", 1U, "7");
++        dap_array_debug_value(&session, dap_callable_find_variable(values, "large"),
++            "union_slot_debug.Choice<i64>", 1U, "9000000001");
++        long holder = dap_test_json_integer(dap_test_json_get(
++            dap_callable_find_variable(values, "holder"), "variablesReference"));
++        arguments = dup_printf("{\"variablesReference\":%ld}", holder);
++        response = dap_test_request(&session, "variables", arguments);
++        free(arguments);
++        dap_array_debug_value(&session, dap_callable_find_variable(
++            dap_test_json_get(dap_test_body(response), "variables"), "value"),
++            "union_slot_debug.Choice<i32>", 1U, "7");
++        free(response);
++        response = dap_runtime_children(&session, dap_callable_find_variable(values, "items"), 2U);
++        DapTestJson items = dap_test_json_get(dap_test_body(response), "variables");
++        dap_array_debug_value(&session, dap_callable_find_variable(items, "[0]"),
++            "union_slot_debug.Choice<i32>", 1U, "7");
++        dap_array_debug_value(&session, dap_callable_find_variable(items, "[1]"),
++            "union_slot_debug.Choice<i32>", 1U, "9");
++        free(response);
++        response = dap_runtime_children(&session, dap_callable_find_variable(values, "onlyArray"), 2U);
++        items = dap_test_json_get(dap_test_body(response), "variables");
++        dap_array_debug_value(&session, dap_callable_find_variable(items, "[0]"),
++            "union_slot_debug.Choice<u16>", 1U, "42");
++        dap_array_debug_value(&session, dap_callable_find_variable(items, "[1]"),
++            "union_slot_debug.Choice<u16>", 1U, "65530");
++        free(response);
++        response = dap_runtime_children(&session, dap_callable_find_variable(values, "nested"), 2U);
++        DapTestJson rows = dap_test_json_get(dap_test_body(response), "variables");
++        char *row = dap_runtime_children(&session, dap_callable_find_variable(rows, "[1]"), 1U);
++        dap_array_debug_value(&session, dap_callable_find_variable(
++            dap_test_json_get(dap_test_body(row), "variables"), "[0]"),
++            "union_slot_debug.Choice<i32>", 1U, "11");
++        free(row); free(response);
++        free(dap_runtime_children(&session, dap_callable_find_variable(values, "empty"), 0U));
++        response = dap_runtime_children(&session, dap_callable_find_variable(values, "defaults"), 2U);
++        dap_array_debug_value(&session, dap_callable_find_variable(
++            dap_test_json_get(dap_test_body(response), "variables"), "[1]"),
++            "union_slot_debug.Choice<i32>", 0U, NULL);
++        free(response);
++        response = dap_runtime_children(&session, dap_callable_find_variable(values, "writable"), 2U);
++        dap_array_debug_value(&session, dap_callable_find_variable(
++            dap_test_json_get(dap_test_body(response), "variables"), "[1]"),
++            "union_slot_debug.Choice<i32>", 1U, "15");
++        free(response);
++        response = dap_runtime_children(&session, dap_callable_find_variable(values, "pairs"), 2U);
++        items = dap_test_json_get(dap_test_body(response), "variables");
++        long pair = dap_test_json_integer(dap_test_json_get(
++            dap_callable_find_variable(items, "[1]"), "variablesReference"));
++        ASSERT(pair > 0);
++        arguments = dup_printf("{\"variablesReference\":%ld}", pair);
++        row = dap_test_request(&session, "variables", arguments);
++        free(arguments);
++        DapTestJson pair_fields = dap_test_json_get(dap_test_body(row), "variables");
++        dap_runtime_value(pair_fields, "first", "3");
++        dap_runtime_value(pair_fields, "second", "4");
++        free(row); free(response); free(locals);
++        arguments = dup_printf("{\"threadId\":%ld}", location.thread_id);
++        free(dap_test_request(&session, "continue", arguments));
++        free(arguments);
++        free(dap_test_wait(&session, 0, "terminated", "stopped"));
++        response = dap_test_wait(&session, 0, "exited", NULL);
++        ASSERT(dap_test_json_integer(dap_test_json_get(dap_test_body(response), "exitCode")) == 0);
++        free(response);
++        dap_test_finish(&session);
++        free(log);
++    }
++    free(backend); free(repo); free(binary); free(escaped_source); free(source); free(project); free(fixture);
++    thin_lto_test_dispose(&work);
++    puts("union slots DAP: locals, fields, inline values and nested/empty/array-only unions passed Debug default/thin");
++}
++
++#endif
+diff --git a/test/codegen/test_codegen.c b/test/codegen/test_codegen.c
+index 445103648a1c81f27ebecad6599046f5b6cea183..dd55bb3f4d67979e4eca98564661d474e4f69c5e 100644
+--- a/test/codegen/test_codegen.c
++++ b/test/codegen/test_codegen.c
+@@ -17508,6 +17508,9 @@ void test_spec_registration_growth_codegen(void (*compile_c)(const char *));
+ /* Source callable entries share local-storage visibility, including erased bodies. */
+ void test_callable_debug_storage_codegen(void (*compile_c)(const char *));
+
++/* Concrete debug types preserve nominal array stride and sidecar records. */
++void test_dap_array_element_types_codegen(void);
++
+ /* Compact unions preserve static ownership, generic offsets and tag identity. */
+ void test_union_slot_layout_codegen(void (*compile_c)(const char *));
+
+@@ -17787,6 +17790,7 @@ int main(void) {
+     test_receiver_binding_codegen(compile_generated_c_or_die);
+     test_spec_registration_growth_codegen(compile_generated_c_or_die);
+     test_callable_debug_storage_codegen(compile_generated_c_or_die);
++    test_dap_array_element_types_codegen();
+     fprintf(stdout, "codegen tests passed\n");
+     return 0;
+ }
+diff --git a/test/codegen/test_dap_array_element_types.c b/test/codegen/test_dap_array_element_types.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..180b66979a5732a909a651e626a9752b1b426d8e
+--- /dev/null
++++ b/test/codegen/test_dap_array_element_types.c
+@@ -0,0 +1,111 @@
++#include "../throw_constraint_helpers.h"
++#include "codegen/codegen.h"
++#include "debug/debug.h"
++#include <unistd.h>
++
++/* Concrete type records survive sidecars and dependency merging without becoming locals. */
++static void union_slot_debug_types(const FengSemanticAnalysis *analysis) {
++    FengCodegenMapingSourceMapping mapping = {
++        .source_path = "throw_constraint.ff", .package_name = "slot", .package_root = "."};
++    FengCodegenOptions options = {.debug_source_mappings = &mapping, .debug_source_mapping_count = 1U};
++    FengCodegenOutput output = {0};
++    FengCodegenError error = {0};
++    THROW_CHECK(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB, &options, &output, &error));
++    const char *names[] = {"slot.layout.Small", "slot.layout.Maybe<i8>", "slot.layout.Ref", "slot.layout.Pair"};
++    const char *types[] = {"struct FengSpecValue__slot__layout__Small",
++        "struct FengSpecValue__slot__layout__Maybe__G__i8", "struct Feng__slot__layout__Ref *",
++        "struct Feng__slot__layout__Pair"};
++    for (size_t n = 0U; n < sizeof names / sizeof *names; ++n) {
++        size_t found = 0U;
++        for (size_t i = 0U; i < output.debug_info.variable_count; ++i) {
++            const FengCodegenMapingVariableRecord *record = &output.debug_info.variables[i];
++            if (record->kind != FENG_CODEGEN_MAPING_VARIABLE_TYPE) continue;
++            THROW_CHECK(record->frame_backend_symbol == NULL && record->read_expr == NULL &&
++                        record->parent_display_type == NULL);
++            THROW_CHECK(strcmp(record->display_name, record->display_type) == 0);
++            THROW_CHECK(strstr(record->display_type, "<T>") == NULL);
++            if (strcmp(record->display_type, names[n]) == 0) {
++                THROW_CHECK(strcmp(record->backend_name, types[n]) == 0);
++                ++found;
++            }
++        }
++        THROW_CHECK(found == 1U);
++    }
++    FengCodegenMapingInfo type_info = {0};
++    for (size_t repeat = 0U; repeat < 2U; ++repeat)
++        THROW_CHECK(feng_codegen_maping_info_add_variable_with_display_type(&type_info, NULL,
++            types[0], names[0], NULL, names[0], FENG_CODEGEN_MAPING_VARIABLE_TYPE));
++    THROW_CHECK(type_info.variable_count == 1U);
++    THROW_CHECK(!feng_codegen_maping_info_add_variable_with_display_type(&type_info, "frame",
++        types[0], names[0], NULL, names[0], FENG_CODEGEN_MAPING_VARIABLE_TYPE));
++    THROW_CHECK(!feng_codegen_maping_info_add_variable_with_display_type(&type_info, NULL,
++        NULL, names[0], NULL, names[0], FENG_CODEGEN_MAPING_VARIABLE_TYPE));
++    THROW_CHECK(!feng_codegen_maping_info_add_variable_with_display_type(&type_info, NULL,
++        types[0], names[0], "expression", names[0], FENG_CODEGEN_MAPING_VARIABLE_TYPE));
++    THROW_CHECK(!feng_codegen_maping_info_add_variable_with_display_type(&type_info, NULL,
++        types[0], "other name", NULL, names[0], FENG_CODEGEN_MAPING_VARIABLE_TYPE));
++    THROW_CHECK(!feng_codegen_maping_info_add_variable_with_parent_display_type(&type_info, NULL,
++        types[0], names[0], NULL, names[0], "parent", FENG_CODEGEN_MAPING_VARIABLE_TYPE));
++    THROW_CHECK(!feng_codegen_maping_info_add_variable_with_display_type(&type_info, NULL,
++        "void *", names[0], NULL, names[0], FENG_CODEGEN_MAPING_VARIABLE_TYPE));
++    char root[] = "temp/union-slot-debug-types-XXXXXX";
++    THROW_CHECK(mkdtemp(root) != NULL);
++    char binary[256], dependency[256], merged[256];
++    THROW_CHECK(snprintf(binary, sizeof binary, "%s/binary", root) > 0);
++    THROW_CHECK(snprintf(dependency, sizeof dependency, "%s/dependency.fd", root) > 0);
++    THROW_CHECK(snprintf(merged, sizeof merged, "%s/merged.fd", root) > 0);
++    FILE *file = fopen(binary, "wb");
++    THROW_CHECK(file != NULL && fputs("fingerprint", file) >= 0 && fclose(file) == 0);
++    char *message = NULL;
++    THROW_CHECK(feng_debug_write_fd(dependency, binary, NULL, 0U, &type_info, &message));
++    const char *dependencies[] = {dependency};
++    THROW_CHECK(feng_debug_write_merged_fd(merged, binary, &mapping, 1U,
++        &output.debug_info, dependencies, 1U, &message));
++    FengDebugArtifact loaded = {0};
++    THROW_CHECK(feng_debug_read_fd(merged, &loaded, &message));
++    THROW_CHECK(loaded.info.variable_count == output.debug_info.variable_count);
++    size_t type_count = 0U;
++    for (size_t i = 0U; i < loaded.info.variable_count; ++i) {
++        const FengCodegenMapingVariableRecord *record = &loaded.info.variables[i];
++        if (record->kind == FENG_CODEGEN_MAPING_VARIABLE_TYPE) {
++            THROW_CHECK(record->frame_backend_symbol == NULL && record->read_expr == NULL &&
++                        record->parent_display_type == NULL && record->backend_name != NULL);
++            ++type_count;
++        }
++    }
++    THROW_CHECK(type_count >= sizeof names / sizeof *names);
++    feng_debug_artifact_dispose(&loaded);
++    free(type_info.variables[0].backend_name);
++    type_info.variables[0].backend_name = strdup("void *");
++    THROW_CHECK(type_info.variables[0].backend_name != NULL);
++    THROW_CHECK(feng_debug_write_fd(dependency, binary, NULL, 0U, &type_info, &message));
++    THROW_CHECK(!feng_debug_write_merged_fd(merged, binary, &mapping, 1U,
++        &output.debug_info, dependencies, 1U, &message));
++    THROW_CHECK(message != NULL && strstr(message, "conflicting type") != NULL);
++    type_info.variables[0].read_expr = strdup("invalid type expression");
++    THROW_CHECK(type_info.variables[0].read_expr != NULL);
++    THROW_CHECK(feng_debug_write_fd(dependency, binary, NULL, 0U, &type_info, &message));
++    THROW_CHECK(!feng_debug_read_fd(dependency, &loaded, &message));
++    THROW_CHECK(message != NULL && strstr(message, "invalid debug type record") != NULL);
++    feng_debug_artifact_dispose(&loaded);
++    free(message);
++    feng_codegen_maping_info_dispose(&type_info);
++    THROW_CHECK(unlink(binary) == 0 && unlink(dependency) == 0 && unlink(merged) == 0 && rmdir(root) == 0);
++    feng_codegen_output_free(&output);
++    feng_codegen_error_free(&error);
++}
++
++/* Concrete nominal mappings preserve inline array element size and identity. */
++void test_dap_array_element_types_codegen(void) {
++    const char *source =
++        "open module slot.layout;"
++        "@value open type Empty{}"
++        "open type Ref{let value:int;}"
++        "@value open type Pair{let first:Ref;let second:Ref;}"
++        "open spec Small:i8|u8;"
++        "open spec Maybe<T>:Empty|T;"
++        "open func small(value:i8):Maybe<i8>{return value;}";
++    ThrowConstraintUnit unit = throw_constraint_analyze(source, NULL, NULL);
++    union_slot_debug_types(unit.analysis);
++    throw_constraint_dispose(&unit);
++}

@@ -1,0 +1,207 @@
+diff --git a/fcts/fcts_bin/src/main.ff b/fcts/fcts_bin/src/main.ff
+index 0d13baaf73ebf13318aad51cee0d4c57c4f948e9..3cc1f641494687fe5ff6ccea2f3036e846bef977 100644
+--- a/fcts/fcts_bin/src/main.ff
++++ b/fcts/fcts_bin/src/main.ff
+@@ -33,6 +33,7 @@ func main(args: string[]) {
+       test_type();
+       test_ordinary_type_semantics();
+       test_object_construction_order();
++      test_value_literal_partial_cleanup();
+       test_finalizer_capture();
+       test_enum();
+       test_enum_default_semantics();
+diff --git a/fcts/fcts_bin/src/test_value_literal_partial_cleanup.ff b/fcts/fcts_bin/src/test_value_literal_partial_cleanup.ff
+new file mode 100644
+index 0000000000000000000000000000000000000000..c493ce6e9c2751abe3964175602477b335003864
+--- /dev/null
++++ b/fcts/fcts_bin/src/test_value_literal_partial_cleanup.ff
+@@ -0,0 +1,75 @@
++module fcts_bin;
++
++import std.test;
++import fcts_lib.test.partial_value;
++
++var partialCleanupDrops: int = 0;
++var partialCleanupOrder: int = 0;
++
++/** Observe each owned resource exactly once and in actual destruction order. */
++type PartialCleanupRef {
++    let id: int;
++    func ~PartialCleanupRef() {
++        if self.id > 0 {
++            partialCleanupDrops += 1;
++            partialCleanupOrder = partialCleanupOrder * 10 + self.id;
++        }
++    }
++}
++/** Two pointer fields ensure the selected slot recursively visits all leaves. */
++@value type PartialCleanupPair { let first: PartialCleanupRef; let second: PartialCleanupRef; }
++/** Both selected union fields need protection during partial initialization. */
++@value type PartialCleanupUnionPair { let first: PartialCleanupChoice; let second: PartialCleanupChoice; }
++/** A union field selects either a scalar, resource or nested value. */
++spec PartialCleanupChoice: i8 | PartialCleanupRef | PartialCleanupPair;
++
++/** Unwind both a completed union and a partially initialized outer value. */
++func partialCleanupThrow(): PartialCleanupRef { throw "slot-layout"; }
++/** The first field must be cleaned when evaluation of the second field throws. */
++func partialCleanupPartial() {
++    let first: PartialCleanupChoice = PartialCleanupRef { id: 5 };
++    let pair = PartialCleanupPair { first: PartialCleanupRef { id: 6 }, second: partialCleanupThrow() };
++}
++/** A nested selected aggregate must also unwind through the construction guard. */
++func partialCleanupPartialUnion() {
++    let pair = PartialCleanupUnionPair {
++        first: PartialCleanupPair { first: PartialCleanupRef { id: 6 }, second: PartialCleanupRef { id: 7 } },
++        second: partialCleanupThrow()
++    };
++}
++/** Keep the shared construction call inside a void try-expression target. */
++func partialCleanupPartialGeneric() {
++    let value = makePartialPair<PartialCleanupRef>(PartialCleanupRef { id: 8 },
++        () { return partialCleanupThrow(); });
++}
++
++/** Partial value construction transfers or unwinds each acquired resource. */
++func test_value_literal_partial_cleanup() {
++    describe("value literal partial cleanup", () {
++        test("exception and partial initialization cleanup", () {
++            partialCleanupDrops = 0;
++            partialCleanupOrder = 0;
++            var caught = false;
++            try partialCleanupPartial() catch error: string { caught = error == "slot-layout"; }
++            assert(caught, "exception reaches its handler");
++            assert(partialCleanupDrops == 2, "partial field and completed union are each cleaned");
++            assert(partialCleanupOrder == 65, "partial field is cleaned before the completed union");
++        });
++        test("nested selected field partial initialization cleanup", () {
++            partialCleanupDrops = 0;
++            partialCleanupOrder = 0;
++            var caught = false;
++            try partialCleanupPartialUnion() catch error: string { caught = error == "slot-layout"; }
++            assert(caught && partialCleanupDrops == 2 && partialCleanupOrder == 67,
++                "partial union releases the selected aggregate in field order");
++        });
++        test("source-hidden generic partial value cleanup", () {
++            partialCleanupDrops = 0;
++            partialCleanupOrder = 0;
++            var caught = false;
++            try partialCleanupPartialGeneric() catch error: string { caught = error == "slot-layout"; }
++            assert(caught && partialCleanupDrops == 1 && partialCleanupOrder == 8,
++                "generic construction and caller temporary each release their own token");
++        });
++    });
++}
+diff --git a/fcts/fcts_lib/src/test/lib_value_literal_partial_cleanup.ff b/fcts/fcts_lib/src/test/lib_value_literal_partial_cleanup.ff
+new file mode 100644
+index 0000000000000000000000000000000000000000..79bb8af9bf28c0c757199af74a641ca263834671
+--- /dev/null
++++ b/fcts/fcts_lib/src/test/lib_value_literal_partial_cleanup.ff
+@@ -0,0 +1,10 @@
++open module fcts_lib.test.partial_value;
++
++/** A generic partial value must release every field acquired before a throw. */
++@value open type PartialPair<T> { open let first: T; open let second: T; }
++/** Supply a possibly throwing second initializer from a separate package. */
++open spec PartialFactory<T>(): T;
++/** Descriptor-sized value construction uses the same unwind ownership rule. */
++open func makePartialPair<T>(first: T, second: PartialFactory<T>): PartialPair<T> {
++    return PartialPair<T> { first: first, second: second() };
++}
+diff --git a/src/codegen/codegen.c b/src/codegen/codegen.c
+index 15991644ef4efedff0c7efc1d3567d0390398392..99a27109508051b12b89b7c68e58401986988baf 100644
+--- a/src/codegen/codegen.c
++++ b/src/codegen/codegen.c
+@@ -32484,6 +32484,9 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
+     if (cg_user_type_is_value(ut)) {
+         char *obj_ptr_expr = NULL;
+         ExprResult ctor_result;
++        Scope *construction_scope = NULL;
++        CGOwnedLocal owner = {0};
++        bool ok = false;
+
+         if (!cg_emit_value_type_construction(cg, ut, ctor,
+                                              target_call != NULL
+@@ -32521,6 +32524,19 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
+             er_free(&ctor_result);
+             return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+         }
++        /* Explicit fields may throw after earlier stores acquired resources.
++         * Protect the existing storage exactly as for tuple construction;
++         * successful construction transfers its token without retaining. */
++        if (e->as.object_literal.field_count > 0U &&
++            (ctor_result.uses_reified_storage || cgtype_is_aggregate(ctor_result.type))) {
++            construction_scope = scope_push(cg->cur_scope);
++            if (construction_scope == NULL) goto value_literal_cleanup;
++            cg->cur_scope = construction_scope;
++            buf_append_cstr(cg->cur_body, "    {\n");
++            if (!cg_materialize_to_local(cg, &ctor_result, "_construction"))
++                goto value_literal_cleanup;
++            owner = ctor_result.local_owner;
++        }
+         for (size_t i = 0; i < e->as.object_literal.field_count; i++) {
+             const FengObjectFieldInit *fi = &e->as.object_literal.fields[i];
+             size_t idx = (size_t)-1;
+@@ -32532,23 +32548,22 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
+                 }
+             }
+             if (idx == (size_t)-1) {
+-                free(assigned); free(obj_ptr_expr); er_free(&ctor_result);
+-                return cg_fail(cg, fi->token,
++                cg_fail(cg, fi->token,
+                     "CE0176", "codegen: type '%s' has no field '%.*s'",
+                     ut->feng_name, (int)fi->name.length, fi->name.data);
++                goto value_literal_cleanup;
+             }
+             if (assigned[idx]) {
+-                free(assigned); free(obj_ptr_expr); er_free(&ctor_result);
+-                return cg_fail(cg, fi->token,
++                cg_fail(cg, fi->token,
+                     "CE0181", "codegen: duplicate field '%s' in object literal",
+                     ut->fields[idx].feng_name);
++                goto value_literal_cleanup;
+             }
+             assigned[idx] = true;
+             ExprResult v;
+             const UserField *uf = &ut->fields[idx];
+             if (!cg_emit_expr_for_expected_type(cg, fi->value, uf->type, &v)) {
+-                free(assigned); free(obj_ptr_expr); er_free(&ctor_result);
+-                return false;
++                goto value_literal_cleanup;
+             }
+             if (ctor_result.uses_reified_storage &&
+                 ctor_result.reified_descriptor_c_name != NULL) {
+@@ -32571,14 +32586,32 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
+                     true)) {
+                 free(field_offsets_expr);
+                 er_free(&v);
+-                free(assigned); free(obj_ptr_expr); er_free(&ctor_result);
+-                return false;
++                goto value_literal_cleanup;
+             }
+             free(field_offsets_expr);
+             er_free(&v);
+         }
++        if (construction_scope != NULL) {
++            construction_scope->items[owner.index].cleanup_pop_only = true;
++            cg_release_scope(cg, construction_scope);
++            buf_append_cstr(cg->cur_body, "    }\n");
++            ctor_result.owns_ref = true;
++            ctor_result.local_owner = (CGOwnedLocal){0};
++        }
++        ok = true;
++
++value_literal_cleanup:
++        if (construction_scope != NULL) {
++            cg->cur_scope = construction_scope->parent;
++            scope_pop_free(construction_scope);
++        }
+         free(assigned);
+         free(obj_ptr_expr);
++        if (!ok) {
++            er_free(&ctor_result);
++            if (!cg->failed) cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
++            return false;
++        }
+
+         /* Transfer the complete representation contract, including dynamic
+          * aggregate descriptor/size authority. */

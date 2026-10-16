@@ -1,0 +1,562 @@
+diff --git a/src/semantic/cyclic.c b/src/semantic/cyclic.c
+index 27ff05346ade7fe77ce571d25f3fb98bf1316ed8..63acd1a202fecbce9cd7561fe71f251420b39f7b 100644
+--- a/src/semantic/cyclic.c
++++ b/src/semantic/cyclic.c
+@@ -15,6 +15,9 @@
+  *   - Container types (`T[]` and arbitrarily nested arrays) are unwrapped to
+  *     their leaf element type before the lookup; an array of T is treated as
+  *     a managed reference to T for cyclicity purposes.
++ *   - Union fields contribute the references of their actual members, with
++ *     generic arguments resolved in the caller scope; union storage itself
++ *     is inline and does not add a managed node.
+  *   - `string`, primitive scalar types and `*T` pointer types contribute no
+  *     edges. Unknown / unresolved type names are silently ignored — the
+  *     normal semantic pass has already rejected those before we run.
+@@ -204,76 +207,106 @@ static const FengTypeRef *cyc_unwrap_array(const FengTypeRef *ref) {
+     return ref;
+ }
+
+-/* Resolve `ref` (after array unwrapping) to a user-type node index, or
+- * SIZE_MAX if it does not refer to a known user type. Resolution honours
+- * the `use` aliases visible to the program that owns the referencing type.
+- * Full module paths resolve directly to public modules/types and do not
+- * require `use`. Ambiguity is already rejected by the regular semantic pass,
+- * so the first visible match is the intended target. */
+-static size_t cyc_resolve_named(const CycGraph *g,
+-                                const FengSemanticAnalysis *analysis,
+-                                const FengProgram *owner_program,
+-                                const FengTypeRef *ref) {
+-    const FengSlice *segments;
+-    size_t segment_count;
+-    FengSlice name;
+-
+-    if (ref == NULL || ref->kind != FENG_TYPE_REF_NAMED) {
+-        return SIZE_MAX;
+-    }
+-    segments = ref->as.named.segments;
+-    segment_count = ref->as.named.segment_count;
+-    if (segment_count == 0U) {
+-        return SIZE_MAX;
+-    }
+-
+-    name = segments[segment_count - 1U];
+-    if (segment_count == 1U) {
+-        for (size_t node_index = 0U; node_index < g->node_count; ++node_index) {
+-            const CycNode *node = &g->nodes[node_index];
+-
+-            if (cyc_slice_equals(node->decl->as.type_decl.name, name) &&
+-                cyc_decl_visible_from_program(owner_program, node->module, node->decl)) {
+-                return node_index;
++/* Resolve a type or union in its declaration's lexical module. Imported FT
++ * declarations participate through the same synthesized AST as source types. */
++static const FengDecl *cyc_resolve_named(
++    const FengSemanticAnalysis *analysis, const FengProgram *owner_program,
++    const FengTypeRef *ref, const FengProgram **declaration_program) {
++    if (ref == NULL || ref->kind != FENG_TYPE_REF_NAMED ||
++        ref->as.named.segment_count == 0U) return NULL;
++    if (ref->resolution_program != NULL) owner_program = ref->resolution_program;
++    const FengSlice *segments = ref->as.named.segments;
++    size_t count = ref->as.named.segment_count;
++    FengSlice name = segments[count - 1U];
++    const FengSemanticModule *target = NULL;
++    if (count == 1U && feng_semantic_is_builtin_type_name(name)) return NULL;
++    if (ref->resolution_decl == NULL && count == 2U)
++        target = cyc_find_alias_target_module(analysis, owner_program, segments[0]);
++    if (ref->resolution_decl == NULL && count > 1U && target == NULL) {
++        target = cyc_find_module_by_segments(analysis, segments, count - 1U);
++        if (target == NULL || !cyc_module_visible_by_full_path(owner_program, target))
++            return NULL;
++    }
++    for (size_t mi = 0U; mi < analysis->module_count; ++mi) {
++        const FengSemanticModule *module = &analysis->modules[mi];
++        if (target != NULL && target != module) continue;
++        for (size_t pi = 0U; pi < module->program_count; ++pi) {
++            const FengProgram *program = module->programs[pi];
++            for (size_t di = 0U; di < program->declaration_count; ++di) {
++                const FengDecl *decl = program->declarations[di];
++                FengSlice candidate;
++                if (decl->kind == FENG_DECL_TYPE) candidate = decl->as.type_decl.name;
++                else if (decl->kind == FENG_DECL_SPEC &&
++                         decl->as.spec_decl.form == FENG_SPEC_FORM_UNION)
++                    candidate = decl->as.spec_decl.name;
++                else continue;
++                if (ref->resolution_decl != NULL ? ref->resolution_decl == decl :
++                    (cyc_slice_equals(candidate, name) &&
++                     cyc_decl_visible_from_program(owner_program, module, decl))) {
++                    *declaration_program = program;
++                    return decl;
++                }
+             }
+         }
+-        return SIZE_MAX;
+     }
++    return NULL;
++}
+
+-    if (segment_count == 2U) {
+-        const FengSemanticModule *alias_target =
+-            cyc_find_alias_target_module(analysis, owner_program, segments[0]);
++/* A union's finite reference summary contains graph nodes followed by the
++ * union's own parameters. This also represents recursion through arrays. */
++typedef struct CycUnionSummary {
++    const FengDecl *decl;
++    const FengProgram *program;
++    bool *references;
++} CycUnionSummary;
+
+-        if (alias_target != NULL) {
+-            for (size_t node_index = 0U; node_index < g->node_count; ++node_index) {
+-                const CycNode *node = &g->nodes[node_index];
++/* Grow a monotone reference set and report whether another iteration is needed. */
++static void cyc_mark_reference(bool *references, size_t index, bool *changed) {
++    if (!references[index]) {
++        references[index] = true;
++        *changed = true;
++    }
++}
+
+-                if (node->module == alias_target &&
+-                    cyc_slice_equals(node->decl->as.type_decl.name, name) &&
+-                    cyc_decl_visible_from_program(owner_program, node->module, node->decl)) {
+-                    return node_index;
+-                }
++/* Apply existing union summaries to one finite type expression. Only used
++ * arguments are substituted; ordinary type arguments and pointers are not edges. */
++static void cyc_collect_references(const CycGraph *g, const FengSemanticAnalysis *analysis,
++    const CycUnionSummary *unions, size_t union_count, const FengProgram *program,
++    const FengTypeRef *ref, const FengTypeParam *params, size_t param_count,
++    bool *references, bool *changed) {
++    ref = cyc_unwrap_array(ref);
++    if (ref == NULL || ref->kind != FENG_TYPE_REF_NAMED) return;
++    if (ref->resolution_decl == NULL && ref->as.named.segment_count == 1U) {
++        for (size_t i = 0U; i < param_count; ++i) {
++            if (cyc_slice_equals(ref->as.named.segments[0], params[i].name)) {
++                cyc_mark_reference(references, g->node_count + i, changed);
++                return;
+             }
+-            return SIZE_MAX;
+         }
+     }
+-
+-    const FengSemanticModule *target_module =
+-        cyc_find_module_by_segments(analysis, segments, segment_count - 1U);
+-    if (target_module == NULL ||
+-        !cyc_module_visible_by_full_path(owner_program, target_module)) {
+-        return SIZE_MAX;
+-    }
+-    for (size_t node_index = 0U; node_index < g->node_count; ++node_index) {
+-        const CycNode *node = &g->nodes[node_index];
+-
+-        if (node->module == target_module &&
+-            cyc_slice_equals(node->decl->as.type_decl.name, name) &&
+-            cyc_decl_visible_from_program(owner_program, node->module, node->decl)) {
+-            return node_index;
++    const FengProgram *declaration_program = NULL;
++    const FengDecl *decl = cyc_resolve_named(analysis, program, ref, &declaration_program);
++    if (decl == NULL) return;
++    if (decl->kind == FENG_DECL_SPEC) {
++        for (size_t u = 0U; u < union_count; ++u) {
++            if (unions[u].decl != decl) continue;
++            for (size_t target = 0U; target < g->node_count; ++target)
++                if (unions[u].references[target]) cyc_mark_reference(references, target, changed);
++            for (size_t p = 0U; p < decl->as.spec_decl.type_param_count &&
++                               p < ref->as.named.type_arg_count; ++p) {
++                if (unions[u].references[g->node_count + p])
++                    cyc_collect_references(g, analysis, unions, union_count, program,
++                        ref->as.named.type_args[p], params, param_count, references, changed);
++            }
++            return;
+         }
++        return;
++    }
++    for (size_t target = 0U; target < g->node_count; ++target) {
++        if (g->nodes[target].decl != decl) continue;
++        cyc_mark_reference(references, target, changed);
++        break;
+     }
+-    return SIZE_MAX;
+ }
+
+ /* --- Build phase ------------------------------------------------------- */
+@@ -312,13 +345,49 @@ static bool cyc_collect_nodes(CycGraph *g, const FengSemanticAnalysis *analysis)
+     return true;
+ }
+
++/* Solve union references before collecting ordinary type edges. Every bit
++ * only changes from false to true, so recursive generic unions terminate. */
+ static bool cyc_collect_edges(CycGraph *g, const FengSemanticAnalysis *analysis) {
+-    size_t i;
+-    for (i = 0U; i < g->node_count; ++i) {
++    size_t union_count = 0U;
++    CycUnionSummary *unions = NULL;
++    bool ok = false;
++    for (size_t mi = 0U; mi < analysis->module_count; ++mi) {
++        const FengSemanticModule *module = &analysis->modules[mi];
++        for (size_t pi = 0U; pi < module->program_count; ++pi) {
++            const FengProgram *program = module->programs[pi];
++            for (size_t di = 0U; di < program->declaration_count; ++di) {
++                const FengDecl *decl = program->declarations[di];
++                if (decl->kind != FENG_DECL_SPEC || decl->as.spec_decl.form != FENG_SPEC_FORM_UNION)
++                    continue;
++                CycUnionSummary *grown = realloc(unions, (union_count + 1U) * sizeof(*unions));
++                if (grown == NULL) goto cleanup;
++                unions = grown;
++                size_t count = g->node_count + decl->as.spec_decl.type_param_count;
++                bool *references = calloc(count != 0U ? count : 1U, sizeof(*references));
++                if (references == NULL) goto cleanup;
++                unions[union_count++] = (CycUnionSummary){decl, program, references};
++            }
++        }
++    }
++    bool changed;
++    do {
++        changed = false;
++        for (size_t u = 0U; u < union_count; ++u) {
++            const FengDecl *decl = unions[u].decl;
++            for (size_t m = 0U; m < decl->as.spec_decl.as.union_form.member_count; ++m)
++                cyc_collect_references(g, analysis, unions, union_count, unions[u].program,
++                    decl->as.spec_decl.as.union_form.members[m], decl->as.spec_decl.type_params,
++                    decl->as.spec_decl.type_param_count, unions[u].references, &changed);
++        }
++    } while (changed);
++    for (size_t i = 0U; i < g->node_count; ++i) {
+         CycNode *node = &g->nodes[i];
+         node->edge_begin = g->edge_count;
+
+         const FengDecl *d = node->decl;
++        size_t count = g->node_count + d->as.type_decl.type_param_count;
++        bool *references = calloc(count, sizeof(*references));
++        if (references == NULL) goto cleanup;
+         size_t mc = d->as.type_decl.member_count;
+         size_t k;
+         for (k = 0U; k < mc; ++k) {
+@@ -326,34 +395,26 @@ static bool cyc_collect_edges(CycGraph *g, const FengSemanticAnalysis *analysis)
+             if (m->kind != FENG_TYPE_MEMBER_FIELD) {
+                 continue;
+             }
+-            const FengTypeRef *fref = cyc_unwrap_array(m->as.field.type);
+-            size_t target = cyc_resolve_named(g, analysis, node->owner_program, fref);
+-            if (target == SIZE_MAX) {
+-                continue;
+-            }
+-            /* Suppress duplicate edges T->U so Tarjan's lowlink stays
+-             * minimal and the SCC result is unaffected. Cheap O(degree)
+-             * lookback over edges added so far for this node. */
+-            bool dup = false;
+-            size_t e;
+-            for (e = node->edge_begin; e < g->edge_count; ++e) {
+-                if (g->edges[e] == target) {
+-                    dup = true;
+-                    break;
+-                }
+-            }
+-            if (dup) {
+-                continue;
+-            }
++            cyc_collect_references(g, analysis, unions, union_count, node->owner_program,
++                m->as.field.type, d->as.type_decl.type_params, d->as.type_decl.type_param_count,
++                references, &changed);
++        }
++        for (size_t target = 0U; target < g->node_count; ++target) {
++            if (!references[target]) continue;
+             if (!cyc_edges_reserve(g, 1U)) {
+-                return false;
++                free(references);
++                goto cleanup;
+             }
+             g->edges[g->edge_count++] = target;
+         }
+-
++        free(references);
+         node->edge_end = g->edge_count;
+     }
+-    return true;
++    ok = true;
++cleanup:
++    for (size_t u = 0U; u < union_count; ++u) free(unions[u].references);
++    free(unions);
++    return ok;
+ }
+
+ /* --- Tarjan SCC (iterative) ------------------------------------------- */
+diff --git a/test/cli/fixtures/union_cycle_detection/main.ff b/test/cli/fixtures/union_cycle_detection/main.ff
+new file mode 100644
+index 0000000000000000000000000000000000000000..b4ea821307537931d9a37915c55c4b638f04c6cf
+--- /dev/null
++++ b/test/cli/fixtures/union_cycle_detection/main.ff
+@@ -0,0 +1,75 @@
++module union_slot_consumer;
++
++import union_cycle_provider;
++
++var dropped: int = 0;
++var cycleDrops: int = 0;
++var revive: bool = false;
++var saved: SlotOption<Cycle>;
++
++/** Fail independently of an active std.test context. */
++func require(ok: bool) { if !ok { throw "union-slot-layout"; } }
++/** A positive ID identifies one actual owned resource. */
++type Ref {
++    let id: int;
++    func ~Ref() { if self.id > 0 { dropped += 1; } }
++}
++/** The selected aggregate owns multiple pointers at the same payload base. */
++@value type Pair { let first: Ref; let second: Ref; }
++/** The collector must follow both selected fields and clear only live edges. */
++type Cycle {
++    var next: SlotOption<Cycle>;
++    var payload: SlotOption<Pair>;
++    func ~Cycle() {
++        cycleDrops += 1;
++        if revive { revive = false; saved = self; }
++    }
++}
++
++/** Build a two-node ring, with an independently owned external child. */
++func ring(external: Ref) {
++    let first = Cycle();
++    let second = Cycle();
++    first.next = second;
++    second.next = first;
++    first.payload = Pair { first: external, second: Ref { id: 2 } };
++    second.payload = Pair { first: external, second: Ref { id: 3 } };
++}
++
++/** Check resurrection and later collection using only language-visible state. */
++func cycles() {
++    let external = Ref { id: 1 };
++    revive = true;
++    ring(external);
++    // Collection runs all component finalizers once before testing resurrection.
++    require(cycleDrops == 2 && dropped == 2);
++    match saved {
++        node: Cycle {
++            require(match node.next { other: Cycle { true } else { false } });
++            require(match node.payload { pair: Pair { pair.first.id == 1 && pair.second.id > 1 } else { false } });
++        }
++        else { require(false); }
++    }
++    saved = SlotEmpty();
++    // A resurrected component runs its finalizers again on the next collection.
++    require(cycleDrops == 4 && dropped == 4 && external.id == 1);
++    ring(external);
++    require(cycleDrops == 6 && dropped == 6 && external.id == 1);
++}
++
++/** Nested generic union members remain visible after the provider source is removed. */
++func importedCycle() {
++    let first = SlotCycle<Ref> { payload: Ref { id: 6 } };
++    let second = SlotCycle<Ref> { payload: Ref { id: 7 } };
++    first.next = slotNest<SlotCycle<Ref>>(second);
++    second.next = slotNest<SlotCycle<Ref>>(first);
++}
++
++/** The test sets a deterministic collector threshold before process startup. */
++func main(args: string[]) {
++    dropped = 0;
++    cycles();
++    require(dropped == 7);
++    importedCycle();
++    require(dropped == 9);
++}
+diff --git a/test/cli/fixtures/union_cycle_detection/provider.ff b/test/cli/fixtures/union_cycle_detection/provider.ff
+new file mode 100644
+index 0000000000000000000000000000000000000000..db682fd83949ee5dd69429dee9db50c7f12a3dc4
+--- /dev/null
++++ b/test/cli/fixtures/union_cycle_detection/provider.ff
+@@ -0,0 +1,20 @@
++open module union_cycle_provider;
++
++/** A trivial first member keeps small closed payloads independent of pointers. */
++@value open type SlotEmpty {}
++/** Every instantiation shares the same tag and payload prefix. */
++open spec SlotOption<T>: SlotEmpty | T;
++/** Preserve nested member identity, with a second independently managed choice. */
++open spec SlotNested<T>: SlotOption<T> | string;
++/** Construct a union in a source-hidden shared body. */
++open func slotWrap<T>(value: T): SlotOption<T> { return value; }
++/** Nest complete unions, including their own tags. */
++open func slotNest<T>(value: T): SlotNested<T> {
++    let inner = slotWrap<T>(value);
++    return inner;
++}
++/** Imported generic types contribute their selected reference edges to SCC. */
++open type SlotCycle<T> {
++    open var next: SlotNested<SlotCycle<T>>;
++    open let payload: T;
++}
+diff --git a/test/cli/test_cli.c b/test/cli/test_cli.c
+index 50a3152b3e60eac71447835613a1053b97565e9b..43fbf21a2dab7acfc8b573ea27d6d4fa85adc7b5 100644
+--- a/test/cli/test_cli.c
++++ b/test/cli/test_cli.c
+@@ -33074,6 +33074,7 @@ static void test_dap_launch_frame_format_defaults(void) {
+ #include "binary_lifetime.inc"
+ #include "tuple_lifetime.inc"
+ #include "cycle_lifetime.inc"
++#include "test_union_cycle_detection.h"
+ #include "test_union_slot_layout.h"
+
+ /* Additional fit completion coverage shares this executable and both test phases. */
+@@ -33107,6 +33108,7 @@ int main(void) {
+     test_binary_operand_lifetime();
+     test_tuple_initializer_lifetime();
+     test_imported_cycle_lifetime();
++    test_union_cycle_detection();
+     test_union_slot_package_lifetime();
+     test_union_slot_debug_layout();
+     test_native_exception_release_reproducer();
+diff --git a/test/cli/test_union_cycle_detection.h b/test/cli/test_union_cycle_detection.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..0cdfdd2450be4d7b7f4662619fb0eaf6dc7ff91f
+--- /dev/null
++++ b/test/cli/test_union_cycle_detection.h
+@@ -0,0 +1,44 @@
++/* Independent union-only cycle regression uses existing CLI helpers. */
++#ifndef FENG_TEST_UNION_CYCLE_DETECTION_H
++#define FENG_TEST_UNION_CYCLE_DETECTION_H
++
++/* A source-hidden provider must supply closed descriptors for every consumer. */
++static void test_union_cycle_detection(void) {
++    char workspace[] = "temp/union-cycle-detection-XXXXXX";
++    ASSERT(mkdtemp(workspace) != NULL);
++    char *provider = path_join(workspace, "provider.ff");
++    char *consumer = path_join(workspace, "consumer.ff");
++    copy_file_or_die("test/cli/fixtures/union_cycle_detection/main.ff", consumer);
++    const char *threshold = getenv("FENG_GC_THRESHOLD");
++    char *saved_threshold = threshold != NULL ? dup_cstr(threshold) : NULL;
++    ASSERT(setenv("FENG_GC_THRESHOLD", "1", 1) == 0);
++    for (int producer_release = 0; producer_release < 2; ++producer_release) {
++        copy_file_or_die("test/cli/fixtures/union_cycle_detection/provider.ff", provider);
++        char *out = path_join(workspace, producer_release ? "provider-release" : "provider-debug");
++        native_exception_build(provider, out, "union_slot_provider", "lib", NULL, producer_release != 0);
++        char *library = host_static_library_output_path(out, "union_slot_provider");
++        char *modules = path_join(out, "mod");
++        char *bundle = path_join(out, "union_slot_provider.fb");
++        write_library_bundle_or_die(bundle, "union_slot_provider", "0.1.0", library, modules);
++        ASSERT(unlink(provider) == 0);
++        for (int release = 0; release < 2; ++release) {
++            char *app = dup_printf("%s/app-%d-%d", workspace, producer_release, release);
++            native_exception_build(consumer, app, "union_slot_consumer", "bin", bundle, release != 0);
++            char *binary = path_join(app, "bin/union_slot_consumer");
++            char *output = run_binary_capture_stdout_or_die(binary);
++            ASSERT(strcmp(output, "") == 0);
++            free(output); free(binary); free(app);
++        }
++        free(bundle); free(modules); free(library); free(out);
++    }
++    if (saved_threshold != NULL) ASSERT(setenv("FENG_GC_THRESHOLD", saved_threshold, 1) == 0);
++    else ASSERT(unsetenv("FENG_GC_THRESHOLD") == 0);
++    free(saved_threshold);
++    free(consumer); free(provider);
++    char *error = NULL;
++    ASSERT(feng_cli_project_remove_tree(workspace, &error));
++    free(error);
++    puts("union cycle detection: union-only rings, generic packages and resurrection passed four build pairings");
++}
++
++#endif
+diff --git a/test/codegen/test_codegen.c b/test/codegen/test_codegen.c
+index 445103648a1c81f27ebecad6599046f5b6cea183..6d8e7636576985a6659b93f126573eb32beb7560 100644
+--- a/test/codegen/test_codegen.c
++++ b/test/codegen/test_codegen.c
+@@ -14,6 +14,9 @@
+ #include "symbol/provider.h"
+ #include "test_g24.h"
+
++/* Union member references participate in the existing cyclicity graph. */
++void test_union_cycle_detection_codegen(void);
++
+ /* Independent G24 binding/cost coverage uses the existing C compiler driver. */
+ void test_g24_projection_bindings(void (*compile_c)(const char *));
+ void test_g24_spec_view_codegen(void (*compile_c)(const char *));
+@@ -17757,6 +17760,7 @@ int main(void) {
+     test_union_slot_layout_codegen(compile_generated_c_or_die);
+     test_union_object_spec_leaf_coercion_codegen();
+     test_generic_union_form_spec_codegen();
++    test_union_cycle_detection_codegen();
+     test_generic_union_literal_adaptation_type_lifetime();
+     test_generic_union_reified_storage_and_array_source_codegen();
+     test_generic_union_constraint_omits_runtime_witness_codegen();
+diff --git a/test/codegen/test_union_cycle_detection.c b/test/codegen/test_union_cycle_detection.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..b96e5ba7d2f7cf6216ba4405e2ddb071a7ab2d56
+--- /dev/null
++++ b/test/codegen/test_union_cycle_detection.c
+@@ -0,0 +1,76 @@
++#include "../throw_constraint_helpers.h"
++
++/* Array recursion reaches a finite set, including permuted generic parameters;
++ * unused parameters never create managed edges. These need no code generation. */
++static void union_slot_recursive_references(void) {
++    const char *source =
++        "module slot.recursive;"
++        "spec Branch:i32|Branch[];"
++        "type Container{let value:Branch;}"
++        "spec Shift<T,U>:T|Shift<U,Node>[];"
++        "type Node{let value:Shift<i32,i64>;}"
++        "spec Rotate<T,U>:T|Rotate<U,T>[];"
++        "type RotateNode{let value:Rotate<i32,RotateNode>;}"
++        "spec Hollow<T>:i32|Hollow<T>[];"
++        "type Phantom{let value:Hollow<Phantom>;}"
++        "spec Growing<T>:T|Growing<T[]>[];"
++        "type GrowingNode{let value:Growing<GrowingNode>;}";
++    ThrowConstraintUnit unit = throw_constraint_analyze(source, NULL, NULL);
++    for (size_t i = 0U; i < unit.program->declaration_count; ++i) {
++        const FengDecl *decl = unit.program->declarations[i];
++        if (decl->kind != FENG_DECL_TYPE) continue;
++        FengSlice name = decl->as.type_decl.name;
++        bool expected = !(name.length == strlen("Container") && memcmp(name.data, "Container", name.length) == 0) &&
++                        !(name.length == strlen("Phantom") && memcmp(name.data, "Phantom", name.length) == 0);
++        THROW_CHECK(feng_semantic_type_is_potentially_cyclic(unit.analysis, decl) == expected);
++    }
++    throw_constraint_dispose(&unit);
++}
++
++/* Union references contribute only actual managed edges to the existing SCC graph. */
++void test_union_cycle_detection_codegen(void) {
++    union_slot_recursive_references();
++    const char *source =
++        "open module slot.layout;"
++        "@value open type Empty{}"
++        "open type Ref{let value:int;}"
++        "@value open type Pair{let first:Ref;let second:Ref;}"
++        "open spec View{let value:int;}"
++        "open spec Thunk():int;"
++        "open spec Small:i8|u8;"
++        "open spec Inner:i16|bool;"
++        "open spec Choice:i8|Ref|Pair|View|Thunk|Inner;"
++        "open spec Maybe<T>:Empty|T;"
++        "open spec Nested<T>:Maybe<T>|string;"
++        "open spec Phantom<T>:Empty|i32;"
++        "open type Node{var left:Maybe<Node>;var right:Maybe<Node>;}"
++        "open type NestedNode{var next:Nested<NestedNode>;}"
++        "open type GenericNode<T>{var next:Maybe<GenericNode<T>>;let value:T;}"
++        "open type ArrayNode{var next:Maybe<ArrayNode[]>;}"
++        "open type WrappedNode{var next:Maybe<Wrapped>;}"
++        "@value open type Wrapped{var next:Maybe<WrappedNode>;}"
++        "open type NoCycle{var next:Maybe<Ref>;}"
++        "open type PhantomNode{var next:Phantom<PhantomNode>;}"
++        "open type PointerNode{var next:Maybe<i32*>;}"
++        "open type Holder{var value:Choice;}"
++        "open func wrap<T>(value:T):Maybe<T>{return value;}"
++        "open func small(value:i8):Maybe<i8>{return wrap<i8>(value);}"
++        "open func flag(value:bool):Maybe<bool>{return wrap<bool>(value);}"
++        "open func real(value:f64):Maybe<f64>{return wrap<f64>(value);}"
++        "open func large(value:Pair):Maybe<Pair>{return wrap<Pair>(value);}"
++        "open func nested(value:Maybe<i8>):Maybe<Maybe<i8>>{return wrap<Maybe<i8>>(value);}"
++        "open func replace(holder:Holder,value:Choice){holder.value=value;}";
++    ThrowConstraintUnit unit = throw_constraint_analyze(source, NULL, NULL);
++    const char *cyclic[] = {"Node", "NestedNode", "GenericNode", "ArrayNode", "WrappedNode", "Wrapped"};
++    for (size_t i = 0U; i < unit.program->declaration_count; ++i) {
++        const FengDecl *decl = unit.program->declarations[i];
++        if (decl->kind != FENG_DECL_TYPE) continue;
++        bool expected = false;
++        for (size_t k = 0U; k < sizeof cyclic / sizeof *cyclic; ++k)
++            if (strlen(cyclic[k]) == decl->as.type_decl.name.length &&
++                memcmp(cyclic[k], decl->as.type_decl.name.data, strlen(cyclic[k])) == 0)
++                expected = true;
++        THROW_CHECK(feng_semantic_type_is_potentially_cyclic(unit.analysis, decl) == expected);
++    }
++    throw_constraint_dispose(&unit);
++}
