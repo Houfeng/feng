@@ -1,0 +1,64 @@
+{
+  "before_revision": "a0976070dd131e992a36f72029d049c4a4e91c97",
+  "after_revision": "c515ee61802eefe0552a5dc5b18c5795c1c022cb",
+  "warmup": 2,
+  "rounds": 10,
+  "cases": [
+    "nbody",
+    "spectral-norm"
+  ],
+  "formal_run": "2026-10-16T04-11-39-611Z",
+  "inputs": {
+    "nbody": {
+      "args": [
+        "20000000"
+      ],
+      "expected": [
+        -0.16907516382852447,
+        -0.1690316645525591
+      ],
+      "units": 20000000,
+      "unit": "steps/s",
+      "tolerance": 1e-8,
+      "size": 20000000
+    },
+    "spectral-norm": {
+      "args": [
+        "2000"
+      ],
+      "expected": [
+        1.274224152228617
+      ],
+      "units": 160000000,
+      "unit": "elements/s",
+      "tolerance": 1e-9,
+      "size": 2000
+    }
+  },
+  "artifacts": {
+    "nbody": {
+      "before": {
+        "command": "/workspace/union-benchmark-20261016/repo/temp/fma-off-benchmarks-20261016/baseline/nbody-feng",
+        "args": [],
+        "sha256": "28aa8fd9fe5bce5ecfb9eb62fc611cb1ff1a4b9a16fa8f338b8f310ea99ca43f"
+      },
+      "after": {
+        "command": "/workspace/union-benchmark-20261016/repo/build/benchmarks/bin/nbody-feng",
+        "args": [],
+        "sha256": "46f533f8453f308633120f76c26254226fd903178d1024f42190f9ffdb658c3e"
+      }
+    },
+    "spectral-norm": {
+      "before": {
+        "command": "/workspace/union-benchmark-20261016/repo/temp/fma-off-benchmarks-20261016/baseline/spectral-norm-feng",
+        "args": [],
+        "sha256": "f9c5edb1e1fbc38314b2428f244aa5f7740ead064b7ba1a4ae2f1bda73cd74d4"
+      },
+      "after": {
+        "command": "/workspace/union-benchmark-20261016/repo/build/benchmarks/bin/spectral-norm-feng",
+        "args": [],
+        "sha256": "caef8868457c23a45d9cb13b89b33386293d9564d67bf530c8efef739ff391eb"
+      }
+    }
+  }
+}

@@ -1,0 +1,274 @@
+[
+  {
+    "platform": "Linux ARM64",
+    "before": "2026-10-16T03-02-43-680Z",
+    "after": "2026-10-16T04-11-39-611Z",
+    "versionsUnchanged": true,
+    "runtimeUnchanged": true,
+    "paired": [
+      {
+        "case": "nbody",
+        "before": {
+          "median_ms": 612.0248335,
+          "p25_ms": 611.29942725,
+          "p75_ms": 618.1146565,
+          "min_ms": 609.1915,
+          "max_ms": 704.289209,
+          "rss_mib": 1.80078125
+        },
+        "after": {
+          "median_ms": 655.402083,
+          "p25_ms": 654.69070825,
+          "p75_ms": 660.17993775,
+          "min_ms": 653.173375,
+          "max_ms": 729.712834,
+          "rss_mib": 1.80078125
+        },
+        "elapsed_change_percent": 7.087498272241266
+      },
+      {
+        "case": "spectral-norm",
+        "before": {
+          "median_ms": 125.08687499999999,
+          "p25_ms": 124.6900415,
+          "p75_ms": 125.208823,
+          "min_ms": 124.556458,
+          "max_ms": 126.247833,
+          "rss_mib": 1.849609375
+        },
+        "after": {
+          "median_ms": 104.05937499999999,
+          "p25_ms": 103.60104175000001,
+          "p75_ms": 104.5928025,
+          "min_ms": 101.19625,
+          "max_ms": 105.874667,
+          "rss_mib": 1.80078125
+        },
+        "elapsed_change_percent": -16.810316829803295
+      }
+    ],
+    "rows": [
+      {
+        "case": "nbody",
+        "before": {
+          "ms": 607.409875,
+          "rss": 1.80078125
+        },
+        "after": {
+          "ms": 653.3655,
+          "rss": 1.80078125
+        },
+        "swift": {
+          "ms": 697.418626,
+          "rss": 16.46484375
+        },
+        "elapsed_change_percent": 7.565834355261325,
+        "identical_binary": false
+      },
+      {
+        "case": "binary-trees",
+        "before": {
+          "ms": 323.148583,
+          "rss": 17.265625
+        },
+        "after": {
+          "ms": 323.133916,
+          "rss": 17.20703125
+        },
+        "swift": {
+          "ms": 414.772542,
+          "rss": 27.921875
+        },
+        "elapsed_change_percent": -0.004538778992568826,
+        "identical_binary": true
+      },
+      {
+        "case": "text-scan",
+        "before": {
+          "ms": 116.661875,
+          "rss": 245.46484375
+        },
+        "after": {
+          "ms": 104.361917,
+          "rss": 245.48046875
+        },
+        "swift": {
+          "ms": 106.41575,
+          "rss": 260.95703125
+        },
+        "elapsed_change_percent": -10.543254169367666,
+        "identical_binary": true
+      },
+      {
+        "case": "fannkuch-redux",
+        "before": {
+          "ms": 1699.821417,
+          "rss": 1.5625
+        },
+        "after": {
+          "ms": 1694.431751,
+          "rss": 1.5
+        },
+        "swift": {
+          "ms": 1799.355334,
+          "rss": 16.33984375
+        },
+        "elapsed_change_percent": -0.31707248456206427,
+        "identical_binary": true
+      },
+      {
+        "case": "spectral-norm",
+        "before": {
+          "ms": 124.834708,
+          "rss": 1.80078125
+        },
+        "after": {
+          "ms": 105.080875,
+          "rss": 1.80078125
+        },
+        "swift": {
+          "ms": 111.179333,
+          "rss": 16.58984375
+        },
+        "elapsed_change_percent": -15.823991033006624,
+        "identical_binary": false
+      }
+    ]
+  },
+  {
+    "platform": "macOS ARM64",
+    "before": "2026-10-16T03-08-24-200Z",
+    "after": "2026-10-16T04-17-15-166Z",
+    "versionsUnchanged": true,
+    "runtimeUnchanged": true,
+    "paired": [
+      {
+        "case": "nbody",
+        "before": {
+          "median_ms": 610.404,
+          "p25_ms": 608.764,
+          "p75_ms": 615.36625,
+          "min_ms": 607.672,
+          "max_ms": 628.957,
+          "rss_mib": 1.859375
+        },
+        "after": {
+          "median_ms": 640.646,
+          "p25_ms": 638.83825,
+          "p75_ms": 642.15025,
+          "min_ms": 632.932,
+          "max_ms": 642.785,
+          "rss_mib": 1.859375
+        },
+        "elapsed_change_percent": 4.954423627630211
+      },
+      {
+        "case": "spectral-norm",
+        "before": {
+          "median_ms": 143.22199999999998,
+          "p25_ms": 142.2195,
+          "p75_ms": 143.8435,
+          "min_ms": 132.806,
+          "max_ms": 153.112,
+          "rss_mib": 1.875
+        },
+        "after": {
+          "median_ms": 113.601,
+          "p25_ms": 104.7095,
+          "p75_ms": 114.60175,
+          "min_ms": 103.116,
+          "max_ms": 114.794,
+          "rss_mib": 1.859375
+        },
+        "elapsed_change_percent": -20.681878482356055
+      }
+    ],
+    "rows": [
+      {
+        "case": "nbody",
+        "before": {
+          "ms": 622.05,
+          "rss": 1.859375
+        },
+        "after": {
+          "ms": 643.307,
+          "rss": 1.859375
+        },
+        "swift": {
+          "ms": 802.447,
+          "rss": 5.78125
+        },
+        "elapsed_change_percent": 3.417249417249435,
+        "identical_binary": false
+      },
+      {
+        "case": "binary-trees",
+        "before": {
+          "ms": 233.629,
+          "rss": 18
+        },
+        "after": {
+          "ms": 236.675,
+          "rss": 17.984375
+        },
+        "swift": {
+          "ms": 303.301,
+          "rss": 13.890625
+        },
+        "elapsed_change_percent": 1.3037765003488522,
+        "identical_binary": true
+      },
+      {
+        "case": "text-scan",
+        "before": {
+          "ms": 96.004,
+          "rss": 246.0625
+        },
+        "after": {
+          "ms": 94.299,
+          "rss": 246.0625
+        },
+        "swift": {
+          "ms": 91.685,
+          "rss": 250
+        },
+        "elapsed_change_percent": -1.7759676680138337,
+        "identical_binary": true
+      },
+      {
+        "case": "fannkuch-redux",
+        "before": {
+          "ms": 1676.38,
+          "rss": 1.875
+        },
+        "after": {
+          "ms": 1685.422,
+          "rss": 1.875
+        },
+        "swift": {
+          "ms": 1755.097,
+          "rss": 5.796875
+        },
+        "elapsed_change_percent": 0.5393765136782802,
+        "identical_binary": true
+      },
+      {
+        "case": "spectral-norm",
+        "before": {
+          "ms": 132.568,
+          "rss": 1.859375
+        },
+        "after": {
+          "ms": 103.882,
+          "rss": 1.859375
+        },
+        "swift": {
+          "ms": 112.773,
+          "rss": 5.859375
+        },
+        "elapsed_change_percent": -21.63870617343552,
+        "identical_binary": false
+      }
+    ]
+  }
+]

@@ -1,0 +1,64 @@
+{
+  "before_revision": "a0976070dd131e992a36f72029d049c4a4e91c97",
+  "after_revision": "c515ee61802eefe0552a5dc5b18c5795c1c022cb",
+  "warmup": 2,
+  "rounds": 10,
+  "cases": [
+    "nbody",
+    "spectral-norm"
+  ],
+  "formal_run": "2026-10-16T04-17-15-166Z",
+  "inputs": {
+    "nbody": {
+      "args": [
+        "20000000"
+      ],
+      "expected": [
+        -0.16907516382852447,
+        -0.1690316645525591
+      ],
+      "units": 20000000,
+      "unit": "steps/s",
+      "tolerance": 1e-8,
+      "size": 20000000
+    },
+    "spectral-norm": {
+      "args": [
+        "2000"
+      ],
+      "expected": [
+        1.274224152228617
+      ],
+      "units": 160000000,
+      "unit": "elements/s",
+      "tolerance": 1e-9,
+      "size": 2000
+    }
+  },
+  "artifacts": {
+    "nbody": {
+      "before": {
+        "command": "/Users/houfeng/Repositories/feng-language/temp/fma-off-benchmarks-20261016/baseline/nbody-feng",
+        "args": [],
+        "sha256": "fe5f05821417a9e12a7396b2039d5f228dbb6b4ec8eabc2f786ed01a08715632"
+      },
+      "after": {
+        "command": "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/nbody-feng",
+        "args": [],
+        "sha256": "73453151c75308e0f4d09c01e0174315044c957f7790e71cd813f821221aa5e8"
+      }
+    },
+    "spectral-norm": {
+      "before": {
+        "command": "/Users/houfeng/Repositories/feng-language/temp/fma-off-benchmarks-20261016/baseline/spectral-norm-feng",
+        "args": [],
+        "sha256": "a5c1472c005b4d74da1be571433a163ab66d7640d92a822366d07c8099bbea8d"
+      },
+      "after": {
+        "command": "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/spectral-norm-feng",
+        "args": [],
+        "sha256": "5480ad4a4a0f684e34628e188852187fa63a522cfd7788527fc64e8dd36fe056"
+      }
+    }
+  }
+}

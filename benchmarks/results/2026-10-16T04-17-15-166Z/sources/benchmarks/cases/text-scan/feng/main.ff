@@ -1,0 +1,35 @@
+module benchmark.textscan;
+import std.collections;
+import std.fs;
+import std.io;
+import std.numeric;
+import std.process;
+
+/** Read, validate and aggregate fixed-format ASCII log records. */
+func scan(args: string[]): i32 {
+    if args.length() != 2 { return 2; }
+    let data = readBytes(args[1]); let length = data.length();
+    if length % 8 != 0 { return 2; }
+    var lines: i64 = 0; var warnings: i64 = 0; var errors: i64 = 0; var sum: i64 = 0;
+    for var i: int = 0; i < length; i += 8 {
+        let level = data[i];
+        if (level != (byte)73 && level != (byte)87 && level != (byte)69) || data[i + 1] != (byte)44 || data[i + 7] != (byte)10 { return 2; }
+        var value: i64 = 0;
+        for var j: int = i + 2; j < i + 7; j += 1 {
+            let digit = data[j]; if digit < (byte)48 || digit > (byte)57 { return 2; }
+            value = value * 10 + (i64)(digit - (byte)48);
+        }
+        lines += 1;
+        if level == (byte)87 { warnings += 1; }
+        if level == (byte)69 { errors += 1; }
+        sum += value;
+    }
+    println("{0} {1} {2} {3}", lines.toString(), warnings.toString(), errors.toString(), sum.toString());
+    return 0;
+}
+
+/** Propagate validation failures through the standard process API. */
+func main(args: string[]) {
+    let status = scan(args);
+    if status != 0 { Process.exit((int)status); }
+}

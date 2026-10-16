@@ -1,0 +1,42 @@
+[
+  {
+    "case": "nbody",
+    "before": {
+      "median_ms": 610.404,
+      "p25_ms": 608.764,
+      "p75_ms": 615.36625,
+      "min_ms": 607.672,
+      "max_ms": 628.957,
+      "rss_mib": 1.859375
+    },
+    "after": {
+      "median_ms": 640.646,
+      "p25_ms": 638.83825,
+      "p75_ms": 642.15025,
+      "min_ms": 632.932,
+      "max_ms": 642.785,
+      "rss_mib": 1.859375
+    },
+    "elapsed_change_percent": 4.954423627630211
+  },
+  {
+    "case": "spectral-norm",
+    "before": {
+      "median_ms": 143.22199999999998,
+      "p25_ms": 142.2195,
+      "p75_ms": 143.8435,
+      "min_ms": 132.806,
+      "max_ms": 153.112,
+      "rss_mib": 1.875
+    },
+    "after": {
+      "median_ms": 113.601,
+      "p25_ms": 104.7095,
+      "p75_ms": 114.60175,
+      "min_ms": 103.116,
+      "max_ms": 114.794,
+      "rss_mib": 1.859375
+    },
+    "elapsed_change_percent": -20.681878482356055
+  }
+]

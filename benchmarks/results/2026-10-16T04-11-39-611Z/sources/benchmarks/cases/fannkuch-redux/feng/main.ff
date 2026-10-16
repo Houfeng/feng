@@ -1,0 +1,52 @@
+module benchmark.fannkuchredux;
+import std.collections;
+import std.numeric;
+import std.io;
+import std.process;
+
+/** Enumerate permutations in prefix-rotation order and count actual reversals. */
+func run(n: int) {
+    let permutation: int[!] = int[:n];
+    let scratch: int[!] = int[:n];
+    let count: int[!] = int[:n];
+    for var i: int = 0; i < n; i += 1 { permutation[i] = i; }
+    var r = n;
+    var maximum: int = 0;
+    var checksum: i64 = 0;
+    var ordinal: i64 = 0;
+    while true {
+        while r > 1 { count[r - 1] = r; r -= 1; }
+        for var i: int = 0; i < n; i += 1 { scratch[i] = permutation[i]; }
+        var flips: int = 0;
+        while scratch[0] != 0 {
+            var left: int = 0; var right = scratch[0];
+            while left < right {
+                let value = scratch[left]; scratch[left] = scratch[right]; scratch[right] = value;
+                left += 1; right -= 1;
+            }
+            flips += 1;
+        }
+        if flips > maximum { maximum = flips; }
+        if ordinal % 2 == 0 { checksum += (i64)flips; } else { checksum -= (i64)flips; }
+        ordinal += 1;
+        while true {
+            if r == n {
+                println("{0} {1}", checksum.toString(), maximum.toString());
+                return;
+            }
+            let first = permutation[0];
+            for var i: int = 0; i < r; i += 1 { permutation[i] = permutation[i + 1]; }
+            permutation[r] = first; count[r] -= 1;
+            if count[r] > 0 { break; }
+            r += 1;
+        }
+    }
+}
+
+/** Reject invalid sizes before allocating or entering the permutation loop. */
+func main(args: string[]) {
+    if args.length() != 2 { Process.exit(2); return; }
+    let parsed = try i64.parse(args[1]) catch ex: string { (i64)0; };
+    if parsed < 1 || parsed > 11 { Process.exit(2); return; }
+    run((int)parsed);
+}

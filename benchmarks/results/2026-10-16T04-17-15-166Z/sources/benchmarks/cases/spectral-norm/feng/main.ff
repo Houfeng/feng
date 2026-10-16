@@ -1,0 +1,57 @@
+module benchmark.spectralnorm;
+import std.collections;
+import std.numeric;
+import std.math;
+import std.process;
+
+/** Print the floating checksum at full precision through the public C ABI. */
+@cdecl("libc", "printf", 1)
+extern func printNorm(format: string*, value: f64): i32;
+
+/** Evaluate one entry of the implicit matrix using zero-based indices. */
+func entry(i: int, j: int): f64 {
+    let sum = i + j;
+    return 1.0 / (f64)(sum * (sum + 1) / 2 + i + 1);
+}
+
+/** Multiply a vector by A, evaluating each entry inside the loop. */
+func multiplyA(n: int, input: f64[!], output: f64[!]) {
+    for var i: int = 0; i < n; i += 1 {
+        var sum: f64 = 0.0;
+        for var j: int = 0; j < n; j += 1 { sum += entry(i, j) * input[j]; }
+        output[i] = sum;
+    }
+}
+
+/** Multiply a vector by the transpose of A. */
+func multiplyAt(n: int, input: f64[!], output: f64[!]) {
+    for var i: int = 0; i < n; i += 1 {
+        var sum: f64 = 0.0;
+        for var j: int = 0; j < n; j += 1 { sum += entry(j, i) * input[j]; }
+        output[i] = sum;
+    }
+}
+
+/** Apply the two matrix products using the caller's reusable scratch array. */
+func multiplyAtA(n: int, input: f64[!], output: f64[!], scratch: f64[!]) {
+    multiplyA(n, input, scratch);
+    multiplyAt(n, scratch, output);
+}
+
+/** Validate input, perform ten power iterations and emit the norm. */
+func main(args: string[]) {
+    if args.length() != 2 { Process.exit(2); return; }
+    let parsed = try i64.parse(args[1]) catch ex: string { (i64)0; };
+    if parsed < 1 || parsed > 10000 { Process.exit(2); return; }
+    let n = (int)parsed;
+    let u: f64[!] = f64[:n]; let v: f64[!] = f64[:n]; let scratch: f64[!] = f64[:n];
+    for var i: int = 0; i < n; i += 1 { u[i] = 1.0; }
+    for var iteration: int = 0; iteration < 10; iteration += 1 {
+        multiplyAtA(n, u, v, scratch);
+        multiplyAtA(n, v, u, scratch);
+    }
+    var uv: f64 = 0.0; var vv: f64 = 0.0;
+    for var i: int = 0; i < n; i += 1 { uv += u[i] * v[i]; vv += v[i] * v[i]; }
+    let format = "%.17g\n";
+    printNorm(&format, Math.sqrt(uv / vv));
+}
