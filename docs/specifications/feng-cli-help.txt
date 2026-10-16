@@ -12,7 +12,7 @@ Project:
                   [--sysroot=<path>]         Target sysroot
                   [--keep-ir]                Keep IR
   feng check      [<path>]                   Project root
-                  [--format=text|json]       Input format
+                  [--format=text|json]       Output format
   feng run        [<path>]                   Project root
                   [--release]                Release mode
                   [--lto=off|thin]           Link-time optimization

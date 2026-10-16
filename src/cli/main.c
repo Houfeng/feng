@@ -82,7 +82,7 @@ void feng_cli_print_usage(const char *program, FILE *stream) {
     feng_cli_print_usage_line(
         stream, "Project root", "  %s check      [<path>]", program);
     feng_cli_print_usage_line(
-        stream, "Input format", "%*s[--format=text|json]", project_indent, "");
+        stream, "Output format", "%*s[--format=text|json]", project_indent, "");
     feng_cli_print_usage_line(
         stream, "Project root", "  %s run        [<path>]", program);
     feng_cli_print_usage_line(
