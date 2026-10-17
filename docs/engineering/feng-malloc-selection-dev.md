@@ -110,13 +110,19 @@ feng run --malloc=system -- <program-args>
 
 ### 4.1 独立、按目标分发
 
-复用 runtime 的平台分工与目录布局：
+采用 `extlib/` 预构建方案，复用现有 libunwind 的维护制品布局及 runtime 的目标平台分工。
+维护脚本生成真实 archive，本地构建建立软链，发行时复制为独立文件：
 
 ```text
-build/lib/<target-platform>/libmimalloc.a        # 开发构建产物
-<feng-install>/lib/<target-platform>/libmimalloc.a
+extlib/<target-platform>/libmimalloc.a          # 维护脚本预构建的真实文件
+build/lib/<target-platform>/libmimalloc.a       # 本地 make 建立的相对软链
+  -> ../../../extlib/<target-platform>/libmimalloc.a
+<feng-install>/lib/<target-platform>/libmimalloc.a  # 发行包内的真实文件
 <feng-install>/lib/<target-platform>/libfeng_runtime.a
 ```
+
+选择 `extlib/` 是为了沿用仓库已有的目标原生库管理方式。无需另设
+`toolchain/<target-platform>/` 存储，也不在两个位置重复维护同一制品。
 
 目标范围与当前 runtime 一致：`macos-arm64`、`linux-x64-gnu`、`linux-x64-musl`、
 `linux-arm64-gnu`、`linux-arm64-musl`。每份 host 发行包包含这五份目标库，按最终
@@ -128,24 +134,31 @@ build/lib/<target-platform>/libmimalloc.a        # 开发构建产物
 格式。这样不额外引入分配器的 bitcode 版本及混合 SDK module flag 依赖。
 如后续要将 mimalloc 也编为 ThinLTO，需另行证明收益与兼容性。
 
-### 4.2 最小构建接入
+### 4.2 维护预构建、本地布局与发行接入
 
-1. 在根 Makefile 增加目标平台对象及归档规则，复用 runtime 已有的 target、
-   SDK/sysroot 和归档工具选择。中间对象放在 `build/obj/mimalloc/<target-platform>/`，
-   不在第三方源码目录中覆盖单一 `static.o`，避免多平台互相污染。
+1. 增加 `scripts/build_mimalloc.sh` 维护入口，遵循
+   [`build_libunwind.sh`](../../scripts/build_libunwind.sh) 的工程方式，使用对应 host 的
+   工具及目标 SDK/sysroot。各目标在 `temp/` 的独立目录中编译、归档并校验，成功后
+   安装到 `extlib/<target-platform>/libmimalloc.a`。不复用第三方源码目录中残留的
+   `static.o`，不因构建失败覆盖已有有效制品。
 2. 使用上游单文件入口及 `MI_MALLOC_OVERRIDE`。Release 构建必须显式定义 `NDEBUG`：
    当前源码在未定义它时默认启用 `MI_DEBUG=2`，仅指定 `-O3` 不足以关闭内部调试检查。
    优化和宏仅作用于 mimalloc 制品，不改变 Feng 的全局编译参数。
-3. 开发安装与发行准备均生成所需库；编译器自身不链接该库。复用现有制品准备流程，
-   不为每次用户编译现场构建或下载 mimalloc。
-4. 在现有发行组件、组装、manifest 和安装校验流程中加入对应目标 archive，检查
-   架构、文件格式、完整性与来源。复用 runtime 的目标归属关系，不另建平台矩阵。
+3. 本地 `make` 将预构建库映射到 `build/lib/<target-platform>/libmimalloc.a`，仅建立或
+   修复相对软链，不增加 mimalloc 源码编译、归档或下载步骤。正确软链不重复写入，
+   `make clean` 清除本地构建布局，不删除 `extlib/` 制品。库缺失时不自动执行维护脚本，
+   builtin 的缺失诊断按 §3 处理。
+4. 发行组件从本地布局读取 archive，复制其真实内容到组件及最终发行包的
+   `lib/<target-platform>/libmimalloc.a`；不得把指向仓库 `extlib/` 的软链带入发行包。
+   常规发行任务复用已维护的预构建制品，不重新编译 mimalloc。组装、manifest 和安装
+   校验检查架构、文件格式、完整性与来源，复用 runtime 的目标归属关系。
 5. 核实并补齐所选源码版本的上游许可证及随包许可文本。当前提取目录未包含独立
    LICENSE 文件，二进制正式分发前须补齐；不因此引入其他第三方库或源码升级。
 
-正常构建直接使用仓库源码，不调用 `scripts/fetch_mimalloc.sh`。该脚本是源码维护入口，
-不是用户构建依赖；临时验证使用 `temp/`，持久下载缓存才使用 `local/`。
-维护及构建规则支持对应 host 系统，不把容器调度写入维护脚本。
+正常构建和发行只消费预构建库，不调用 `scripts/fetch_mimalloc.sh` 或
+`scripts/build_mimalloc.sh`。前者维护源码，后者维护目标制品；均不成为用户编译时
+依赖。临时生成物放入 `temp/`，持久下载缓存才使用 `local/`。维护脚本支持对应 host
+系统，不感知容器调度。Feng 编译器自身不链接 mimalloc。
 
 ## 5. 最终链接与覆盖边界
 
@@ -198,8 +211,9 @@ Mach-O 的 `-force_load`，作用范围只能是该库。最终采用的最小�
 | --- | --- | --- |
 | CLI 公共选项、直编 options/direct/driver | 解析、传递、bin 限定及目标库链接 | 语义分析、Codegen、runtime ABI |
 | project build/run/pack 与共用编译入口 | 解析、传递选项；按实际 target 校验，非 bin 显式使用时报错 | 依赖库编译选项及各命令原有 target 限制 |
-| Makefile 的目标制品规则 | 构建独立目标 archive，接入开发制品准备 | 编译器与 LLVM 工具选择策略 |
-| 发行组件、组装、安装校验 | 增加目标库、manifest 与许可证 | 现有 host/target 分工及 sysroot 来源 |
+| mimalloc 维护脚本与 extlib 制品 | 预构建、校验并安装各目标 archive | 正常 make 和发行流程不编译 mimalloc |
+| Makefile 的本地布局规则 | 在 build/lib 下建立预构建库的相对软链 | 编译器与 LLVM 工具选择策略 |
+| 发行组件、组装、安装校验 | 将预构建库复制为真实文件，增加 manifest 与许可证 | 现有 host/target 分工及 sysroot 来源 |
 | CLI/build/release 主规范及 usage | 记录经 Review 的规则、同步帮助文本 | 无关规范与包格式 |
 | test/、必要的 FCTS 覆盖 | 选项、链接、发行与语言行为验证 | 原用例算法及断言强度 |
 
@@ -215,7 +229,8 @@ Mach-O 的 `-force_load`，作用范围只能是该库。最终采用的最小�
 | CLI | 四个入口均识别选项；默认/system/builtin；非法值；build/run/pack 传递；非 bin 显式指定报目标不适用；pack 不报未知选项；`--` 后程序参数 |
 | 构建模式 | Debug/Release × lto off/thin × system/builtin；保留当前默认 LTO 规则 |
 | 依赖 | 同一份 `.a/.fb` 链接两种程序；本地依赖不接收 malloc 选项；多个包只引入一份 allocator；切换后重新链接 |
-| 制品 | 五个 target 的归档与匹配；安装搬移；builtin 缺失/损坏失败；system 无此库仍可编译 |
+| 维护与本地布局 | 五个 target 的归档与匹配；维护构建失败不覆盖旧库；make 建立/修复相对软链且不编译 mimalloc；正确软链不重复写入；clean 保留 extlib |
+| 发行制品 | 独立库为真实文件、内容与预构建输入一致；安装搬移且不依赖仓库；builtin 缺失/损坏失败；system 无此库仍可编译 |
 | 实际覆盖 | 从生成代码、runtime、独立原生库发起分配；核对实际实现及跨边界释放；检查最终程序无 mimalloc 动态依赖 |
 | 分配行为 | 零初始化、零大小、对齐、realloc 保留内容与失败后的旧块、大小溢出、跨线程释放和线程退出 |
 | Feng 行为 | 普通对象、值对象、union、数组、字符串、异常清理、终结器和循环回收；无 ARC 语义变化 |
@@ -243,6 +258,7 @@ Linux 容器先验证；macOS 验证配合本机安全授权，首次启动预�
 ### 阶段一：隔离验证静态接入
 
 - [x] 人工确认 run/build/pack/直编均支持该选项，显式指定且 target 不是 bin 时报错。
+- [x] 人工要求由维护脚本预构建独立库，本地 make 建立软链，发行时提供对应目标制品；本文采用 extlib → build/lib 软链 → 发行 lib 的布局。
 - [ ] 人工确认默认 system 及原生静态库分发方案。
 - [ ] 在 `temp/` 中按五个目标构建 archive；确认 Release 宏、许可及 macOS 上游接入方式。
 - [ ] 不改正式源码，验证最小链接参数、实际覆盖、跨库归属、LTO/裁剪及 Sanitizer 边界。
@@ -251,7 +267,8 @@ Linux 容器先验证；macOS 验证配合本机安全授权，首次启动预�
 ### 阶段二：最小实现与分发
 
 - [ ] 先将已确认规则写入 CLI/build/release 主规范，再实现四个入口的选项解析、build/run/pack 传递、target 校验及 bin 链接。
-- [ ] 接入目标库构建、发行组件、组装、安装校验与许可证；保持 runtime 独立。
+- [ ] 增加维护预构建脚本并生成 extlib 目标制品；本地 make 仅建立 build/lib 软链。
+- [ ] 接入发行组件的真实文件复制、组装、安装校验与许可证；保持 runtime 独立。
 - [ ] 同步命令 usage 与 `feng-cli-help.txt`，确认未增加包格式或 runtime API 变更。
 
 ### 阶段三：完整验证与交付
