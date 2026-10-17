@@ -99,7 +99,15 @@ static inline void cyc_set_color(FengManagedHeader *h, uint32_t color) {
 /* --- Collector state --------------------------------------------------- */
 
 static pthread_once_t g_cycle_once = PTHREAD_ONCE_INIT;
-static pthread_mutex_t g_cycle_mutex;
+/* Keep the shared mutex on a 64-byte boundary, independent of neighbouring
+ * collector state. This alignment does not change managed object layouts. */
+static _Alignas(64) pthread_mutex_t g_cycle_mutex;
+/* Only the outermost entry owns a native lock; nested entries stay private
+ * to its thread and cannot shorten the native mutex's protection interval. */
+static _Thread_local size_t g_lock_depth;
+/* Published through pthread_once on this thread's first entry. Shutdown
+ * clears candidates but does not destroy the mutex or reset initialization. */
+static _Thread_local bool g_initialized;
 
 static FengManagedHeader **g_candidates = NULL;
 static size_t g_candidate_count = 0U;
@@ -142,19 +150,39 @@ static void cycle_init_once(void) {
     }
 }
 
-void feng_cycle_lock(void) {
+/* Keep once-per-thread initialization out of the ordinary release path. */
+__attribute__((noinline, cold)) static void cycle_initialize_thread(void) {
     pthread_once(&g_cycle_once, cycle_init_once);
-    int rc = pthread_mutex_lock(&g_cycle_mutex);
-    if (rc != 0) {
-        feng_panic("feng_cycle: pthread_mutex_lock failed (%d)", rc);
+    g_initialized = true;
+}
+
+/* Acquire cross-thread protection once, then reuse it for recursive entry. */
+void feng_cycle_lock(void) {
+    if (g_lock_depth == 0U) {
+        if (!g_initialized) {
+            cycle_initialize_thread();
+        }
+        int rc = pthread_mutex_lock(&g_cycle_mutex);
+        if (rc != 0) {
+            feng_panic("feng_cycle: pthread_mutex_lock failed (%d)", rc);
+        }
+    }
+    if (++g_lock_depth == 0U) {
+        feng_panic("feng_cycle: lock nesting overflow");
     }
 }
 
+/* Partial exits retain the native mutex until the outermost caller exits. */
 void feng_cycle_unlock(void) {
+    if (g_lock_depth > 1U) {
+        --g_lock_depth;
+        return;
+    }
     int rc = pthread_mutex_unlock(&g_cycle_mutex);
     if (rc != 0) {
         feng_panic("feng_cycle: pthread_mutex_unlock failed (%d)", rc);
     }
+    g_lock_depth = 0U;
 }
 
 /* --- Candidate buffer --------------------------------------------------- */

@@ -3069,8 +3069,10 @@ void test_exception_lsda(void);
 void test_string_owned_utf8(void);
 void test_aggregate_slot_choice(void);
 void test_array_cycle_candidates(void);
+void test_cycle_lock(void);
 
 int main(void) {
+    test_cycle_lock();
     test_aggregate_slot_choice();
     test_array_cycle_candidates();
     test_nested_exception_runtime();
