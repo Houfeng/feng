@@ -259,6 +259,9 @@ for tool in clang lld ld.lld ld64.lld llvm-ar llvm-ranlib lldb lldb-dap lldb-arg
 done
 case "${HOST_PLATFORM}" in
   macos-arm64)
+    [[ -x "${LLVM_BIN}/dsymutil" ]] ||
+      die "installed dsymutil is missing or not executable"
+    "${LLVM_BIN}/dsymutil" --version >/dev/null
     [[ -x "${LLVM_BIN}/debugserver" ]] ||
       die "installed debugserver is missing or not executable"
     ;;

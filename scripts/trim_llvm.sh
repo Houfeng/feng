@@ -202,6 +202,9 @@ validate_source_tree() {
   done
   case "${PLATFORM}" in
     macos-arm64)
+      [[ -f "${LLVM_ROOT}/bin/dsymutil" ]] ||
+        die "required LLVM input missing: bin/dsymutil"
+      verify_binary_platform "${LLVM_ROOT}/bin/dsymutil"
       [[ -f "${LLVM_ROOT}/bin/debugserver" ]] ||
         die "required LLVM input missing: bin/debugserver"
       verify_binary_platform "${LLVM_ROOT}/bin/debugserver"
@@ -275,6 +278,9 @@ trim_lld() {
   copy_executable lld
   ln -s lld "${STAGING_DIR}/bin/ld.lld"
   ln -s lld "${STAGING_DIR}/bin/ld64.lld"
+  if [[ "${PLATFORM}" == macos-arm64 ]]; then
+    copy_executable dsymutil
+  fi
 }
 
 # Copy LLVM's target-independent archive tool and ranlib entry.
@@ -503,6 +509,7 @@ Included:
 - bin/clang
 - bin/lld and bin/ld.lld -> lld
 - bin/ld64.lld -> lld (Mach-O targets on every host)
+- bin/dsymutil (macOS; install the maintained patch after trimming)
 - bin/llvm-ar and bin/llvm-ranlib -> llvm-ar
 - bin/lldb and bin/lldb-dap
 - bin/lldb-argdumper
@@ -672,6 +679,9 @@ verify_native_executables() {
   fi
   "${STAGING_DIR}/bin/clang" --version >/dev/null
   "${STAGING_DIR}/bin/ld.lld" --version >/dev/null
+  if [[ "${PLATFORM}" == macos-arm64 ]]; then
+    "${STAGING_DIR}/bin/dsymutil" --version >/dev/null
+  fi
   "${STAGING_DIR}/bin/llvm-ar" --version >/dev/null
   "${STAGING_DIR}/bin/llvm-ranlib" --version >/dev/null
   "${STAGING_DIR}/bin/lldb" --version >/dev/null

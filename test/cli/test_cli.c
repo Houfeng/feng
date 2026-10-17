@@ -9126,7 +9126,10 @@ static long long dap_test_now_ms(void) {
 static void dap_test_abort_session(void) {
     DapTestSession *session = dap_test_active_session;
     if (session == NULL) return;
+    dap_test_active_session = NULL;
     (void)kill(-session->child, SIGKILL);
+    /* Startup may fail before the child establishes its process group. */
+    (void)kill(session->child, SIGKILL);
     while (waitpid(session->child, NULL, 0) < 0 && errno == EINTR) {}
     fprintf(stderr, "\nDAP session log: %s\n", session->log_path);
     if (fseek(session->log, 0L, SEEK_END) == 0) {
@@ -9163,8 +9166,11 @@ static void dap_test_transfer(int fd, char *bytes, size_t length,
 /* Start the real CLI adapter in a separate, recoverable process group. */
 static void dap_test_start(DapTestSession *session, const char *root,
                            const char *backend, const char *log_path) {
+    static bool cleanup_registered;
     int input[2];
     int output[2];
+    int startup[2];
+    int startup_error = 0;
     ASSERT(dap_test_active_session == NULL);
     memset(session, 0, sizeof(*session));
     session->next_seq = 1;
@@ -9172,31 +9178,52 @@ static void dap_test_start(DapTestSession *session, const char *root,
     session->log = fopen(log_path, "w+b");
     ASSERT(session->log != NULL);
     ASSERT(setvbuf(session->log, NULL, _IONBF, 0U) == 0);
-    ASSERT(pipe(input) == 0 && pipe(output) == 0);
-    ASSERT(atexit(dap_test_abort_session) == 0);
+    ASSERT(pipe(input) == 0 && pipe(output) == 0 && pipe(startup) == 0);
+    if (!cleanup_registered) {
+        ASSERT(atexit(dap_test_abort_session) == 0);
+        cleanup_registered = true;
+    }
     fflush(NULL);
     session->child = fork();
     ASSERT(session->child >= 0);
     if (session->child == 0) {
         char *argv[] = {"--stdio"};
+        ssize_t written;
+        close(startup[0]);
         if (setpgid(0, 0) != 0 || chdir(root) != 0 ||
             setenv("FENG_LLDB_DAP", backend, 1) != 0 ||
             dup2(input[0], STDIN_FILENO) < 0 ||
             dup2(output[1], STDOUT_FILENO) < 0 ||
-            dup2(fileno(session->log), STDERR_FILENO) < 0) _exit(127);
+            dup2(fileno(session->log), STDERR_FILENO) < 0) startup_error = errno;
         close(input[0]);
         close(input[1]);
         close(output[0]);
         close(output[1]);
+        /* Confirm readiness without concurrent parent/child setpgid calls. */
+        do {
+            written = write(startup[1], &startup_error, sizeof(startup_error));
+        } while (written < 0 && errno == EINTR);
+        close(startup[1]);
+        if (written != sizeof(startup_error) || startup_error != 0) _exit(127);
         fclose(session->log);
         _exit(feng_cli_dap_main("feng", 1, argv));
     }
     dap_test_active_session = session;
-    ASSERT(setpgid(session->child, session->child) == 0);
+    close(startup[1]);
     close(input[0]);
     close(output[1]);
     session->input_fd = input[1];
     session->output_fd = output[0];
+    ASSERT(fcntl(startup[0], F_SETFL, O_NONBLOCK) == 0);
+    dap_test_transfer(startup[0], (char *)&startup_error, sizeof(startup_error),
+                      0, dap_test_now_ms() + 30000LL);
+    close(startup[0]);
+    if (startup_error != 0) {
+        fprintf(session->log, "DAP session startup failed: errno=%d (%s)\n",
+                startup_error, strerror(startup_error));
+    }
+    ASSERT(startup_error == 0);
+    ASSERT(getpgid(session->child) == session->child);
     ASSERT(fcntl(session->input_fd, F_SETFL, O_NONBLOCK) == 0);
     session->saved_sigpipe = signal(SIGPIPE, SIG_IGN);
     ASSERT(session->saved_sigpipe != SIG_ERR);

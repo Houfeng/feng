@@ -15,7 +15,7 @@
 - host 平台：`macos-arm64`、`linux-x64-gnu`、`linux-arm64-gnu`
 - 用户程序目标平台：`macos-arm64`、`linux-x64-gnu`、`linux-x64-musl`、`linux-arm64-gnu`、`linux-arm64-musl`
 - 安装方式：手动解压 + 在线脚本两种
-- toolchain 形态：bundle 精简版（从同一 host 平台的 LLVM 官方预编译包剥离，核心保留 `clang`、`lld`、`llvm-ar`、`llvm-ranlib`、`lldb`、`lldb-dap`，不自建 LLVM）
+- toolchain 形态：bundle 精简版（从同一 host 平台的 LLVM 官方预编译包剥离，核心保留 `clang`、`lld`、`llvm-ar`、`llvm-ranlib`、`lldb`、`lldb-dap`，macOS 另含 `dsymutil`；仅独立重建已维护补丁的工具，不自建完整 LLVM）
 - 运行时分发形态：仅静态库 `.a` / `.lib`
 - 分发渠道：GitHub Releases
 
@@ -92,6 +92,7 @@ feng-<version>-<platform>/
 │   │   │   ├── lld            # LLVM linker，macOS / Linux 最终链接使用
 │   │   │   ├── ld.lld -> lld  # Clang / driver 调用入口
 │   │   │   ├── ld64.lld -> lld # 各 host 的 Mach-O 链接入口
+│   │   │   ├── dsymutil       # macOS host 的补丁 DWARF 链接工具
 │   │   │   ├── llvm-ar        # 跨目标静态归档工具
 │   │   │   ├── llvm-ranlib    # 跨目标静态归档索引工具
 │   │   │   ├── lldb           # 命令行调试器
@@ -128,7 +129,7 @@ feng-<version>-<platform>/
 - `lib/` 按完整目标平台分目录。三份分发包均包含五份 runtime；macOS runtime 在合法 macOS 环境构建，Linux runtime 使用对应 sysroot 构建。发布时校验对象格式、CPU 架构和平台，禁止跨平台或 libc ABI 复用。
 - runtime 成员校验区分原生对象与 bitcode：原生对象沿用 `file` 的格式和 CPU 检查；bitcode 由校验环境 `PATH` 中的 host `llvm-dis` 解码，脚本核对原始 target triple 的 CPU、OS 及 Linux GNU／musl 标记。工具缺失、无法解码或目标不匹配均报错，不跳过检查。`llvm-dis` 只属于本机／CI 的发行校验依赖，不随 Feng 分发，也不进入编译器的工具查找链；校验环境须提供可读取当前 bitcode 的版本，CI 组装任务复用现有 LLVM 安装步骤。正常用户安装和使用 Feng 不依赖它。
 - `include/` 仅存放一份平台无关的 Feng 头文件。其中 `feng_generated.h` 为生成 C 提供 SDK-free 编译所需的自包含声明闭包，`feng_runtime.h` 与 `feng_runtime_contract.inc` 定义 runtime 公共 ABI；正常目标的标准和系统头文件仍由目标 SDK / sysroot 提供，不得复制 Apple SDK 头文件。
-- `toolchain/llvm/` 保持 LLVM 官方包布局，工具使用同一 LLVM 版本及当前 host 格式。LLD 使用同版本源码加已维护补丁构建，其余工具仍来自官方 host 平台包。每份 Linux 分发包只包含当前 host 架构的一份 LLVM，同时支持 GNU 和 musl 目标。补丁、维护入口及验收要求见 [LLD 维护说明](../../third_party/lld/README.md)。测试与发行共用这一份 LLD，不再分发 `toolchain/test_tools/lld/`。
+- `toolchain/llvm/` 保持 LLVM 官方包布局，工具使用同一 LLVM 版本及当前 host 格式。LLD 及 macOS host 的 dsymutil 使用同版本源码加已维护补丁构建，其余工具仍来自官方 host 平台包。每份 Linux 分发包只包含当前 host 架构的一份 LLVM，同时支持 GNU 和 musl 目标。补丁、维护入口及验收要求分别见 [LLD 维护说明](../../third_party/lld/README.md)和 [dsymutil 维护说明](../../third_party/dsymutil/README.md)。测试与发行共用这些工具，不再分发 `toolchain/test_tools/lld/`。
 - `toolchain/llvm-c-eh/` 从仓库同名目录的 `<host-platform>/` 原样复制，包含插件、头文件与许可证；不按目标平台重复装入。macOS 签名复用现有 Mach-O 文件遍历。维护构建规则见 [插件开发方案](./c-ir-llvm-exception-plugin-dev.md)，本阶段接入不改变 Feng 异常后端。
 - `toolchain/llvm-native-symbols/` 的默认加载、host 分发、开发链接和预构建归档要求统一见[原生符号插件方案 §8](./feng-native-symbol-normalization-dev.md#8-默认接入与-host-分发)。
 - `toolchain/sysroot/` 按完整 Linux 目标平台分目录，保留编译和链接所需文件及目录关系，移除 GCC、binutils 和 musl.cc 工具。native 与交叉编译共用 sysroot，调用参数见 [feng-build.md](../specifications/feng-build.md)。
@@ -155,7 +156,7 @@ feng-<version>-<platform>/
   - 工具：`lld`、`ld.lld -> lld`、`ld64.lld -> lld`，均只分发 host 版本。
   - 工具：`llvm-ar`、`llvm-ranlib`。
   - 工具：`lldb`、`lldb-dap`、`lldb-argdumper`、`debugserver` / `lldb-server`。
-  - 脚本：`scripts/fetch_llvm.sh`、`scripts/trim_llvm.sh`；随后通过 `scripts/build_lld.sh` 安装统一补丁 LLD。
+  - 脚本：`scripts/fetch_llvm.sh`、`scripts/trim_llvm.sh`；随后通过 `scripts/build_lld.sh` 安装统一补丁 LLD，macOS host 再通过 `scripts/build_dsymutil.sh` 安装补丁 dsymutil。
   - Linux host 私有运行库（§5.2）
     - AlmaLinux 8.10：`libxml2 2.9.7`、`xz 5.2.4`、`zlib 1.2.11`、`libgcc 8.5.0`。
     - AlmaLinux 9.8：`Python 3.14.7`。

@@ -50,6 +50,13 @@ macOS `target=bin` 的 Debug 链接显式传入 `-object_path_lto`，使已有 b
 `dsymutil` 后，在成功与失败路径统一清理；这些对象仅为链接临时文件，不改变
 `--keep-ir` 的保留范围。正常 Release 链接和 `target=lib` 不额外添加该参数。
 
+macOS Debug 可执行文件必须使用随包的补丁 `dsymutil` 生成 dSYM，保留 Clang 已输出
+且供调试表达式使用的类型。驱动通过 `-B <随包 LLVM bin 真实目录>` 指定工具搜索路径，
+解析目录软链接以保持搬移安装与测试的工具身份一致，
+即使 `FENG_CC` 覆盖 Clang 也使用同一工具；缺少工具时报错，不静默回退到系统版本。
+该选择仅作用于 macOS Debug 最终链接，不改变 Release、库归档、`.fd` 或运行时。
+补丁及预构建维护规则见 [dsymutil 维护说明](../../third_party/dsymutil/README.md)。
+
 编译器不接受包名、版本号或搜索路径,不读取任何 `feng.fm`,也不解析依赖树。一次核心编译只生成一个目标平台的制品,无论 `--target` 是 `bin` 还是 `lib`；它只在调用方给定的 `--out` 根下建立本次编译需要的目录,不理解 `<项目输出根>/<platform>` 约定,也不负责多平台循环或 `.fb` 聚合。对 `--pkg` 指定的 `.fb`,编译器只直接读取其中的公开 `.ft` 与目标平台正式库文件（如 `.a`、`.lib`、`.so`、`.dylib`、`.dll`）; `.o` / `.obj` 不属于 `.fb` 的稳定分发接口。调试 sidecar `.fd` 只属于本地构建产物,不从 `.fb` 读取,也不进入 `.fb` 分发包。
 
 ### 2.2 目标平台与工具链转换

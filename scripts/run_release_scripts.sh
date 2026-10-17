@@ -208,6 +208,10 @@ create_source_root() {
     printf '#!/usr/bin/env sh\nexit 0\n' \
       > "${source_root}/toolchain/llvm/${host_platform}/bin/${tool}"
     chmod 0755 "${source_root}/toolchain/llvm/${host_platform}/bin/${tool}"
+    if [[ "${host_platform}" == macos-arm64 ]]; then
+      cp "${source_root}/toolchain/llvm/${host_platform}/bin/${tool}" \
+        "${source_root}/toolchain/llvm/${host_platform}/bin/dsymutil"
+    fi
   done
   for platform in "${LINUX_PLATFORMS[@]}"; do
     mkdir -p \

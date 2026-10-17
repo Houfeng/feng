@@ -1,0 +1,38 @@
+--- a/llvm/lib/DWARFLinker/Parallel/DependencyTracker.cpp
++++ b/llvm/lib/DWARFLinker/Parallel/DependencyTracker.cpp
+@@ -238,10 +238,10 @@
+       llvm_unreachable("Called for incorrect DIE");
+     } break;
+     default:
+-      // A module compile unit has no relocations, so liveness analysis never
+-      // reaches a type definition that nothing else in the unit references. The
+-      // module owns the only copy of those definitions, so keep them.
+-      if (Entry.CU->isClangModule() && isNamespaceLikeEntry(Entry.DieEntry) &&
++      // Debugger expressions can name emitted types without a live variable
++      // reference (for example after a void-pointer cast). Keep those types
++      // in ordinary compile units as well as Clang modules.
++      if (isNamespaceLikeEntry(Entry.DieEntry) &&
+           dwarf::isType(CurChild->getTag())) {
+         addActionToRootEntriesWorkList(
+             LiveRootWorklistActionTy::MarkTypeEntryRec, ChildEntry,
+--- a/llvm/tools/dsymutil/DwarfLinkerForBinary.cpp
++++ b/llvm/tools/dsymutil/DwarfLinkerForBinary.cpp
+@@ -28,7 +28,6 @@
+ #include "llvm/CodeGen/AsmPrinter.h"
+ #include "llvm/CodeGen/DIE.h"
+ #include "llvm/CodeGen/NonRelocatableStringpool.h"
+-#include "llvm/Config/config.h"
+ #include "llvm/DWARFLinker/Classic/DWARFLinker.h"
+ #include "llvm/DWARFLinker/Classic/DWARFStreamer.h"
+ #include "llvm/DWARFLinker/Parallel/DWARFLinker.h"
+--- a/llvm/tools/dsymutil/dsymutil.cpp
++++ b/llvm/tools/dsymutil/dsymutil.cpp
+@@ -728,6 +728,8 @@
+   }
+ 
+   if (Args.hasArg(OPT_version)) {
++    outs() << "Feng patch " FENG_DSYMUTIL_PATCH_REVISION " dsymutil "
++           << LLVM_VERSION_STRING << '\n';
+     cl::PrintVersionMessage();
+     return EXIT_SUCCESS;
+   }

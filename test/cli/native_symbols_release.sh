@@ -15,7 +15,7 @@ printf '0.1.0\n' > "$source_root/VERSION"
 printf '/* Small cross-format fixture; never executed. */\nint fixture(void) { return 0; }\n' > "$work/input.c"
 for host in "${hosts[@]}"; do
     case "$host" in
-        macos-arm64) triple=arm64-apple-macosx; extension=dylib; extra=(debugserver);;
+        macos-arm64) triple=arm64-apple-macosx; extension=dylib; extra=(debugserver dsymutil);;
         linux-arm64-gnu) triple=aarch64-unknown-linux-gnu; extension=so; extra=(lldb-server);;
         linux-x64-gnu) triple=x86_64-unknown-linux-gnu; extension=so; extra=(lldb-server);;
     esac

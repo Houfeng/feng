@@ -1984,6 +1984,7 @@ static bool argv_push_mode_flags(ArgVec *av, bool release,
 /* Retain DAP accessors and keep macOS LTO objects through dsymutil. */
 static bool argv_push_debug_link_flags(ArgVec *av, const char *target_platform,
                                       bool release, const char *c_path,
+                                      const char *program_path,
                                       char **out_lto_object_dir,
                                       char **out_error_message) {
     char *directory;
@@ -2009,6 +2010,32 @@ static bool argv_push_debug_link_flags(ArgVec *av, const char *target_platform,
     }
     if (!feng_platform_is_macos(target_platform)) {
         return true;
+    }
+    /* Keep Clang's dSYM step on the bundled tool even with FENG_CC overrides. */
+    char *dsymutil = feng_cli_require_install_path(
+        program_path, "toolchain/llvm/bin/dsymutil",
+        FENG_CLI_REQUIRED_EXECUTABLE, out_error_message);
+    if (dsymutil == NULL) {
+        return false;
+    }
+    char *tool_directory = path_dirname_dup(dsymutil);
+    free(dsymutil);
+    if (tool_directory == NULL) {
+        return set_errorf(out_error_message,
+                          "out of memory selecting bundled dsymutil");
+    }
+    /* Preserve tool identity when an installation links to the shared bundle. */
+    char *absolute_tool_directory = realpath(tool_directory, NULL);
+    free(tool_directory);
+    if (absolute_tool_directory == NULL) {
+        return set_errorf(out_error_message,
+                          "cannot resolve bundled LLVM directory: %s", strerror(errno));
+    }
+    bool tool_ok = argv_push(av, "-B") && argv_push(av, absolute_tool_directory);
+    free(absolute_tool_directory);
+    if (!tool_ok) {
+        return set_errorf(out_error_message,
+                          "out of memory selecting bundled dsymutil");
     }
     directory = replace_with_sibling_filename(c_path, "lto-XXXXXX");
     if (directory == NULL) {
@@ -2434,7 +2461,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                                                    true)) { ok = false; }
         if (ok && !argv_push_mode_flags(&av, opts->release, opts->lto, target_platform)) { ok = false; }
         if (ok && !argv_push_debug_link_flags(&av, target_platform, opts->release,
-                                              opts->c_path, &lto_object_dir,
+                                              opts->c_path, opts->program_path, &lto_object_dir,
                                               &tool_error)) {
             fprintf(stderr, "error: cannot configure debug linker: %s\n",
                     tool_error != NULL ? tool_error : "unknown error");

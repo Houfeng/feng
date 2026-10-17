@@ -512,6 +512,8 @@ LLDB 对 `FengArray *` / `FengString *` 等 runtime 载体只理解 C struct 内
   Debug 编译保留未被生成代码直接使用的类型调试信息（Clang
   `-fno-eliminate-unused-debug-types`），使仅经数组使用的跨包类型也可被 LLDB 解析。
   此选项不用于 Release，不增加运行时类型存储。
+  macOS 还须在 dSYM 链接阶段保留这些类型；工具选择遵循
+  [构建规范](../specifications/feng-build.md)，不依赖 `.fd` 注入类型布局或声明。
 - 用户类型字段展开通过在 `ENTS` 中写入 `kind = field` 的字段模板记录实现；codegen 将每个 spec 类型的字段写为 `parent_strid = 父类型名 strid` 的 ENTS 记录，代理层按 `parent_strid` 查找字段列表，不新增 section。
 - string 不做字符级展开，顶层显示实际字符串值即可。
 

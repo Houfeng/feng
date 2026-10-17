@@ -317,7 +317,7 @@ verify_llvm_toolchain() {
   )
 
   case "${host_platform}" in
-    macos-arm64) tools+=("debugserver") ;;
+    macos-arm64) tools+=("debugserver" "dsymutil") ;;
     linux-*) tools+=("lldb-server") ;;
   esac
   require_dir "${llvm_root}/bin"
