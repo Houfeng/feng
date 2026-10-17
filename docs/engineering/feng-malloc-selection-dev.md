@@ -129,10 +129,10 @@ build/lib/<target-platform>/libmimalloc.a       # 本地 make 建立的相对软
 编译目标选取；不是像 LLVM 插件那样仅分发当前 host 一份。
 库路径依照 Feng 安装根解析，支持安装搬移，不搜索本机 Homebrew 或系统 mimalloc。
 
-构建建议以当前仓库源码为起点，暂不升级 mimalloc。首轮采用**原生机器码静态库**，
-兼容 bin 的 `--lto=off|thin`；“像 runtime 一样分发”不要求复制 runtime 的 bitcode
-格式。这样不额外引入分配器的 bitcode 版本及混合 SDK module flag 依赖。
-如后续要将 mimalloc 也编为 ThinLTO，需另行证明收益与兼容性。
+构建建议以当前仓库源码为起点，暂不升级 mimalloc。**人工已确认：本轮 mimalloc
+预构建为原生机器码静态库，不启用 LTO。** 该库须兼容 bin 的 `--lto=off|thin`，
+runtime 与 libunwind 保持现有构建方式。mimalloc 的 LTO 支持留待后续按实际需求、
+性能收益及兼容性验证结果另行决定，不纳入本轮实施与验收。
 
 ### 4.2 维护预构建、本地布局与发行接入
 
@@ -227,7 +227,7 @@ Mach-O 的 `-force_load`，作用范围只能是该库。最终采用的最小�
 | 维度 | 必须验证的内容 |
 | --- | --- |
 | CLI | 四个入口均识别选项；默认/system/builtin；非法值；build/run/pack 传递；非 bin 显式指定报目标不适用；pack 不报未知选项；`--` 后程序参数 |
-| 构建模式 | Debug/Release × lto off/thin × system/builtin；保留当前默认 LTO 规则 |
+| 构建模式 | 主程序 Debug/Release × lto off/thin × system/builtin；mimalloc 固定为原生机器码库，保留主程序当前默认 LTO 规则 |
 | 依赖 | 同一份 `.a/.fb` 链接两种程序；本地依赖不接收 malloc 选项；多个包只引入一份 allocator；切换后重新链接 |
 | 维护与本地布局 | 五个 target 的归档与匹配；维护构建失败不覆盖旧库；make 建立/修复相对软链且不编译 mimalloc；正确软链不重复写入；clean 保留 extlib |
 | 发行制品 | 独立库为真实文件、内容与预构建输入一致；安装搬移且不依赖仓库；builtin 缺失/损坏失败；system 无此库仍可编译 |
@@ -259,9 +259,10 @@ Linux 容器先验证；macOS 验证配合本机安全授权，首次启动预�
 
 - [x] 人工确认 run/build/pack/直编均支持该选项，显式指定且 target 不是 bin 时报错。
 - [x] 人工要求由维护脚本预构建独立库，本地 make 建立软链，发行时提供对应目标制品；本文采用 extlib → build/lib 软链 → 发行 lib 的布局。
-- [ ] 人工确认默认 system 及原生静态库分发方案。
+- [x] 人工确认本轮 mimalloc 不启用 LTO，使用原生机器码静态库；后续另行评估 LTO。
+- [ ] 人工确认默认 system。
 - [ ] 在 `temp/` 中按五个目标构建 archive；确认 Release 宏、许可及 macOS 上游接入方式。
-- [ ] 不改正式源码，验证最小链接参数、实际覆盖、跨库归属、LTO/裁剪及 Sanitizer 边界。
+- [ ] 不改正式源码，验证最小链接参数、实际覆盖、跨库归属、与主程序 lto off/thin 的混合链接、裁剪及 Sanitizer 边界。
 - [ ] Linux 与 macOS 重测五项性能，记录静态收益、退化与 RSS，确定正式接入方案。
 
 ### 阶段二：最小实现与分发
