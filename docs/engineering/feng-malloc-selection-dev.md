@@ -2,7 +2,7 @@
 
 > 状态：待人工 Review，尚未实现。日期：2026-10-18。
 >
-> 本文设计 `--malloc=system|builtin`：将 mimalloc 按目标平台构建为独立静态库，随 Feng
+> 本文设计 `--allocator=system|builtin`：将 mimalloc 按目标平台构建为独立静态库，随 Feng
 > 发行包提供，仅在最终可执行程序选择 `builtin` 时链接并覆盖分配函数。
 > 当前证据来自 Linux GNU 环境的动态覆盖实验；静态链接及其他目标仍须验证。
 
@@ -15,7 +15,7 @@
 选择在最终链接时完成，不在每次分配时增加分支、函数表或 Feng 包装层。
 本方案只影响生成的应用，不改变 Feng 编译器进程自身的分配器。
 
-**run、build 和直编接受 `--malloc`；显式指定时，target 必须为 bin，否则报错。**
+**run、build 和直编接受 `--allocator`；显式指定时，target 必须为 bin，否则报错。**
 pack 只支持 lib，不支持该选项，沿用现有未知选项报错。
 静态库没有最终进程的分配器决定权。
 Feng 库、std 和 runtime 保持既有分配函数引用，最终程序统一解析这些引用。
@@ -40,7 +40,7 @@ Feng 库、std 和 runtime 保持既有分配函数引用，最终程序统一�
 - [`src/cli/compile/driver.c`](../../src/cli/compile/driver.c) 已在 bin 分支选择目标 runtime
   并执行最终链接。allocator 库的选择应加入这一位置，不进入 Codegen。
 - 项目命令通过内部选项调用直编，递归依赖另行构建。build/run 需解析、传递
-  `--malloc`，但不应照搬 `--lto` 向依赖库传递的规则。pack 虽会触发构建，但只支持
+  `--allocator`，但不应照搬 `--lto` 向依赖库传递的规则。pack 虽会触发构建，但只支持
   lib，不增加该选项。
 
 ### 2.2 Linux ARM64 隔离实验
@@ -72,27 +72,28 @@ nbody 复测同轮配对中位数增加约 0.40%；另两项未确认稳定耗�
 
 ## 3. CLI 与选项传递
 
-人工已确认默认使用 system。run、build 和直编支持该选项，并按实际 target 校验。
+人工已确认选项名为 `allocator`，默认使用 system，不增加选项别名。
+run、build 和直编支持该选项，并按实际 target 校验。
 下表适用于这三个入口：
 
-| 场景 | 未指定 | `--malloc=system` | `--malloc=builtin` |
+| 场景 | 未指定 | `--allocator=system` | `--allocator=builtin` |
 | --- | --- | --- | --- |
 | 实际 `target=bin` | system | 不引入内建分配器 | 链接目标 mimalloc 库 |
 | 实际 target 不是 bin | 既有行为 | 报错：仅适用于 bin | 报错：仅适用于 bin |
 
-pack 只接受 lib 项目，因此不注册、不解析或传递 `--malloc`。传入该选项时，
+pack 只接受 lib 项目，因此不注册、不解析或传递 `--allocator`。传入该选项时，
 由现有未知选项处理自然报错，不增加专门诊断分支。各命令原有的 target 限制保持不变。
 
 示例：
 
 ```sh
-feng main.ff --target=bin --release --malloc=builtin
-feng build --release --malloc=builtin
-feng run --malloc=system -- <program-args>
+feng main.ff --target=bin --release --allocator=builtin
+feng build --release --allocator=builtin
+feng run --allocator=system -- <program-args>
 ```
 
 - Debug 与 Release 均可显式选择分配器；分配器默认值不随模式或 LTO 设置变化。
-- 仅增加带值形式 `--malloc=system|builtin`。裸 `--malloc`、空值和其他值报错。
+- 仅增加带值形式 `--allocator=system|builtin`。裸 `--allocator`、空值和其他值报错。
 - 内部保留“未指定”状态，用于区分非 bin 的合法省略与非法显式指定；bin 在统一入口
   将未指定解析为 system。重复选项处理沿用现有 CLI 约定，不新增另一套规则。
 - `build/run` 将选项传入当前项目的共用构建入口，再传向直编；在开始构建前统一
@@ -229,7 +230,7 @@ Mach-O 的 `-force_load`，作用范围只能是该库。最终采用的最小�
 | --- | --- |
 | CLI | run/build/直编识别选项；省略默认为 system；显式 system/builtin；非法值；build/run 传递；非 bin 显式指定报目标不适用；pack 沿用未知选项报错；`--` 后程序参数 |
 | 构建模式 | 主程序 Debug/Release × lto off/thin × system/builtin；mimalloc 固定为原生机器码库，保留主程序当前默认 LTO 规则 |
-| 依赖 | 同一份 `.a/.fb` 链接两种程序；本地依赖不接收 malloc 选项；多个包只引入一份 allocator；切换后重新链接 |
+| 依赖 | 同一份 `.a/.fb` 链接两种程序；本地依赖不接收 allocator 选项；多个包只引入一份 allocator；切换后重新链接 |
 | 维护与本地布局 | 五个 target 的归档与匹配；维护构建失败不覆盖旧库；make 建立/修复相对软链且不编译 mimalloc；正确软链不重复写入；clean 保留 extlib |
 | 发行制品 | 独立库为真实文件、内容与预构建输入一致；安装搬移且不依赖仓库；builtin 缺失/损坏失败；system 无此库仍可编译 |
 | 实际覆盖 | 从生成代码、runtime、独立原生库发起分配；核对实际实现及跨边界释放；检查最终程序无 mimalloc 动态依赖 |
@@ -258,6 +259,7 @@ Linux 容器先验证；macOS 验证配合本机安全授权，首次启动预�
 
 ### 阶段一：隔离验证静态接入
 
+- [x] 人工确认选项名为 `--allocator=system|builtin`，不增加选项别名。
 - [x] 人工确认 run/build/直编支持该选项，显式指定且 target 不是 bin 时报错；pack 不支持，沿用未知选项报错。
 - [x] 人工要求由维护脚本预构建独立库，本地 make 建立软链，发行时提供对应目标制品；本文采用 extlib → build/lib 软链 → 发行 lib 的布局。
 - [x] 人工确认本轮 mimalloc 不启用 LTO，使用原生机器码静态库；后续另行评估 LTO。
