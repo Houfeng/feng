@@ -1,6 +1,6 @@
 # Feng 可选内建分配器开发方案
 
-> 状态：待人工 Review，尚未实现。日期：2026-10-17。
+> 状态：待人工 Review，尚未实现。日期：2026-10-18。
 >
 > 本文设计 `--malloc=system|builtin`：将 mimalloc 按目标平台构建为独立静态库，随 Feng
 > 发行包提供，仅在最终可执行程序选择 `builtin` 时链接并覆盖分配函数。
@@ -11,11 +11,12 @@
 为应用提供构建时可选的通用分配器，不改变 Feng 语义、对象布局、ARC、循环回收算法、
 异常清理或 std API，不增加按对象类型、分配大小或评测用例选择分配器的特殊路径。
 
-建议默认使用 `system`，显式指定 `builtin` 时使用随发行包提供的 mimalloc。
+默认使用 `system`，显式指定 `builtin` 时使用随发行包提供的 mimalloc。
 选择在最终链接时完成，不在每次分配时增加分支、函数表或 Feng 包装层。
 本方案只影响生成的应用，不改变 Feng 编译器进程自身的分配器。
 
-**run、build、pack 和直编均接受 `--malloc`；显式指定时，target 必须为 bin，否则报错。**
+**run、build 和直编接受 `--malloc`；显式指定时，target 必须为 bin，否则报错。**
+pack 只支持 lib，不支持该选项，沿用现有未知选项报错。
 静态库没有最终进程的分配器决定权。
 Feng 库、std 和 runtime 保持既有分配函数引用，最终程序统一解析这些引用。
 同一份 `.a` / `.fb` 应能分别用于 `system` 和 `builtin` 程序，无需重编库。
@@ -38,8 +39,9 @@ Feng 库、std 和 runtime 保持既有分配函数引用，最终程序统一�
   仅替换 `malloc/free` 不完整，也可能造成分配与释放不匹配。
 - [`src/cli/compile/driver.c`](../../src/cli/compile/driver.c) 已在 bin 分支选择目标 runtime
   并执行最终链接。allocator 库的选择应加入这一位置，不进入 Codegen。
-- `feng pack` 会先构建当前项目再打包；项目命令通过内部选项调用直编，递归依赖另行构建。
-  各入口均需解析、传递 `--malloc`，但不应照搬 `--lto` 向依赖库传递的规则。
+- 项目命令通过内部选项调用直编，递归依赖另行构建。build/run 需解析、传递
+  `--malloc`，但不应照搬 `--lto` 向依赖库传递的规则。pack 虽会触发构建，但只支持
+  lib，不增加该选项。
 
 ### 2.2 Linux ARM64 隔离实验
 
@@ -70,17 +72,16 @@ nbody 复测同轮配对中位数增加约 0.40%；另两项未确认稳定耗�
 
 ## 3. CLI 与选项传递
 
-run、build、pack 和直编统一支持该选项，并按实际 target 校验，此规则已由人工确认。
-选项解析与目标合法性校验分开，不将 pack 中的 `--malloc` 视为未知选项。
-默认值及其他建议仍待本方案 Review 确认。
+人工已确认默认使用 system。run、build 和直编支持该选项，并按实际 target 校验。
+下表适用于这三个入口：
 
 | 场景 | 未指定 | `--malloc=system` | `--malloc=builtin` |
 | --- | --- | --- | --- |
 | 实际 `target=bin` | system | 不引入内建分配器 | 链接目标 mimalloc 库 |
 | 实际 target 不是 bin | 既有行为 | 报错：仅适用于 bin | 报错：仅适用于 bin |
 
-上述规则适用于四个入口。各命令原有的 target 限制保持不变：当前 pack 只接受 lib 项目，
-因此显式指定 `--malloc` 时应报告目标不适用；本方案不扩展 pack 的打包目标类型。
+pack 只接受 lib 项目，因此不注册、不解析或传递 `--malloc`。传入该选项时，
+由现有未知选项处理自然报错，不增加专门诊断分支。各命令原有的 target 限制保持不变。
 
 示例：
 
@@ -94,7 +95,7 @@ feng run --malloc=system -- <program-args>
 - 仅增加带值形式 `--malloc=system|builtin`。裸 `--malloc`、空值和其他值报错。
 - 内部保留“未指定”状态，用于区分非 bin 的合法省略与非法显式指定；bin 在统一入口
   将未指定解析为 system。重复选项处理沿用现有 CLI 约定，不新增另一套规则。
-- `build/run/pack` 将选项传入当前项目的共用构建入口，再传向直编；在开始构建前统一
+- `build/run` 将选项传入当前项目的共用构建入口，再传向直编；在开始构建前统一
   校验实际 target，非 bin 显式指定时报错。合法 bin 将选项传至最终链接。
   递归构建本地 lib 依赖时不传递，不因切换选项重编无关依赖；最终可执行文件必须按
   本次选择重新链接。
@@ -210,7 +211,7 @@ Mach-O 的 `-force_load`，作用范围只能是该库。最终采用的最小�
 | 范围 | 必要改动 | 保持不变 |
 | --- | --- | --- |
 | CLI 公共选项、直编 options/direct/driver | 解析、传递、bin 限定及目标库链接 | 语义分析、Codegen、runtime ABI |
-| project build/run/pack 与共用编译入口 | 解析、传递选项；按实际 target 校验，非 bin 显式使用时报错 | 依赖库编译选项及各命令原有 target 限制 |
+| project build/run 与共用编译入口 | 解析、传递选项；按实际 target 校验，非 bin 显式使用时报错 | 依赖库编译选项、pack 选项解析及各命令原有 target 限制 |
 | mimalloc 维护脚本与 extlib 制品 | 预构建、校验并安装各目标 archive | 正常 make 和发行流程不编译 mimalloc |
 | Makefile 的本地布局规则 | 在 build/lib 下建立预构建库的相对软链 | 编译器与 LLVM 工具选择策略 |
 | 发行组件、组装、安装校验 | 将预构建库复制为真实文件，增加 manifest 与许可证 | 现有 host/target 分工及 sysroot 来源 |
@@ -226,7 +227,7 @@ Mach-O 的 `-force_load`，作用范围只能是该库。最终采用的最小�
 
 | 维度 | 必须验证的内容 |
 | --- | --- |
-| CLI | 四个入口均识别选项；默认/system/builtin；非法值；build/run/pack 传递；非 bin 显式指定报目标不适用；pack 不报未知选项；`--` 后程序参数 |
+| CLI | run/build/直编识别选项；省略默认为 system；显式 system/builtin；非法值；build/run 传递；非 bin 显式指定报目标不适用；pack 沿用未知选项报错；`--` 后程序参数 |
 | 构建模式 | 主程序 Debug/Release × lto off/thin × system/builtin；mimalloc 固定为原生机器码库，保留主程序当前默认 LTO 规则 |
 | 依赖 | 同一份 `.a/.fb` 链接两种程序；本地依赖不接收 malloc 选项；多个包只引入一份 allocator；切换后重新链接 |
 | 维护与本地布局 | 五个 target 的归档与匹配；维护构建失败不覆盖旧库；make 建立/修复相对软链且不编译 mimalloc；正确软链不重复写入；clean 保留 extlib |
@@ -257,17 +258,17 @@ Linux 容器先验证；macOS 验证配合本机安全授权，首次启动预�
 
 ### 阶段一：隔离验证静态接入
 
-- [x] 人工确认 run/build/pack/直编均支持该选项，显式指定且 target 不是 bin 时报错。
+- [x] 人工确认 run/build/直编支持该选项，显式指定且 target 不是 bin 时报错；pack 不支持，沿用未知选项报错。
 - [x] 人工要求由维护脚本预构建独立库，本地 make 建立软链，发行时提供对应目标制品；本文采用 extlib → build/lib 软链 → 发行 lib 的布局。
 - [x] 人工确认本轮 mimalloc 不启用 LTO，使用原生机器码静态库；后续另行评估 LTO。
-- [ ] 人工确认默认 system。
+- [x] 人工确认默认 system。
 - [ ] 在 `temp/` 中按五个目标构建 archive；确认 Release 宏、许可及 macOS 上游接入方式。
 - [ ] 不改正式源码，验证最小链接参数、实际覆盖、跨库归属、与主程序 lto off/thin 的混合链接、裁剪及 Sanitizer 边界。
 - [ ] Linux 与 macOS 重测五项性能，记录静态收益、退化与 RSS，确定正式接入方案。
 
 ### 阶段二：最小实现与分发
 
-- [ ] 先将已确认规则写入 CLI/build/release 主规范，再实现四个入口的选项解析、build/run/pack 传递、target 校验及 bin 链接。
+- [ ] 先将已确认规则写入 CLI/build/release 主规范，再实现 run/build/直编的选项解析、build/run 传递、target 校验及 bin 链接。
 - [ ] 增加维护预构建脚本并生成 extlib 目标制品；本地 make 仅建立 build/lib 软链。
 - [ ] 接入发行组件的真实文件复制、组装、安装校验与许可证；保持 runtime 独立。
 - [ ] 同步命令 usage 与 `feng-cli-help.txt`，确认未增加包格式或 runtime API 变更。
