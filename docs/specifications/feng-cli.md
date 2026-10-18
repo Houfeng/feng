@@ -137,6 +137,19 @@ feng dap [--stdio]
 - `--release`: 作为统一顶层选项保留；是否真正生效由对应构建路径决定。
 - `--lto=off|thin`: usage 描述统一为 `Link-time optimization`。控制本次生成代码是否使用 ThinLTO，适用于直编、`build`、`run`、`pack`。内部保留未指定、`off`、`thin` 三态；未指定时由直编层按模式决定：Release 使用 `thin`，Debug 使用 `off`。显式值优先，不接受空值或其他值。该选项不限制已有依赖库的对象格式；`off` 仍可链接含 bitcode 的库。编译与透传规则见 [构建规范](feng-build.md#21-接受参数)。
 
+- `--alloc=system|builtin` 适用于直编、`build` 和 `run`，默认 `system`。
+显式指定时实际 target 必须为 bin（包括显式 `system`）；非 bin 在编译前报错。
+只接受带值形式，空值、裸选项及其他值均报错；重复指定时沿用选项解析顺序，以最后一次为准。
+`builtin` 选择随包的目标平台 mimalloc 静态库；`system` 不引入或检查该库。
+该选择与 Debug/Release、LTO 无关，只传给当前可执行项目，不传给递归构建的 lib 依赖，
+也不写入包元数据。`pack` 不支持此选项，沿用未知选项报错。`run --` 后的参数仍传给程序。
+库缺失、损坏或目标不匹配时 builtin 构建失败，不回退 system。
+builtin 本轮不支持 AddressSanitizer；`FENG_CC_FLAGS` 中有效启用 `-fsanitize=address`
+时明确报错，按参数顺序识别逗号列表及 `-fno-sanitize=address|all`。
+system 的 ASan 行为保持不变，builtin 支持普通构建和 UBSan。
+该检查只覆盖传给后端的显式参数，不推断自定义编译器包装程序私自添加的参数。
+具体链接和分发规则见 [构建规范 §2.5](feng-build.md#25-收集链接信息)。
+
 ## 3 全局选项
 
 所有顶层命令支持以下全局选项:
@@ -243,7 +256,7 @@ open func hello(name: string) {
 用法:
 
 ```text
-feng build [<path>] [--release] [--lto=off|thin] [--platform=<platform>]... [--sysroot=<路径>]
+feng build [<path>] [--release] [--lto=off|thin] [--alloc=system|builtin] [--platform=<platform>]... [--sysroot=<路径>]
 ```
 
 选项:
@@ -255,7 +268,7 @@ feng build [<path>] [--release] [--lto=off|thin] [--platform=<platform>]... [--s
 
 说明:
 
-- `build` 从 `feng.fm` 中读取源文件列表、编译目标、输出路径等配置；`--lto` 按 §2.4 向当前项目及递归本地依赖的直编层透传。除项目级 `--release`、`--lto`、`--platform` 与单目标 `--sysroot` 外，不接受编译器级别的细粒度选项。
+- `build` 从 `feng.fm` 中读取源文件列表、编译目标、输出路径等配置；`--lto` 按 §2.4 向当前项目及递归本地依赖的直编层透传。`--alloc` 仅向当前项目透传，规则见 §2.4。除项目级 `--release`、`--lto`、`--alloc`、`--platform` 与单目标 `--sysroot` 外，不接受编译器级别的细粒度选项。
 - `build` 总是先对同一 `feng.fm` 执行 `feng deps install`;默认情况下,已安装的依赖不会重新安装。
 - `build` 负责解析依赖树并展平为 `--pkg <.fb路径>` 列表,再调用核心编译器。
 - `build` 按本节“项目平台选择统一规则”取得目标平台集合。每次直编只传一个 `--platform`，并将 `<项目输出根>/<platform>` 作为该次直编的 `--out`。项目构建层再把原生依赖与普通资源 staging 到同一平台目录；同一目标平台集合继续传递给递归本地 `target: "lib"` 依赖。
@@ -271,7 +284,7 @@ feng build [<path>] [--release] [--lto=off|thin] [--platform=<platform>]... [--s
 用法:
 
 ```text
-feng run [<path>] [--release] [--lto=off|thin] [-- <program-args>...]
+feng run [<path>] [--release] [--lto=off|thin] [--alloc=system|builtin] [-- <program-args>...]
 ```
 
 选项:

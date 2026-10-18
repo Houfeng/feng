@@ -60,6 +60,7 @@ FengCliParseResult feng_cli_legacy_compile_parse(const char *program,
  *   feng <file> [<file>...] --target=<bin|lib>
  *        [--platform=<platform>] [--sysroot=<path>] [--out=<dir>]
  *        [--name=<artifact>] [--release] [--lto=off|thin] [--keep-ir]
+ *        [--alloc=system|builtin]
  *        [--pkg=<.fb路径>|--pkg <.fb路径>]...
  *        [--lib=<库路径或系统库名>|--lib <库路径或系统库名>]...
  *
@@ -82,6 +83,7 @@ FengCliParseResult feng_cli_direct_options_parse(const char *program,
     out->out_dir = "./build";
     out->release = false;
     out->lto = FENG_CLI_LTO_UNSPECIFIED;
+    out->allocator = FENG_CLI_ALLOCATOR_UNSPECIFIED;
     out->keep_intermediate = false;
     out->artifact_name = NULL;
     out->platform = NULL;
@@ -202,6 +204,16 @@ FengCliParseResult feng_cli_direct_options_parse(const char *program,
             }
             continue;
         }
+        if (strncmp(arg, "--alloc=", 8U) == 0 || strcmp(arg, "--alloc") == 0) {
+            if (!feng_cli_parse_allocator_option(arg, &out->allocator)) {
+                free(link_libs);
+                free(package_paths);
+                free(inputs);
+                feng_cli_print_usage(program, stderr);
+                return FENG_CLI_PARSE_ERROR;
+            }
+            continue;
+        }
         if (strcmp(arg, "--keep-ir") == 0) {
             out->keep_intermediate = true;
             continue;
@@ -283,6 +295,13 @@ FengCliParseResult feng_cli_direct_options_parse(const char *program,
         return FENG_CLI_PARSE_ERROR;
     }
 
+    if (!feng_cli_validate_allocator_target(out->allocator, out->target)) {
+        free(link_libs);
+        free(package_paths);
+        free(inputs);
+        feng_cli_print_usage(program, stderr);
+        return FENG_CLI_PARSE_ERROR;
+    }
     if (input_count == 0) {
         fprintf(stderr, "no input files\n");
         free(link_libs);

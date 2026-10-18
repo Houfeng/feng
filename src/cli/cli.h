@@ -28,6 +28,13 @@ typedef enum FengCliLtoMode {
     FENG_CLI_LTO_THIN
 } FengCliLtoMode;
 
+/* Preserve omission so explicit allocator choices can be rejected for libraries. */
+typedef enum FengCliAllocator {
+    FENG_CLI_ALLOCATOR_UNSPECIFIED = 0,
+    FENG_CLI_ALLOCATOR_SYSTEM,
+    FENG_CLI_ALLOCATOR_BUILTIN
+} FengCliAllocator;
+
 void feng_cli_print_usage(const char *program, FILE *stream);
 
 int feng_cli_tool_main(const char *program, int argc, char **argv);

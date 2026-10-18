@@ -5192,7 +5192,7 @@ static void test_project_build_help_writes_stdout_and_returns_success(void) {
     ASSERT(rc == 0);
     ASSERT(strstr(stdout_text,
                   "Usage:\n"
-                  "  feng build [<path>] [--release] [--lto=off|thin] [--keep-ir] "
+                  "  feng build [<path>] [--release] [--lto=off|thin] [--alloc=system|builtin] [--keep-ir] "
                   "[--platform=<platform>]... [--sysroot=<path>]\n") != NULL);
     ASSERT(stderr_text[0] == '\0');
 
@@ -33106,6 +33106,7 @@ static void test_dap_launch_frame_format_defaults(void) {
 #include "test_union_slot_layout.h"
 #include "test_cycle_type_graph.h"
 #include "test_cycle_borrow.h"
+#include "test_allocator.h"
 
 /* Additional fit completion coverage shares this executable and both test phases. */
 void test_lsp_fit_completion(void);
@@ -33117,6 +33118,8 @@ int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
 
+    test_allocator_selection();
+    test_allocator_dap();
     test_runtime_inline_distribution();
     test_fs_bulk_read_faults();
     test_bundle_ft_diagnostic_lifetime();

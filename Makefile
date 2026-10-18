@@ -123,6 +123,12 @@ endif
 
 RUNTIME_LIBS := $(foreach platform,$(RUNTIME_PLATFORMS),$(LIB_DIR)/$(platform)/$(STATIC_LIB_PREFIX)feng_runtime$(STATIC_LIB_EXT))
 RUNTIME_LIB := $(LIB_DIR)/$(HOST_PLATFORM)/$(STATIC_LIB_PREFIX)feng_runtime$(STATIC_LIB_EXT)
+# Link present prebuilt archives only for local runtime targets; system builds need none.
+ALLOCATOR_INPUTS := $(wildcard $(foreach platform,$(RUNTIME_PLATFORMS),extlib/$(platform)/libmimalloc.a))
+ALLOCATOR_LAYOUT_READY := $(shell \
+	ready=yes; for relative in $(patsubst extlib/%,%,$(ALLOCATOR_INPUTS)); do \
+		if [ "$$(readlink "$(LIB_DIR)/$$relative" 2>/dev/null)" != "../../../extlib/$$relative" ]; then ready=; break; fi; \
+	done; printf '%s' "$$ready")
 RUNTIME_HEADERS := $(BUILD_DIR)/include/feng_generated.h \
 	$(BUILD_DIR)/include/feng_runtime.h \
 	$(BUILD_DIR)/include/feng_runtime_contract.inc
@@ -217,7 +223,7 @@ RUNTIME_PLATFORM_OBJS := $(foreach platform,$(RUNTIME_PLATFORMS),$(RUNTIME_OBJS_
 
 all: cli runtime
 
-cli: runtime $(BIN_DIR)/feng
+cli: runtime allocator-layout $(BIN_DIR)/feng
 
 runtime: $(RUNTIME_LIBS) $(RUNTIME_HEADERS)
 
@@ -407,6 +413,22 @@ ifneq ($(TOOLCHAIN_LAYOUT_READY),yes)
 	@if [ "$$(readlink "$(SYSROOT_LAYOUT_LINK)" 2>/dev/null)" != "$(SYSROOT_LAYOUT_TARGET)" ]; then \
 		ln -sfn "$(SYSROOT_LAYOUT_TARGET)" "$(SYSROOT_LAYOUT_LINK)"; \
 	fi
+endif
+
+# Preserve valid links on no-op builds, and never overwrite a regular file.
+.PHONY: allocator-layout
+allocator-layout:
+ifneq ($(ALLOCATOR_LAYOUT_READY),yes)
+	@for source in $(ALLOCATOR_INPUTS); do \
+		path="$(LIB_DIR)/$${source#extlib/}"; \
+		target="../../../$$source"; \
+		if [ -e "$$path" ] && [ ! -L "$$path" ]; then \
+			echo "error: allocator layout path is not a symbolic link: $$path" >&2; exit 1; \
+		fi; \
+		if [ "$$(readlink "$$path" 2>/dev/null)" != "$$target" ]; then \
+			mkdir -p "$$(dirname "$$path")"; ln -sfn "$$target" "$$path"; \
+		fi; \
+	done
 endif
 
 runtime-platform-inputs: toolchain-layout | check-clang

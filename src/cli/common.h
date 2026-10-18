@@ -129,6 +129,12 @@ bool feng_cli_parse_target_option(const char *arg, FengCompileTarget *out_target
 /* Parse one explicit --lto=off|thin option without resolving mode defaults. */
 bool feng_cli_parse_lto_option(const char *arg, FengCliLtoMode *out_lto);
 
+/* Parse the shared bin-only allocator option without resolving omission. */
+bool feng_cli_parse_allocator_option(const char *arg, FengCliAllocator *out_allocator);
+
+/* Reject an explicit allocator choice before starting a non-bin build. */
+bool feng_cli_validate_allocator_target(FengCliAllocator allocator, FengCompileTarget target);
+
 typedef struct FengCliLoadedSource {
     const char *path;
     char *source;

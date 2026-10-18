@@ -34,6 +34,7 @@ typedef struct FengCliDirectOptions {
     const char *out_dir;          /* defaults to ./build */
     bool release;                 /* Selects release-vs-debug build mode. */
     FengCliLtoMode lto;            /* Unspecified until resolved by the driver. */
+    FengCliAllocator allocator;   /* Omission means system for bin; invalid explicitly for lib. */
     bool keep_intermediate;       /* P5: keep generated C across failures/success. */
     const char *artifact_name;    /* optional override for the produced artifact stem */
     const char *platform;         /* explicit target platform or detected host */

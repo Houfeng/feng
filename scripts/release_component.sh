@@ -90,6 +90,7 @@ verify_runtime_archive() {
   local member
   local triple triple_pattern
   local member_count=0
+  local native_only="${3:-false}"
 
   while IFS= read -r member; do
     [[ -n "${member}" ]] || continue
@@ -106,6 +107,7 @@ verify_runtime_archive() {
     "${ARCHIVE_TOOL}" p "${archive_path}" "${member}" > "${object_path}" ||
       die "failed to read ${member} from staged runtime ${platform}"
     if [[ "$(file -b "${object_path}")" == *LLVM*bitcode* ]]; then
+      [[ "${native_only}" == false ]] || die "allocator archive must contain native objects: ${archive_path}"
       # Read the stored target with a host tool; do not retarget or compile the IR.
       command -v llvm-dis >/dev/null 2>&1 ||
         die "runtime bitcode validation requires llvm-dis in PATH"
@@ -260,7 +262,13 @@ while IFS= read -r runtime_platform; do
   cp \
     "${runtime_source}" \
     "${COMPONENT_ROOT}/lib/${runtime_platform}/libfeng_runtime.a"
+  allocator_source="${BUILD_ROOT}/lib/${runtime_platform}/libmimalloc.a"
+  [[ -f "${allocator_source}" ]] || die "allocator archive not found: ${allocator_source}"
+  cp "${allocator_source}" "${COMPONENT_ROOT}/lib/${runtime_platform}/libmimalloc.a"
 done < <(component_runtime_platforms "${PLATFORM}")
+
+mkdir -p "${COMPONENT_ROOT}/licenses/mimalloc"
+cp "${PROJECT_ROOT}/third_party/mimalloc/LICENSE" "${COMPONENT_ROOT}/licenses/mimalloc/LICENSE"
 
 verify_platform_file \
   "${COMPONENT_ROOT}/bin/feng" "${PLATFORM}" \
@@ -269,11 +277,13 @@ while IFS= read -r runtime_platform; do
   verify_runtime_archive \
     "${COMPONENT_ROOT}/lib/${runtime_platform}/libfeng_runtime.a" \
     "${runtime_platform}"
+  verify_runtime_archive "${COMPONENT_ROOT}/lib/${runtime_platform}/libmimalloc.a" "${runtime_platform}" true
 done < <(component_runtime_platforms "${PLATFORM}")
 
 MANIFEST_TEMP="${COMPONENT_ROOT}/.SHA256SUMS.tmp"
 : > "${MANIFEST_TEMP}"
 print_sha256_record "${COMPONENT_ROOT}" "bin/feng" >> "${MANIFEST_TEMP}"
+print_sha256_record "${COMPONENT_ROOT}" "licenses/mimalloc/LICENSE" >> "${MANIFEST_TEMP}"
 for header in "${PUBLIC_HEADERS[@]}"; do
   print_sha256_record \
     "${COMPONENT_ROOT}" "include/${header}" >> "${MANIFEST_TEMP}"
@@ -282,6 +292,7 @@ while IFS= read -r runtime_platform; do
   print_sha256_record \
     "${COMPONENT_ROOT}" \
     "lib/${runtime_platform}/libfeng_runtime.a" >> "${MANIFEST_TEMP}"
+  print_sha256_record "${COMPONENT_ROOT}" "lib/${runtime_platform}/libmimalloc.a" >> "${MANIFEST_TEMP}"
 done < <(component_runtime_platforms "${PLATFORM}")
 LC_ALL=C sort "${MANIFEST_TEMP}" > "${COMPONENT_ROOT}/SHA256SUMS"
 rm "${MANIFEST_TEMP}"

@@ -5,6 +5,7 @@
 #include <stdlib.h>
 
 #include "cli/compile/direct.h"
+#include "cli/common.h"
 #include "cli/deps/manager.h"
 #include "cli/project/common.h"
 
@@ -15,6 +16,7 @@ int feng_cli_project_invoke_direct_compile_with_packages(const char *program,
                                                          const char *sysroot,
                                                          bool release,
                                                          FengCliLtoMode lto,
+                                                         FengCliAllocator allocator,
                                                          bool keep_intermediate,
                                                          size_t package_count,
                                                          const char *const *package_paths,
@@ -68,6 +70,7 @@ int feng_cli_project_invoke_direct_compile_with_packages(const char *program,
     options.out_dir = platform_out_root;
     options.release = release;
     options.lto = lto;
+    options.allocator = allocator;
     options.keep_intermediate = keep_intermediate;
     options.artifact_name = context->manifest.name;
     options.platform = platform;
@@ -110,6 +113,7 @@ int feng_cli_project_invoke_direct_compile(const char *program,
                                                                 sysroot,
                                                                 release,
                                                                 FENG_CLI_LTO_UNSPECIFIED,
+                                                                FENG_CLI_ALLOCATOR_UNSPECIFIED,
                                                                 keep_intermediate,
                                                                 0U,
                                                                 NULL,
@@ -159,6 +163,7 @@ int feng_cli_project_compile_prepared(const char *program,
                                       const char *sysroot,
                                       bool release,
                                       FengCliLtoMode lto,
+                                      FengCliAllocator allocator,
                                       bool keep_intermediate) {
     return feng_cli_project_invoke_direct_compile_with_packages(program,
                                                                 context,
@@ -166,6 +171,7 @@ int feng_cli_project_compile_prepared(const char *program,
                                                                 sysroot,
                                                                 release,
                                                                 lto,
+                                                                allocator,
                                                                 keep_intermediate,
                                                                 resolved->package_count,
                                                                 (const char *const *)resolved->package_paths,
@@ -180,10 +186,15 @@ int feng_cli_project_build_platform(const char *program,
                                     const char *sysroot,
                                     bool release,
                                     FengCliLtoMode lto,
+                                    FengCliAllocator allocator,
                                     bool keep_intermediate,
                                     FengCliProjectError *out_error) {
     FengCliDepsResolved resolved = {0};
     int rc;
+
+    if (context != NULL && !feng_cli_validate_allocator_target(allocator, context->manifest.target)) {
+        return 1;
+    }
 
     if (!feng_cli_project_resolve_build_dependencies(program,
                                                      context,
@@ -202,6 +213,7 @@ int feng_cli_project_build_platform(const char *program,
                                            sysroot,
                                            release,
                                            lto,
+                                           allocator,
                                            keep_intermediate);
     feng_cli_deps_resolved_dispose(&resolved);
     if (rc == 0 && !feng_cli_project_stage_assets(context, platform, out_error)) {

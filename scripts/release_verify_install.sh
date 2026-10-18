@@ -92,6 +92,7 @@ verify_runtime_archive() {
   local member
   local triple triple_pattern
   local member_count=0
+  local native_only="${4:-false}"
 
   [[ -f "${archive_path}" ]] ||
     die "installed runtime not found: ${platform}"
@@ -110,6 +111,7 @@ verify_runtime_archive() {
     "${archive_tool}" p "${archive_path}" "${member}" > "${object_path}" ||
       die "failed to read ${member} from installed runtime ${platform}"
     if [[ "$(file -b "${object_path}")" == *LLVM*bitcode* ]]; then
+      [[ "${native_only}" == false ]] || die "allocator archive must contain native objects: ${archive_path}"
       # Read the stored target with a host tool; do not retarget or compile the IR.
       require_cmd llvm-dis
       triple="$(llvm-dis "${object_path}" -o - |
@@ -276,7 +278,12 @@ for platform in "${RUNTIME_PLATFORMS[@]}"; do
     "${INSTALL_ROOT}/lib/${platform}/libfeng_runtime.a" \
     "${platform}" \
     "${LLVM_BIN}/llvm-ar"
+  [[ ! -L "${INSTALL_ROOT}/lib/${platform}/libmimalloc.a" ]] ||
+    die "installed allocator must be a real file: ${platform}"
+  verify_runtime_archive "${INSTALL_ROOT}/lib/${platform}/libmimalloc.a" \
+    "${platform}" "${LLVM_BIN}/llvm-ar" true
 done
+[[ -s "${INSTALL_ROOT}/licenses/mimalloc/LICENSE" ]] || die "installed mimalloc license is missing"
 
 "${LLVM_BIN}/clang" --version >/dev/null
 "${LLVM_BIN}/ld.lld" --version >/dev/null

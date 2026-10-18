@@ -176,6 +176,17 @@ error: 模块 "net.http" 在包 utils-1.0.0.fb 和 net-2.0.0.fb 中均有定义
 
 ### 2.5 收集链接信息
 
+`--alloc` 的选项规则见 [CLI 规范 §2.4](feng-cli.md#24-顶层直编补充选项)。
+仅最终 bin 选择 builtin 时，driver 从安装根 `lib/<platform>/libmimalloc.a` 定位独立
+原生静态库，使标准分配函数引用解析到该库；不改变生成 C、runtime 或库的 ABI。
+该 archive 在原生依赖之后局部强制抽取：ELF 使用 `--whole-archive/--no-whole-archive`，
+Mach-O 使用 `-force_load`。这样竞争的静态分配器定义产生重复符号错误，不会因按需抽取
+跳过 mimalloc；保留原有 section 裁剪，不强制抽取其他库。
+system 保留原链接参数，不查找 mimalloc。每次构建均按当前选择重新链接；
+项目层不向递归 lib 依赖传递 allocator，同一份库可用于两种程序。
+显式 builtin 不保证接管原生依赖私有绑定或自行实现的分配器。
+制品维护、本地软链及发行布局见[发行与安装](../engineering/feng-release-and-install.md)。
+
 编译器从源码 / 依赖包自动收集链接参数,并接收用户显式追加的 `--lib` 参数。
 
 runtime 链接边界:
@@ -223,7 +234,7 @@ extern func ssl_connect(fd: int): int;
 
 `--lib` 是兜底参数,仅用于以下场景：没有对应 feng `extern func` 声明、也不来自任何 `.fb` 包的纯原生库（如系统 `pthread`）。大多数情况下不需要手动指定。裸系统库名按 `-l<name>` 语义参与最终链接；显式库文件路径（如 `.a`、`.lib`、`.so`、`.dylib`、`.dll`）按文件路径原样参与最终链接。
 
-补充边界：除编译器自身 runtime 产物外,编译器不会主动扫描磁盘动态查找 `.a` / `.lib` / `.so` / `.dylib` / `.dll`。`extlib/` 静态库只会在已有 `extern func` 元信息显式要求该库名时参与链接,不会因为目录存在而被自动注入。项目与依赖库输入应通过源码声明和显式 CLI 参数（`--pkg` / `--lib`）提供。
+补充边界：除编译器自身 runtime 及显式 builtin 分配器产物外,编译器不会主动扫描磁盘动态查找 `.a` / `.lib` / `.so` / `.dylib` / `.dll`。`extlib/` 静态库只会在已有 `extern func` 元信息显式要求该库名时参与链接,不会因为目录存在而被自动注入。项目与依赖库输入应通过源码声明和显式 CLI 参数（`--pkg` / `--lib`）提供。
 
 ### 2.6 动态库运行时查找策略
 

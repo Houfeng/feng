@@ -70,6 +70,8 @@ void feng_cli_print_usage(const char *program, FILE *stream) {
         stream, "Release mode", "%*s[--release]", project_indent, "");
     feng_cli_print_usage_line(
         stream, "Link-time optimization", "%*s[--lto=off|thin]", project_indent, "");
+    feng_cli_print_usage_line(
+        stream, "Allocator (bin only)", "%*s[--alloc=system|builtin]", project_indent, "");
     feng_cli_print_usage_line(stream,
                               "Target platform",
                               "%*s[--platform=<platform>]...",
@@ -89,6 +91,8 @@ void feng_cli_print_usage(const char *program, FILE *stream) {
         stream, "Release mode", "%*s[--release]", project_indent, "");
     feng_cli_print_usage_line(
         stream, "Link-time optimization", "%*s[--lto=off|thin]", project_indent, "");
+    feng_cli_print_usage_line(
+        stream, "Allocator (bin only)", "%*s[--alloc=system|builtin]", project_indent, "");
     feng_cli_print_usage_line(
         stream, "Keep IR", "%*s[--keep-ir]", project_indent, "");
     feng_cli_print_usage_line(
@@ -139,6 +143,8 @@ void feng_cli_print_usage(const char *program, FILE *stream) {
         stream, "Release mode", "%*s[--release]", compile_indent, "");
     feng_cli_print_usage_line(
         stream, "Link-time optimization", "%*s[--lto=off|thin]", compile_indent, "");
+    feng_cli_print_usage_line(
+        stream, "Allocator (bin only)", "%*s[--alloc=system|builtin]", compile_indent, "");
     feng_cli_print_usage_line(
         stream, "Keep IR", "%*s[--keep-ir]", compile_indent, "");
     feng_cli_print_usage_line(

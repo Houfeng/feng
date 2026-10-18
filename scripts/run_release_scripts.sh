@@ -118,6 +118,7 @@ create_component_manifest() {
   local runtime_platform
 
   : > "${manifest}"
+  print_sha256_record "${component_root}" "licenses/mimalloc/LICENSE" >> "${manifest}"
   print_sha256_record "${component_root}" "bin/feng" >> "${manifest}"
   for header in "${PUBLIC_HEADERS[@]}"; do
     print_sha256_record \
@@ -127,6 +128,7 @@ create_component_manifest() {
     print_sha256_record \
       "${component_root}" \
       "lib/${runtime_platform}/libfeng_runtime.a" >> "${manifest}"
+    print_sha256_record "${component_root}" "lib/${runtime_platform}/libmimalloc.a" >> "${manifest}"
   done < <(component_runtime_platforms "${host_platform}")
   LC_ALL=C sort "${manifest}" -o "${manifest}"
 }
@@ -142,6 +144,8 @@ create_components() {
   for host_platform in "${HOST_PLATFORMS[@]}"; do
     component_root="${components_root}/${host_platform}"
     mkdir -p "${component_root}/bin" "${component_root}/include"
+    mkdir -p "${component_root}/licenses/mimalloc"
+    cp "${PROJECT_ROOT}/third_party/mimalloc/LICENSE" "${component_root}/licenses/mimalloc/LICENSE"
     create_platform_binary \
       "${host_platform}" "${component_root}/bin/feng"
     for header in "${PUBLIC_HEADERS[@]}"; do
@@ -154,6 +158,8 @@ create_components() {
       cp \
         "${PROJECT_ROOT}/extlib/${runtime_platform}/libfeng_unwind.a" \
         "${component_root}/lib/${runtime_platform}/libfeng_runtime.a"
+      cp "${PROJECT_ROOT}/extlib/${runtime_platform}/libmimalloc.a" \
+        "${component_root}/lib/${runtime_platform}/libmimalloc.a"
     done < <(component_runtime_platforms "${host_platform}")
     create_component_manifest "${host_platform}" "${component_root}"
   done
@@ -169,6 +175,12 @@ create_source_root() {
   local extension
 
   printf '%s\n' "0.1.0" > "${source_root}/VERSION"
+  mkdir -p "${source_root}/third_party/mimalloc"
+  cp "${PROJECT_ROOT}/third_party/mimalloc/LICENSE" "${source_root}/third_party/mimalloc/LICENSE"
+  for platform in "${RUNTIME_PLATFORMS[@]}"; do
+    mkdir -p "${source_root}/extlib/${platform}"
+    cp "${PROJECT_ROOT}/extlib/${platform}/libmimalloc.a" "${source_root}/extlib/${platform}/libmimalloc.a"
+  done
   mkdir -p "${source_root}/toolchain/test_tools/lld/macos-arm64/bin"
   printf '#!/usr/bin/env sh\nexit 0\n' \
     > "${source_root}/toolchain/test_tools/lld/macos-arm64/bin/lld"

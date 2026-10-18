@@ -182,6 +182,7 @@ verify_runtime_archive() {
   local archive_path="$1"
   local platform="$2"
   local extract_root="$3"
+  local native_only="${4:-false}"
   local member
   local triple triple_pattern
   local member_count=0
@@ -204,6 +205,7 @@ verify_runtime_archive() {
     "${ARCHIVE_TOOL}" p "${archive_path}" "${member}" > "${object_path}" ||
       die "failed to read ${member} from ${archive_path}"
     if [[ "$(file -b "${object_path}")" == *LLVM*bitcode* ]]; then
+      [[ "${native_only}" == false ]] || die "allocator archive must contain native objects: ${archive_path}"
       # Read the stored target with a host tool; do not retarget or compile the IR.
       require_cmd llvm-dis
       triple="$(llvm-dis "${object_path}" -o - |
@@ -240,6 +242,7 @@ verify_component_manifest() {
   local runtime_platform
 
   : > "${expected_manifest}"
+  print_sha256_record "${component_root}/licenses/mimalloc/LICENSE" "licenses/mimalloc/LICENSE" >> "${expected_manifest}"
   print_sha256_record \
     "${component_root}/bin/feng" "bin/feng" >> "${expected_manifest}"
   for header in "${PUBLIC_HEADERS[@]}"; do
@@ -251,6 +254,8 @@ verify_component_manifest() {
     print_sha256_record \
       "${component_root}/lib/${runtime_platform}/libfeng_runtime.a" \
       "lib/${runtime_platform}/libfeng_runtime.a" >> "${expected_manifest}"
+    print_sha256_record "${component_root}/lib/${runtime_platform}/libmimalloc.a" \
+      "lib/${runtime_platform}/libmimalloc.a" >> "${expected_manifest}"
   done < <(component_runtime_platforms "${host_platform}")
 
   LC_ALL=C sort "${expected_manifest}" -o "${expected_manifest}"
@@ -277,7 +282,14 @@ verify_component() {
       "${component_root}/lib/${runtime_platform}/libfeng_runtime.a" \
       "${runtime_platform}" \
       "${WORK_ROOT}/archive-check/${runtime_platform}"
+    verify_runtime_archive "${component_root}/lib/${runtime_platform}/libmimalloc.a" \
+      "${runtime_platform}" "${WORK_ROOT}/allocator-check/${runtime_platform}" true
+    cmp -s "${component_root}/lib/${runtime_platform}/libmimalloc.a" \
+      "${SOURCE_ROOT}/extlib/${runtime_platform}/libmimalloc.a" ||
+      die "allocator archive differs from maintained input: ${runtime_platform}"
   done < <(component_runtime_platforms "${host_platform}")
+  cmp -s "${component_root}/licenses/mimalloc/LICENSE" "${SOURCE_ROOT}/third_party/mimalloc/LICENSE" ||
+    die "mimalloc license differs from maintained input: ${host_platform}"
   verify_component_manifest "${host_platform}"
 }
 
@@ -524,7 +536,10 @@ assemble_distribution() {
     cp \
       "${COMPONENTS_ROOT}/${runtime_owner}/lib/${runtime_platform}/libfeng_runtime.a" \
       "${package_root}/lib/${runtime_platform}/libfeng_runtime.a"
+    cp "${COMPONENTS_ROOT}/${runtime_owner}/lib/${runtime_platform}/libmimalloc.a" \
+      "${package_root}/lib/${runtime_platform}/libmimalloc.a"
   done
+  copy_tree "${component_root}/licenses" "${package_root}/licenses"
   copy_tree \
     "${SOURCE_ROOT}/toolchain/llvm/${host_platform}" \
     "${package_root}/toolchain/llvm"

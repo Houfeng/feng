@@ -50,6 +50,7 @@ int feng_cli_project_invoke_direct_compile_with_packages(const char *program,
                                                          const char *sysroot,
                                                          bool release,
                                                          FengCliLtoMode lto,
+                                                         FengCliAllocator allocator,
                                                          bool keep_intermediate,
                                                          size_t package_count,
                                                          const char *const *package_paths,
@@ -109,6 +110,7 @@ int feng_cli_project_compile_prepared(const char *program,
                                       const char *sysroot,
                                       bool release,
                                       FengCliLtoMode lto,
+                                      FengCliAllocator allocator,
                                       bool keep_intermediate);
 
 /* Resolve dependencies, compile, and stage assets for one selected platform. */
@@ -118,6 +120,7 @@ int feng_cli_project_build_platform(const char *program,
                                     const char *sysroot,
                                     bool release,
                                     FengCliLtoMode lto,
+                                    FengCliAllocator allocator,
                                     bool keep_intermediate,
                                     FengCliProjectError *out_error);
 

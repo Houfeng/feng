@@ -11,6 +11,8 @@ ar="$root/build/toolchain/llvm/bin/llvm-ar"
 source_root="$work/source"
 components="$work/components"
 mkdir -p "$source_root" "$components"
+mkdir -p "$source_root/third_party/mimalloc"
+cp third_party/mimalloc/LICENSE "$source_root/third_party/mimalloc/LICENSE"
 printf '0.1.0\n' > "$source_root/VERSION"
 printf '/* Small cross-format fixture; never executed. */\nint fixture(void) { return 0; }\n' > "$work/input.c"
 for host in "${hosts[@]}"; do
@@ -21,6 +23,8 @@ for host in "${hosts[@]}"; do
     esac
     build="$components/$host"
     mkdir -p "$build/bin" "$build/include"
+    mkdir -p "$build/licenses/mimalloc"
+    cp third_party/mimalloc/LICENSE "$build/licenses/mimalloc/LICENSE"
     "$clang" --target="$triple" -c "$work/input.c" -o "$build/bin/feng"
     chmod +x "$build/bin/feng"
     cp build/include/feng_generated.h build/include/feng_runtime.h \
@@ -30,6 +34,9 @@ for host in "${hosts[@]}"; do
     for platform in "${platforms[@]}"; do
         mkdir -p "$build/lib/$platform"
         "$ar" rcs "$build/lib/$platform/libfeng_runtime.a" "$build/bin/feng"
+        mkdir -p "$source_root/extlib/$platform"
+        cp "extlib/$platform/libmimalloc.a" "$build/lib/$platform/libmimalloc.a"
+        cp "extlib/$platform/libmimalloc.a" "$source_root/extlib/$platform/libmimalloc.a"
         if [[ $platform == linux-* ]]; then
             mkdir -p "$source_root/toolchain/sysroot/$platform/usr/include" \
                 "$source_root/toolchain/sysroot/$platform/usr/lib" \
@@ -39,7 +46,7 @@ for host in "${hosts[@]}"; do
     # Fixture objects stand in for host-built components; checksum every input.
     (
         cd "$build"
-        find bin include lib -type f | LC_ALL=C sort | while IFS= read -r path; do
+        find bin include lib licenses -type f | LC_ALL=C sort | while IFS= read -r path; do
             if command -v sha256sum >/dev/null 2>&1; then
                 sha256sum "$path"
             else

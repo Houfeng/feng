@@ -768,6 +768,32 @@ bool feng_cli_parse_lto_option(const char *arg, FengCliLtoMode *out_lto) {
     return false;
 }
 
+/* Share allocator values and diagnostics across direct, build and run commands. */
+bool feng_cli_parse_allocator_option(const char *arg, FengCliAllocator *out_allocator) {
+    if (arg == NULL || out_allocator == NULL) {
+        return false;
+    }
+    if (strcmp(arg, "--alloc=system") == 0) {
+        *out_allocator = FENG_CLI_ALLOCATOR_SYSTEM;
+        return true;
+    }
+    if (strcmp(arg, "--alloc=builtin") == 0) {
+        *out_allocator = FENG_CLI_ALLOCATOR_BUILTIN;
+        return true;
+    }
+    fprintf(stderr, "invalid allocator option '%s' (expected --alloc=system or --alloc=builtin)\n", arg);
+    return false;
+}
+
+/* An omitted option leaves library compilation unchanged. */
+bool feng_cli_validate_allocator_target(FengCliAllocator allocator, FengCompileTarget target) {
+    if (allocator != FENG_CLI_ALLOCATOR_UNSPECIFIED && target != FENG_COMPILE_TARGET_BIN) {
+        fprintf(stderr, "--alloc requires target=bin\n");
+        return false;
+    }
+    return true;
+}
+
 const FengCliLoadedSource *feng_cli_find_loaded_source(const FengCliLoadedSource *sources,
                                                        size_t source_count,
                                                        const char *path) {

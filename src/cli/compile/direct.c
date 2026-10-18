@@ -629,6 +629,7 @@ int feng_cli_direct_run(const char *program,
         .link_lib_count = (size_t)opts.link_lib_count,
         .release = opts.release,
         .lto = opts.lto,
+        .allocator = opts.allocator,
         .keep_intermediate = opts.keep_intermediate,
     };
     int drv_rc = feng_cli_compile_driver_invoke(&drv);

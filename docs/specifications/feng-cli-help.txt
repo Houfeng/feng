@@ -8,6 +8,7 @@ Project:
   feng build      [<path>]                   Project root
                   [--release]                Release mode
                   [--lto=off|thin]           Link-time optimization
+                  [--alloc=system|builtin]   Allocator (bin only)
                   [--platform=<platform>]... Target platform
                   [--sysroot=<path>]         Target sysroot
                   [--keep-ir]                Keep IR
@@ -16,6 +17,7 @@ Project:
   feng run        [<path>]                   Project root
                   [--release]                Release mode
                   [--lto=off|thin]           Link-time optimization
+                  [--alloc=system|builtin]   Allocator (bin only)
                   [--keep-ir]                Keep IR
                   [-- <args>...]             Program arguments
   feng clean      [<path>]                   Project root
@@ -40,6 +42,7 @@ Compilation:
                   [--name=<artifact>]        Artifact name
                   [--release]                Release mode
                   [--lto=off|thin]           Link-time optimization
+                  [--alloc=system|builtin]   Allocator (bin only)
                   [--keep-ir]                Keep IR
                   [--pkg=<fb-path>]...       Package list
                   [--lib=<lib-path>]...      Library list

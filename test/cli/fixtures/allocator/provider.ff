@@ -1,0 +1,35 @@
+open module allocator_dep;
+
+/** Managed allocation shared between independently compiled packages. */
+open type AllocatorNode { open let number: int; }
+/** Read a node without coupling the library to a chosen allocator. */
+open func allocatorRead(value: AllocatorNode): int { return value.number; }
+
+var drops: int = 0;
+/** Give each failed behavior check a distinct process status. */
+@cdecl("libc", "exit") extern func quit(code: i32): void;
+spec Maybe<T>: bool | T;
+/** Exercise a real unreachable cycle and ordinary ARC finalization. */
+type Ring {
+    let id: int;
+    var next: Maybe<Ring>;
+    func ~Ring() { if self.id > 0 { drops += 1; } }
+}
+/** Keep a managed field in inline value storage. */
+@value type Payload { let value: Ring; }
+/** Make exception cleanup observable. */
+func fail() { let payload = Payload { value: Ring { id: 1 } }; throw "allocator/fail"; }
+/** Check value/union ownership, unwind cleanup and cycle collection. */
+open func allocatorLifetimes() {
+    var caught = false;
+    try fail() catch e: string { caught = e == "allocator/fail"; }
+    if !caught { quit(51); }
+    if drops != 1 { quit(52); }
+    {
+        let left = Ring { id: 2 };
+        let right = Ring { id: 3 };
+        left.next = right;
+        right.next = left;
+    }
+    if drops != 3 { quit(53); }
+}

@@ -17,6 +17,7 @@ typedef struct BuildOptions {
     const char *sysroot;
     bool release;
     FengCliLtoMode lto;
+    FengCliAllocator allocator;
     bool keep_ir;
 } BuildOptions;
 
@@ -25,7 +26,7 @@ static void print_usage(const char *program, FILE *stream) {
     if (stream == stderr) fprintf(stream, "\n");
     fprintf(stream, "Usage:\n");
     fprintf(stream,
-            "  %s build [<path>] [--release] [--lto=off|thin] [--keep-ir] "
+            "  %s build [<path>] [--release] [--lto=off|thin] [--alloc=system|builtin] [--keep-ir] "
             "[--platform=<platform>]... [--sysroot=<path>]\n",
             program);
 }
@@ -70,6 +71,14 @@ static FengCliParseResult parse_args(const char *program,
         }
         if (strncmp(arg, "--lto=", 6U) == 0 || strcmp(arg, "--lto") == 0) {
             if (!feng_cli_parse_lto_option(arg, &out_options->lto)) {
+                print_usage(program, stderr);
+                build_options_dispose(out_options);
+                return FENG_CLI_PARSE_ERROR;
+            }
+            continue;
+        }
+        if (strncmp(arg, "--alloc=", 8U) == 0 || strcmp(arg, "--alloc") == 0) {
+            if (!feng_cli_parse_allocator_option(arg, &out_options->allocator)) {
                 print_usage(program, stderr);
                 build_options_dispose(out_options);
                 return FENG_CLI_PARSE_ERROR;
@@ -162,6 +171,7 @@ int feng_cli_project_build_main(const char *program, int argc, char **argv) {
                                              options.sysroot,
                                              options.release,
                                              options.lto,
+                                             options.allocator,
                                              options.keep_ir,
                                              &error);
         if (rc != 0) {

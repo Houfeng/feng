@@ -1385,14 +1385,16 @@ done:
 
 /* --- runtime artefact discovery ----------------------------------------- */
 
-static char *locate_runtime_lib(const char *program_path,
-                                const char *target_platform) {
+/* Resolve a target archive from the same relocatable installation as runtime. */
+static char *locate_target_library(const char *program_path,
+                                  const char *target_platform,
+                                  const char *name) {
     char *lib_subdir = path_join2("lib", target_platform);
     char *runtime_rel = NULL;
     char *candidate = NULL;
 
     if (lib_subdir != NULL) {
-        runtime_rel = path_join_static_library(lib_subdir, "feng_runtime");
+        runtime_rel = path_join_static_library(lib_subdir, name);
     }
     if (runtime_rel != NULL) {
         candidate = feng_cli_require_install_path(program_path,
@@ -2185,6 +2187,34 @@ static bool argv_push_env_flags(ArgVec *av, const char *flags) {
     return true;
 }
 
+/* Resolve explicit ASan flags in backend order, including comma lists and off. */
+static bool argv_uses_address_sanitizer(const ArgVec *av) {
+    bool enabled = false;
+    for (size_t i = 0U; i < av->count; ++i) {
+        const char *names = av->items[i];
+        bool enable;
+        if (strncmp(names, "-fsanitize=", 11U) == 0) {
+            names += 11U;
+            enable = true;
+        } else if (strncmp(names, "-fno-sanitize=", 14U) == 0) {
+            names += 14U;
+            enable = false;
+        } else {
+            continue;
+        }
+        while (*names != '\0') {
+            size_t length = strcspn(names, ",");
+            if ((length == 7U && strncmp(names, "address", length) == 0) ||
+                (!enable && length == 3U && strncmp(names, "all", length) == 0)) {
+                enabled = enable;
+            }
+            names += length;
+            if (*names == ',') ++names;
+        }
+    }
+    return enabled;
+}
+
 /* --- entry --------------------------------------------------------------- */
 
 int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
@@ -2197,6 +2227,9 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         return 2;
     }
     target_platform = opts->platform;
+    if (!feng_cli_validate_allocator_target(opts->allocator, opts->target)) {
+        return 1;
+    }
     if (!feng_platform_is_valid(target_platform)) {
         fprintf(stderr, "error: invalid target platform: %s\n", target_platform);
         return 1;
@@ -2229,7 +2262,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     size_t bundle_extlib_static_lib_count = 0U;
     size_t bundle_extlib_satisfied_lib_count = 0U;
     if (opts->target == FENG_COMPILE_TARGET_BIN) {
-        runtime_lib = locate_runtime_lib(opts->program_path, target_platform);
+        runtime_lib = locate_target_library(opts->program_path, target_platform, "feng_runtime");
         if (runtime_lib == NULL) {
             char *runtime_basename = feng_platform_static_library_file_name("feng_runtime");
 
@@ -2337,6 +2370,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     char *include_flag = NULL;
     char *object_path = NULL;
     char *lto_object_dir = NULL;
+    char *allocator_lib = NULL;
     char *cc = NULL;
     char *ar = NULL;
     char *ranlib = NULL;
@@ -2346,6 +2380,16 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     bool ok = true;
     bool host_tool_failed = false;
     const char *failed_tool_description = NULL;
+
+    if (opts->allocator == FENG_CLI_ALLOCATOR_BUILTIN) {
+        allocator_lib = locate_target_library(opts->program_path, target_platform, "mimalloc");
+        if (allocator_lib == NULL) {
+            fprintf(stderr, "error: builtin allocator requires <feng-exe>/../lib/%s/libmimalloc.a\n",
+                    target_platform);
+            rc = 1;
+            goto cleanup;
+        }
+    }
 
     cc = locate_host_c_compiler(opts->program_path, &tool_error);
     if (cc == NULL) {
@@ -2524,6 +2568,17 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
             ok = argv_push(&av, flag);
             free(flag);
         }
+        /* Extract the override even if a dependency defines allocator symbols:
+         * conflicting definitions must fail, not silently select another heap. */
+        if (ok && allocator_lib != NULL) {
+            if (feng_platform_is_macos(target_platform)) {
+                ok = argv_push(&av, "-Xlinker") && argv_push(&av, "-force_load") &&
+                     argv_push(&av, "-Xlinker") && argv_push(&av, allocator_lib);
+            } else {
+                ok = argv_push(&av, "-Wl,--whole-archive") && argv_push(&av, allocator_lib) &&
+                     argv_push(&av, "-Wl,--no-whole-archive");
+            }
+        }
         if (ok && opts->release &&
             !argv_push_release_executable_flags(&av, target_platform)) {
             ok = false;
@@ -2533,6 +2588,9 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         if (ok && !argv_push(&av, opts->out_path)) { ok = false; }
         if (!ok) {
             fprintf(stderr, "error: out of memory building cc argv\n");
+            rc = 1;
+        } else if (allocator_lib != NULL && argv_uses_address_sanitizer(&av)) {
+            fprintf(stderr, "error: --alloc=builtin is incompatible with AddressSanitizer; use --alloc=system\n");
             rc = 1;
         } else {
             failed_tool_description = "C compiler";
@@ -2631,6 +2689,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
 
 cleanup:
     argv_free(&av);
+    free(allocator_lib);
     remove_tree(lto_object_dir);
     free(lto_object_dir);
     for (size_t i = 0; i < lib_count; ++i) free(libs[i]);

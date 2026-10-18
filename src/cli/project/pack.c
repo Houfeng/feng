@@ -674,6 +674,7 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
                                              options.sysroot,
                                              true,
                                              options.lto,
+                                             FENG_CLI_ALLOCATOR_UNSPECIFIED,
                                              false,
                                              &project_error);
         if (rc != 0) {

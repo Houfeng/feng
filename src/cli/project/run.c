@@ -17,7 +17,7 @@
 static void print_usage(const char *program, FILE *stream) {
     if (stream == stderr) fprintf(stream, "\n");
     fprintf(stream, "Usage:\n");
-    fprintf(stream, "  %s run [<path>] [--release] [--lto=off|thin] [--keep-ir] [-- <program-args>...]\n", program);
+    fprintf(stream, "  %s run [<path>] [--release] [--lto=off|thin] [--alloc=system|builtin] [--keep-ir] [-- <program-args>...]\n", program);
 }
 
 /* Parse build options without interpreting arguments after `--`. */
@@ -27,6 +27,7 @@ static FengCliParseResult parse_args(const char *program,
                                      const char **out_path,
                                      bool *out_release,
                                      FengCliLtoMode *out_lto,
+                                     FengCliAllocator *out_allocator,
                                      bool *out_keep_ir,
                                      int *out_program_argc,
                                      char ***out_program_argv) {
@@ -35,6 +36,7 @@ static FengCliParseResult parse_args(const char *program,
     *out_path = NULL;
     *out_release = false;
     *out_lto = FENG_CLI_LTO_UNSPECIFIED;
+    *out_allocator = FENG_CLI_ALLOCATOR_UNSPECIFIED;
     *out_keep_ir = false;
     *out_program_argc = 0;
     *out_program_argv = NULL;
@@ -57,6 +59,13 @@ static FengCliParseResult parse_args(const char *program,
         }
         if (strncmp(arg, "--lto=", 6U) == 0 || strcmp(arg, "--lto") == 0) {
             if (!feng_cli_parse_lto_option(arg, out_lto)) {
+                print_usage(program, stderr);
+                return FENG_CLI_PARSE_ERROR;
+            }
+            continue;
+        }
+        if (strncmp(arg, "--alloc=", 8U) == 0 || strcmp(arg, "--alloc") == 0) {
+            if (!feng_cli_parse_allocator_option(arg, out_allocator)) {
                 print_usage(program, stderr);
                 return FENG_CLI_PARSE_ERROR;
             }
@@ -129,6 +138,7 @@ int feng_cli_project_run_main(const char *program, int argc, char **argv) {
     const char *path_arg = NULL;
     bool release = false;
     FengCliLtoMode lto = FENG_CLI_LTO_UNSPECIFIED;
+    FengCliAllocator allocator = FENG_CLI_ALLOCATOR_UNSPECIFIED;
     bool keep_ir = false;
     int program_argc = 0;
     char **program_argv = NULL;
@@ -139,7 +149,7 @@ int feng_cli_project_run_main(const char *program, int argc, char **argv) {
     char *binary_path = NULL;
     int rc;
 
-    parse_result = parse_args(program, argc, argv, &path_arg, &release, &lto, &keep_ir, &program_argc, &program_argv);
+    parse_result = parse_args(program, argc, argv, &path_arg, &release, &lto, &allocator, &keep_ir, &program_argc, &program_argv);
     if (parse_result != FENG_CLI_PARSE_OK) {
         return parse_result == FENG_CLI_PARSE_HELP ? 0 : 1;
     }
@@ -171,6 +181,7 @@ int feng_cli_project_run_main(const char *program, int argc, char **argv) {
                                          NULL,
                                          release,
                                          lto,
+                                         allocator,
                                          keep_ir,
                                          &error);
     if (rc == 0) {

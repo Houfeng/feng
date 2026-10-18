@@ -55,6 +55,7 @@ typedef struct FengCliDriverOptions {
     size_t link_lib_count;
     bool release;
     FengCliLtoMode lto;
+    FengCliAllocator allocator;
     bool keep_intermediate;
 } FengCliDriverOptions;
 

@@ -1,0 +1,19 @@
+module allocator_app;
+import allocator_dep;
+
+/** Check the actual heap owner of runtime array data across the C ABI. */
+@cdecl("libc", "allocator_native_check")
+extern func nativeCheck(values: int*, builtin: i32): i32;
+
+/** The argument selects the expected test outcome, not the allocator itself. */
+func main(args: string[]) {
+    let values: int[] = [3, 7];
+    let holder = AllocatorNode { number: 17 };
+    let text = "allocator";
+    let result = allocatorRead(holder);
+    var expected: i32 = 0;
+    if args[1] == "builtin" { expected = 1; }
+    if nativeCheck(&values, expected) != 1 { throw "allocator/native"; }
+    if result != 17 || text != "allocator" { throw "allocator/values"; } // breakpoint: allocator_ready
+    allocatorLifetimes();
+}

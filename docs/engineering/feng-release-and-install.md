@@ -74,15 +74,21 @@ feng-<version>-<platform>/
 │   └── feng_runtime_contract.inc
 ├── lib/                          # 必须：运行时静态库（按完整目标平台分子目录）
 │   ├── macos-arm64/
-│   │   └── libfeng_runtime.a
+│   │   ├── libfeng_runtime.a
+│   │   └── libmimalloc.a
 │   ├── linux-x64-gnu/
-│   │   └── libfeng_runtime.a
+│   │   ├── libfeng_runtime.a
+│   │   └── libmimalloc.a
 │   ├── linux-x64-musl/
-│   │   └── libfeng_runtime.a
+│   │   ├── libfeng_runtime.a
+│   │   └── libmimalloc.a
 │   ├── linux-arm64-gnu/
-│   │   └── libfeng_runtime.a
+│   │   ├── libfeng_runtime.a
+│   │   └── libmimalloc.a
 │   └── linux-arm64-musl/
-│       └── libfeng_runtime.a
+│       ├── libfeng_runtime.a
+│       └── libmimalloc.a
+├── licenses/mimalloc/LICENSE      # mimalloc 上游许可
 ├── pkg/                          # 必须：精确版本随附包，可为空
 │   └── <name>-<version>.fb
 ├── toolchain/                    # 必须：精简 LLVM 工具链 + 交叉编译 sysroot
@@ -146,6 +152,21 @@ feng-<version>-<platform>/
 - `feng` 按自身位置查找 `../lib/`、`../include/` 和 `../toolchain/llvm/bin/`，不使用 `FENG_HOME` 或 `FENG_TOOLCHAIN`。查找顺序见 [feng-build.md](../specifications/feng-build.md) 和 [feng-cli.md](../specifications/feng-cli.md)。
 
 ## 5 toolchain 形态
+
+每份发行包还包含五个目标的独立 `lib/<platform>/libmimalloc.a`，不合并进 runtime。
+源码版本保持仓库的 mimalloc 2.1.2；随包许可为 `licenses/mimalloc/LICENSE`。
+维护入口 `scripts/build_mimalloc.sh` 在 macOS 原生构建，在 Linux 通过 `--libc=gnu|musl`
+选择当前架构的目标 sysroot。脚本使用 bundled host Clang/llvm-ar，采用上游 `src/static.c`
+和 `MI_MALLOC_OVERRIDE`，以 `-O3 -DNDEBUG -fPIC` 生成原生对象，不启用 LTO；macOS
+启用上游 malloc zone，最低部署版本固定为现有发行基线 macOS 26.0，避免维护机器
+升级 SDK 后把库的最低系统版本意外提高到 27。临时目录在 `temp/`，验证成功后才安装到
+`extlib/<platform>/libmimalloc.a`，失败保留旧库。正常 make/发行流程不现场构建此库。
+本地 make 复用 `RUNTIME_PLATFORMS`，仅为当前构建环境负责的 runtime 目标建立
+mimalloc 软链：macOS 为 `macos-arm64`，Linux 为当前架构的 GNU 和 musl，见 §8.4。
+软链位于 `build/lib/<platform>/libmimalloc.a`，相对目标为
+`../../../extlib/<platform>/libmimalloc.a`；缺失输入不触发下载或构建，
+不影响 system 编译。发行组件沿 runtime 的目标归属复制真实文件，组装时验证
+manifest、目标架构及内容一致性，禁止把开发软链带入发行包。
 
 分发包内 `toolchain/` 包含：
 
@@ -223,10 +244,10 @@ macOS 任务生成 `macos-arm64` runtime；两个 Linux 任务分别使用同架
 1. checkout 仓库但不拉取 Git LFS 对象
 2. 安装当前 host 的必要构建依赖和 GitHub CLI；CI 不依赖 Python 可执行程序
 3. 调用 `scripts/toolchain-prebuilt-fetch.sh` 恢复完整 `toolchain/`
-4. 直接使用仓库 `extlib/<platform>/libfeng_unwind.a` 中已经预构建并校验的五个平台产物；CI 不重复执行 `scripts/build_libunwind.sh`
+4. 直接使用仓库 `extlib/<platform>/` 中预构建的 libunwind 和 mimalloc；CI 不重复执行维护构建脚本，mimalloc 布局与验证见 §5
 5. 执行当前 host 全量 `make test`，生成 `build/bin/feng`、公共 `build/include/` 及 §6.2 分配给当前任务的一份或两份 runtime；三个任务合计产出五份最终 `libfeng_runtime.a`，但不向 Makefile 增加用于交叉构建 Feng 可执行文件自身的 `TARGET_PLATFORM`
 6. 仅在版本 tag 创建或手动试发时校验 `feng` 的格式和 CPU 架构，并逐一校验 runtime 归档成员的格式和 CPU 架构
-7. 仅在版本 tag 创建或手动试发时生成并上传 `release-component-<host-platform>`。构件解压后的固定结构为 `<host-platform>/bin/feng`、`<host-platform>/lib/<runtime-platform>/libfeng_runtime.a`、`<host-platform>/include/` 和 `<host-platform>/SHA256SUMS`；`SHA256SUMS` 记录上述全部文件的 SHA-256。macOS 构件包含一份 runtime，两个 Linux 构件分别包含同架构的 GNU 与 musl runtime。
+7. 仅在版本 tag 创建或手动试发时生成并上传 `release-component-<host-platform>`。构件解压后的固定结构为 `<host-platform>/bin/feng`、`<host-platform>/lib/<runtime-platform>/libfeng_runtime.a`、`<host-platform>/include/` 和 `<host-platform>/SHA256SUMS`；`SHA256SUMS` 记录上述全部文件及同目标 `libmimalloc.a`、`licenses/mimalloc/LICENSE` 的 SHA-256。macOS 构件包含一份 runtime，两个 Linux 构件分别包含同架构的 GNU 与 musl runtime。
 
 LSP / DAP 行为由第 5 步 `make test` 中的原生用例验证，干净安装验收不重复执行协议测试，也不为此引入 Python 可执行程序。Linux LLVM 内随包分发的私有 `libpython3.14.so.1.0` 仅用于 LLDB 初始化，不是 CI Python 依赖。
 
