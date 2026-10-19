@@ -20,9 +20,12 @@ feng() { env -u FENG_CC -u FENG_CC_FLAGS "${ROOT}/build/bin/feng" "$@"; }
 
 # Mach-O needs explicit permission for the fixture's optional weak observation.
 # Permit only this query to be absent; builtin must still pass real heap checks.
+# Recursive library compiles may ignore this link-only argument; diagnostics
+# for every other argument remain enabled.
 native_feng() {
   if [[ "${HOST}" == macos-* ]]; then
-    env -u FENG_CC FENG_CC_FLAGS=-Wl,-U,_mi_is_in_heap_region "${ROOT}/build/bin/feng" "$@"
+    env -u FENG_CC FENG_CC_FLAGS='--start-no-unused-arguments -Wl,-U,_mi_is_in_heap_region --end-no-unused-arguments' \
+      "${ROOT}/build/bin/feng" "$@"
   else
     feng "$@"
   fi
@@ -67,7 +70,7 @@ case "$(uname -s)" in
     SDK="$(xcrun --sdk macosx --show-sdk-path)"
     FLAGS=(-isysroot "${SDK}")
     SHARED="${WORK}/liballocator_shared.dylib"
-    "${LLVM}/clang" "${FLAGS[@]}" -dynamiclib "${FIXTURE}/shared.c" -Wl,-install_name,"${SHARED}" -o "${SHARED}"
+    "${LLVM}/clang" "${FLAGS[@]}" -fuse-ld=lld -dynamiclib "${FIXTURE}/shared.c" -Wl,-install_name,"${SHARED}" -o "${SHARED}"
     SHARED_FLAGS=("${SHARED}") ;;
   Linux)
     HOST="linux-${ARCH}-gnu"
@@ -186,10 +189,8 @@ grep -F 'builtin allocator requires' "${WORK}/missing.log" >/dev/null
 printf 'invalid archive\n' >"${library}"
 if env -u FENG_CC -u FENG_CC_FLAGS "${compiler}" "${WORK}/empty.ff" --release --alloc=builtin "--out=${WORK}/broken" >"${WORK}/broken.log" 2>&1; then die 'broken builtin accepted'; fi
 
-# Wrong-format and competing allocators must fail rather than bind libc silently.
-if [[ "${HOST}" == macos-* ]]; then wrong=linux-arm64-gnu; else wrong=macos-arm64; fi
-cp "${ROOT}/extlib/${wrong}/libmimalloc.a" "${library}"
-if env -u FENG_CC -u FENG_CC_FLAGS "${compiler}" "${WORK}/empty.ff" --release --alloc=builtin "--out=${WORK}/wrong-target" >"${WORK}/wrong.log" 2>&1; then die 'wrong-target builtin accepted'; fi
+# Target validation belongs to allocator_release.sh; competing allocator
+# definitions must still fail rather than bind libc silently.
 "${LLVM}/clang" "${FLAGS[@]}" -O2 -c "${FIXTURE}/conflict.c" -o "${WORK}/conflict.o"
 reject 'duplicate symbol' "${WORK}/empty.ff" --release --alloc=builtin "--lib=${WORK}/conflict.o" "--out=${WORK}/conflict"
 

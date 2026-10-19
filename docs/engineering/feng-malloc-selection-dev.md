@@ -103,8 +103,8 @@ feng run --alloc=system -- <program-args>
 - `build --platform=...` 为每个目标选择对应库。`run` 在 `--` 后的参数仍原样交给程序。
 - `system` 表示 Feng 不主动引入 mimalloc；它不撤销用户通过其他链接输入自行提供的
   分配器。显式 builtin 也不能保证覆盖原生依赖自行封装或私有绑定的分配器。
-- builtin 库缺失、损坏或目标不符时明确失败，禁止静默退回 system。system 路径
-  不查找、验证或链接 mimalloc，不受其文件缺失影响。
+- builtin 库缺失、损坏及错误目标平台的处理按 [CLI 规范 §2.4](../specifications/feng-cli.md#24-顶层直编补充选项)。
+  system 路径不查找、验证或链接 mimalloc，不受其文件缺失影响。
 
 不新增 `feng.fm` 字段、环境变量或用户程序中的切换 API。
 
@@ -329,6 +329,23 @@ macOS 本轮完整专项运行在前置 `asan-disabled/bin/empty` 启动时被 S
 终止，尚未执行到原生夹具。按人工安排，macOS 的完整 allocator 专项和全量回归
 由开发者稍后手工验证；不以此前临时对照程序通过代替完整测试结果。
 
+2026-10-19 的 macOS 手工回归继续发现两项测试警告：共享库夹具使用裁剪后的 Clang
+调用 Apple ld，后者查找未随包分发的 `libLTO.dylib`；原生夹具的 `-U` 链接参数经
+`FENG_CC_FLAGS` 传到依赖库的纯编译阶段，触发 unused-argument 警告。修复仅让共享库
+夹具显式使用随包 LLD，并用 Clang 的 `--start-no-unused-arguments` /
+`--end-no-unused-arguments` 包围这一个测试链接参数，允许纯编译阶段忽略它，其他参数
+诊断保持有效。维护脚本补齐执行权限，并在发行测试中验证可直接调用。
+人工决定保留链接器对错误平台库的既有处理，见 CLI 规范 §2.4；因此移除编译阶段要求
+错误平台库必须失败的反例，保留发行阶段的目标平台校验及其拒绝用例。编译器、runtime
+和生产链接参数均不修改。
+本轮 Linux ARM64 容器完整 `make test` 通过，退出码为 0；两阶段 std 均为 610/610、
+FCTS 均为 1709/1709，allocator 完整矩阵、build/run、发行校验及 DAP 均通过。
+macOS 的 Debug/Release × LTO off/thin × system/builtin 八组项目构建（含依赖库）
+均在 `-Werror` 下通过；共享库链接无上述警告，局部标记外的无用参数仍会被诊断。
+macOS 完整执行回归尚未完成：发行专项在复制后编译器的版本检查处失败，单独启动
+同内容副本复现 SIGKILL (9)、退出码 137，原位置的 `--version` 正常；后续仍由开发者
+手工验证。临时日志位于 `temp/allocator-test-fix-20261019/`。
+
 已确认的实现和证据：
 
 - 五个平台的 archive 均由 `scripts/build_mimalloc.sh` 生成，每份仅含原生
@@ -339,7 +356,7 @@ macOS 本轮完整专项运行在前置 `asan-disabled/bin/empty` 启动时被 S
 - Linux ARM64 的 GNU/musl、Debug/Release、LTO off/thin、system/builtin 矩阵已通过。
   测试从 Feng 数组、独立 C 库及 C++ 发起分配，通过弱引用的上游归属查询确认实际
   堆归属；覆盖跨线程及跨库释放、对齐、零初始化、溢出和 realloc 失败后的旧块。
-- 独立用例已验证库依赖复用、build/run 切换、安装搬移、缺失/损坏/错误格式失败、
+- 独立用例已验证库依赖复用、build/run 切换、安装搬移、缺失/损坏失败、发行阶段拒绝错误目标库、
   冲突分配器报错、本地软链及维护失败保留原制品；现有 FCTS 已用 builtin 运行通过。
 - DAP 的 system/builtin × LTO off/thin 四组独立用例已通过，检查源断点、数组逻辑元素、
   对象字段和正常退出。Sanitizer 阶段另以 system × LTO off/thin 验证调试行为，

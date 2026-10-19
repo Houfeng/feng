@@ -143,7 +143,8 @@ feng dap [--stdio]
 `builtin` 选择随包的目标平台 mimalloc 静态库；`system` 不引入或检查该库。
 该选择与 Debug/Release、LTO 无关，只传给当前可执行项目，不传给递归构建的 lib 依赖，
 也不写入包元数据。`pack` 不支持此选项，沿用未知选项报错。`run --` 后的参数仍传给程序。
-库缺失、损坏或目标不匹配时 builtin 构建失败，不回退 system。
+库缺失或损坏时 builtin 构建失败，不回退 system。库的目标平台由维护与发行流程校验；
+编译阶段不额外校验目标平台，沿用链接器对错误平台库的既有处理。
 builtin 本轮不支持 AddressSanitizer；`FENG_CC_FLAGS` 中有效启用 `-fsanitize=address`
 时明确报错，按参数顺序识别逗号列表及 `-fno-sanitize=address|all`。
 system 的 ASan 行为保持不变，builtin 支持普通构建和 UBSan。

@@ -114,6 +114,7 @@ check_layout_platforms linux-arm64-gnu Linux aarch64 linux-arm64-gnu linux-arm64
 # A failing native maintenance build must preserve the previous archive.
 mkdir -p "${LAYOUT}/scripts" "${LAYOUT}/third_party/mimalloc/src" "${LAYOUT}/toolchain/llvm/${HOST}/bin"
 cp "${ROOT}/scripts/build_mimalloc.sh" "${LAYOUT}/scripts/"
+"${LAYOUT}/scripts/build_mimalloc.sh" --help >/dev/null
 cp "${ROOT}/third_party/mimalloc/LICENSE" "${LAYOUT}/third_party/mimalloc/"
 cp "${ROOT}/third_party/mimalloc/src/static.c" "${LAYOUT}/third_party/mimalloc/src/"
 for tool in clang llvm-ar; do
@@ -121,7 +122,7 @@ for tool in clang llvm-ar; do
   chmod +x "${LAYOUT}/toolchain/llvm/${HOST}/bin/${tool}"
 done
 # Keep the command array nonempty for macOS Bash 3.2 with nounset enabled.
-maintenance_command=(bash "${LAYOUT}/scripts/build_mimalloc.sh")
+maintenance_command=("${LAYOUT}/scripts/build_mimalloc.sh")
 if [[ "${HOST}" == linux-* ]]; then
   mkdir -p "${LAYOUT}/toolchain/sysroot/${HOST}/usr/include"
   maintenance_command+=(--libc=gnu)
