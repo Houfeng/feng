@@ -346,6 +346,17 @@ macOS 完整执行回归尚未完成：发行专项在复制后编译器的版�
 同内容副本复现 SIGKILL (9)、退出码 137，原位置的 `--version` 正常；后续仍由开发者
 手工验证。临时日志位于 `temp/allocator-test-fix-20261019/`。
 
+macOS 普通测试阶段的 UBSan 用例单独使用本机 Clang，以取得未随裁剪工具链分发的
+Sanitizer 库。该调用缺少 `test-sanitize` 目标中设置的 LLD 搜索路径，本机 Clang
+找不到 LLD 时会在处理 `-fuse-ld=lld` 时失败。修复仅对这次 macOS UBSan 编译设置
+`COMPILER_PATH`，优先查找仓库的随包 LLD 并保留原有搜索路径；Linux 调用及现有的
+正常执行、整数溢出诊断断言保持不变，不修改编译器、runtime 或正式构建参数。
+同一 UBSan 输入在本机修复前复现上述错误，修复后编译和链接通过且无警告。
+Linux ARM64 容器完整 `make test` 通过，退出码为 0；两阶段 std 均为 610/610、
+FCTS 均为 1709/1709，allocator 矩阵、UBSan、发行校验及 DAP 全部通过。
+macOS 本轮仅验证编译和链接，完整执行回归仍按人工安排由开发者完成；临时日志位于
+`temp/allocator-ubsan-linker-20261019/`。
+
 已确认的实现和证据：
 
 - 五个平台的 archive 均由 `scripts/build_mimalloc.sh` 生成，每份仅含原生

@@ -209,6 +209,11 @@ fi
 # overflow diagnostic must remain effective with builtin selected by Feng.
 sanitizer_cc="$(command -v clang)"
 sanitizer_flags='-fsanitize=undefined -fno-sanitize-recover=all'
+sanitizer_env=(env)
+if [[ "${HOST}" == macos-* ]]; then
+  # Normal tests also need bundled LLD when using the host sanitizer compiler.
+  sanitizer_env+=("COMPILER_PATH=${LLVM}${COMPILER_PATH:+:${COMPILER_PATH}}")
+fi
 "${sanitizer_cc}" "${FLAGS[@]}" -O1 -fsanitize=undefined -fno-sanitize-recover=all \
   -c "${FIXTURE}/ubsan.c" -o "${WORK}/ubsan.o"
 cat >"${WORK}/ubsan.ff" <<'FF'
@@ -221,7 +226,7 @@ func main(args: string[]) {
     if check(fail) != 1 { throw "allocator/ubsan"; }
 }
 FF
-FENG_CC="${sanitizer_cc}" FENG_CC_FLAGS="${sanitizer_flags}" "${ROOT}/build/bin/feng" \
+"${sanitizer_env[@]}" FENG_CC="${sanitizer_cc}" FENG_CC_FLAGS="${sanitizer_flags}" "${ROOT}/build/bin/feng" \
   "${WORK}/ubsan.ff" --alloc=builtin --release "--lib=${WORK}/ubsan.o" "--out=${WORK}/ubsan"
 "${WORK}/ubsan/bin/ubsan" pass
 if "${WORK}/ubsan/bin/ubsan" fail >"${WORK}/ubsan.log" 2>&1; then die 'UBSan failed to diagnose signed overflow'; fi
