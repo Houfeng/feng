@@ -1,0 +1,281 @@
+{
+  "id": "2026-10-19T05-55-40-284Z-allocator",
+  "started_at": "2026-10-19T05:55:40.285Z",
+  "baseline": "build/benchmarks/runs/2026-10-19T05-47-30-350Z",
+  "host": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M4 Pro",
+    "release": "27.0.0",
+    "load_average": [
+      2.56103515625,
+      3.68115234375,
+      3.93017578125
+    ]
+  },
+  "profile": "standard",
+  "warmup": 2,
+  "rounds": 10,
+  "allocators": [
+    "system",
+    "builtin"
+  ],
+  "cases": [
+    "nbody",
+    "binary-trees",
+    "text-scan",
+    "fannkuch-redux",
+    "spectral-norm"
+  ],
+  "inputs": {
+    "nbody": {
+      "args": [
+        "20000000"
+      ],
+      "expected": [
+        -0.16907516382852447,
+        -0.1690316645525591
+      ],
+      "units": 20000000,
+      "unit": "steps/s",
+      "tolerance": 1e-8,
+      "size": 20000000
+    },
+    "binary-trees": {
+      "args": [
+        "16"
+      ],
+      "expected": [
+        262143,
+        4,
+        65536,
+        2031616,
+        6,
+        16384,
+        2080768,
+        8,
+        4096,
+        2093056,
+        10,
+        1024,
+        2096128,
+        12,
+        256,
+        2096896,
+        14,
+        64,
+        2097088,
+        16,
+        16,
+        2097136,
+        131071
+      ],
+      "units": 14985902,
+      "unit": "nodes/s",
+      "tolerance": 0,
+      "size": 16
+    },
+    "text-scan": {
+      "args": [
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/runs/2026-10-19T05-47-30-350Z/text-32000000.txt"
+      ],
+      "expected": [
+        32000000,
+        10666667,
+        10666666,
+        159984000000
+      ],
+      "units": 256000000,
+      "unit": "bytes/s",
+      "tolerance": 0,
+      "sha256": "9fac96966a4f9f1c7cb1584d94adbf010145c8d183182e05408d679c3a4d524c",
+      "size": 32000000
+    },
+    "fannkuch-redux": {
+      "args": [
+        "11"
+      ],
+      "expected": [
+        556355,
+        51
+      ],
+      "units": 39916800,
+      "unit": "permutations/s",
+      "tolerance": 0,
+      "size": 11
+    },
+    "spectral-norm": {
+      "args": [
+        "2000"
+      ],
+      "expected": [
+        1.274224152228617
+      ],
+      "units": 160000000,
+      "unit": "elements/s",
+      "tolerance": 1e-9,
+      "size": 2000
+    }
+  },
+  "artifacts": {
+    "nbody": {
+      "system": {
+        "command": "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/nbody-feng",
+        "sha256": "733c2cc0298822799d27ffca7a44480941162bf5aba5071a7c208fc9c13eb79f"
+      },
+      "builtin": {
+        "command": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/bin/nbody-builtin",
+        "sha256": "faac790dedd3be5b460a84b6892b1937cfc2134400c59cb89737d530fcba4d2f"
+      }
+    },
+    "binary-trees": {
+      "system": {
+        "command": "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/binary-trees-feng",
+        "sha256": "c7302ee9be9d54adca9ed813e12bc875bf32e9802ff89947f23d53038b9a986b"
+      },
+      "builtin": {
+        "command": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/bin/binary-trees-builtin",
+        "sha256": "b331f915913fb90a4fd235b72aa375300de17336f896051afb8d2442ea00a83f"
+      }
+    },
+    "text-scan": {
+      "system": {
+        "command": "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/text-scan-feng",
+        "sha256": "35d1d2af718712d905778353d66300e8a86ec3c4cb34f5ba84ee066f418c2bcf"
+      },
+      "builtin": {
+        "command": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/bin/text-scan-builtin",
+        "sha256": "27e054cc4a054afb877394756bfe450167f33e7e74308f09fde39619e0b52df8"
+      }
+    },
+    "fannkuch-redux": {
+      "system": {
+        "command": "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/fannkuch-redux-feng",
+        "sha256": "66baa0d07dbb3c82b395c0dac4b4e5d604f84d3445f42a58463d9d4133f675b1"
+      },
+      "builtin": {
+        "command": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/bin/fannkuch-redux-builtin",
+        "sha256": "197fedad8bfef3545038cf05d4242105d9cb554654c9458b54f3844a78f52110"
+      }
+    },
+    "spectral-norm": {
+      "system": {
+        "command": "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/spectral-norm-feng",
+        "sha256": "252932c2685e05a77de8ea0848431a137dce743b0c3f7d3e98a5a813704fb35d"
+      },
+      "builtin": {
+        "command": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/bin/spectral-norm-builtin",
+        "sha256": "ecec824a01324d66bb94606166d9a6fa0a32c38523a44d617fcecf9017e985d6"
+      }
+    }
+  },
+  "commands": [
+    {
+      "command": "/Users/houfeng/Repositories/feng-language/build/bin/feng",
+      "args": [
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/nbody/feng/main.ff",
+        "--target=bin",
+        "--release",
+        "--platform=macos-arm64",
+        "--pkg=/Users/houfeng/Repositories/feng-language/std/std/build/pkg/std-0.1.0.fb",
+        "--out=/Users/houfeng/Repositories/feng-language/build/benchmarks/feng/nbody",
+        "--name=nbody",
+        "--alloc=builtin"
+      ],
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "command": "/Users/houfeng/Repositories/feng-language/build/bin/feng",
+      "args": [
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/binary-trees/feng/main.ff",
+        "--target=bin",
+        "--release",
+        "--platform=macos-arm64",
+        "--pkg=/Users/houfeng/Repositories/feng-language/std/std/build/pkg/std-0.1.0.fb",
+        "--out=/Users/houfeng/Repositories/feng-language/build/benchmarks/feng/binary-trees",
+        "--name=binary-trees",
+        "--alloc=builtin"
+      ],
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "command": "/Users/houfeng/Repositories/feng-language/build/bin/feng",
+      "args": [
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/text-scan/feng/main.ff",
+        "--target=bin",
+        "--release",
+        "--platform=macos-arm64",
+        "--pkg=/Users/houfeng/Repositories/feng-language/std/std/build/pkg/std-0.1.0.fb",
+        "--out=/Users/houfeng/Repositories/feng-language/build/benchmarks/feng/text-scan",
+        "--name=text-scan",
+        "--alloc=builtin"
+      ],
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "command": "/Users/houfeng/Repositories/feng-language/build/bin/feng",
+      "args": [
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/fannkuch-redux/feng/main.ff",
+        "--target=bin",
+        "--release",
+        "--platform=macos-arm64",
+        "--pkg=/Users/houfeng/Repositories/feng-language/std/std/build/pkg/std-0.1.0.fb",
+        "--out=/Users/houfeng/Repositories/feng-language/build/benchmarks/feng/fannkuch-redux",
+        "--name=fannkuch-redux",
+        "--alloc=builtin"
+      ],
+      "exit_code": 0,
+      "signal": null
+    },
+    {
+      "command": "/Users/houfeng/Repositories/feng-language/build/bin/feng",
+      "args": [
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/spectral-norm/feng/main.ff",
+        "--target=bin",
+        "--release",
+        "--platform=macos-arm64",
+        "--pkg=/Users/houfeng/Repositories/feng-language/std/std/build/pkg/std-0.1.0.fb",
+        "--out=/Users/houfeng/Repositories/feng-language/build/benchmarks/feng/spectral-norm",
+        "--name=spectral-norm",
+        "--alloc=builtin"
+      ],
+      "exit_code": 0,
+      "signal": null
+    }
+  ],
+  "identities": [
+    {
+      "path": "/Users/houfeng/Repositories/feng-language/build/lib/macos-arm64/libfeng_runtime.a",
+      "sha256": "58eb31a1c6d2f1a675290ec89de1fc7f8c8efeac23a5d3d68dad0d3d84b27814"
+    },
+    {
+      "path": "/Users/houfeng/Repositories/feng-language/build/include/feng_runtime.h",
+      "sha256": "511742abd1a2cd270d743051d8240b05b9a2eae979bb65f39aa7a3bedd26b759"
+    },
+    {
+      "path": "/Users/houfeng/Repositories/feng-language/build/toolchain/llvm-c-eh/lib/llvm_c_eh.dylib",
+      "sha256": "77b4189cb56f07dfdb3399ca6dfb13eb0921c6bfb9812a8584a4ab269f11df67"
+    },
+    {
+      "path": "/Users/houfeng/Repositories/feng-language/std/std/build/pkg/std-0.1.0.fb",
+      "sha256": "e96053fafc324a72afa9b0c5ec6d3133fdd1d190411cb097fc07e1cab69eef86"
+    },
+    {
+      "path": "/Users/houfeng/Repositories/feng-language/build/bin/feng",
+      "sha256": "36b79f303dcc7258905242d344c1f5905b26a6ce4b0351e7c56514ddbe4462c7"
+    },
+    {
+      "path": "/Users/houfeng/Repositories/feng-language/build/lib/macos-arm64/libmimalloc.a",
+      "sha256": "4f24fb36e15d8a5f4c5b17d7ad55cfd0ddb91bb3c2c4ecaa118b4ffe9bdd9ba9"
+    }
+  ],
+  "completed_at": "2026-10-19T05:56:54.123Z",
+  "final_load_average": [
+    3.7861328125,
+    3.88134765625,
+    3.9853515625
+  ]
+}

@@ -1,0 +1,1073 @@
+{
+  "count": 46,
+  "results": [
+    {
+      "case": "nbody",
+      "allocator": "system",
+      "input": "0",
+      "invalid": false,
+      "expected": [
+        -0.16907516382852447,
+        -0.16907516382852447
+      ],
+      "wall_ns": 14587000,
+      "peak_rss_bytes": 1949696,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "-0.16907516382852447 -0.16907516382852447\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/nbody-0-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/nbody-0-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/nbody-0-system.stderr"
+      }
+    },
+    {
+      "case": "nbody",
+      "allocator": "builtin",
+      "input": "0",
+      "invalid": false,
+      "expected": [
+        -0.16907516382852447,
+        -0.16907516382852447
+      ],
+      "wall_ns": 431456000,
+      "peak_rss_bytes": 2277376,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "-0.16907516382852447 -0.16907516382852447\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/nbody-0-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/nbody-0-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/nbody-0-builtin.stderr"
+      }
+    },
+    {
+      "case": "nbody",
+      "allocator": "system",
+      "input": "1",
+      "invalid": false,
+      "expected": [
+        -0.16907516382852447,
+        -0.16907495402506745
+      ],
+      "wall_ns": 20681000,
+      "peak_rss_bytes": 1933312,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "-0.16907516382852447 -0.16907495402506745\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/nbody-1-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/nbody-1-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/nbody-1-system.stderr"
+      }
+    },
+    {
+      "case": "nbody",
+      "allocator": "builtin",
+      "input": "1",
+      "invalid": false,
+      "expected": [
+        -0.16907516382852447,
+        -0.16907495402506745
+      ],
+      "wall_ns": 19468000,
+      "peak_rss_bytes": 2277376,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "-0.16907516382852447 -0.16907495402506745\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/nbody-1-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/nbody-1-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/nbody-1-builtin.stderr"
+      }
+    },
+    {
+      "case": "nbody",
+      "allocator": "system",
+      "input": "1000",
+      "invalid": false,
+      "expected": [
+        -0.16907516382852447,
+        -0.169087605234606
+      ],
+      "wall_ns": 16851000,
+      "peak_rss_bytes": 1916928,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "-0.16907516382852447 -0.169087605234606\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/nbody-1000-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/nbody-1000-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/nbody-1000-system.stderr"
+      }
+    },
+    {
+      "case": "nbody",
+      "allocator": "builtin",
+      "input": "1000",
+      "invalid": false,
+      "expected": [
+        -0.16907516382852447,
+        -0.169087605234606
+      ],
+      "wall_ns": 15293000,
+      "peak_rss_bytes": 2277376,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "-0.16907516382852447 -0.169087605234606\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/nbody-1000-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/nbody-1000-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/nbody-1000-builtin.stderr"
+      }
+    },
+    {
+      "case": "binary-trees",
+      "allocator": "system",
+      "input": "6",
+      "invalid": false,
+      "expected": [
+        255,
+        4,
+        64,
+        1984,
+        6,
+        16,
+        2032,
+        127
+      ],
+      "wall_ns": 14665000,
+      "peak_rss_bytes": 1966080,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "255\n4 64 1984\n6 16 2032\n127\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/binary-trees-6-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/binary-trees-6-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/binary-trees-6-system.stderr"
+      }
+    },
+    {
+      "case": "binary-trees",
+      "allocator": "builtin",
+      "input": "6",
+      "invalid": false,
+      "expected": [
+        255,
+        4,
+        64,
+        1984,
+        6,
+        16,
+        2032,
+        127
+      ],
+      "wall_ns": 298861000,
+      "peak_rss_bytes": 2293760,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "255\n4 64 1984\n6 16 2032\n127\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/binary-trees-6-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/binary-trees-6-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/binary-trees-6-builtin.stderr"
+      }
+    },
+    {
+      "case": "binary-trees",
+      "allocator": "system",
+      "input": "7",
+      "invalid": false,
+      "expected": [
+        511,
+        4,
+        128,
+        3968,
+        6,
+        32,
+        4064,
+        255
+      ],
+      "wall_ns": 14894000,
+      "peak_rss_bytes": 1998848,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "511\n4 128 3968\n6 32 4064\n255\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/binary-trees-7-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/binary-trees-7-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/binary-trees-7-system.stderr"
+      }
+    },
+    {
+      "case": "binary-trees",
+      "allocator": "builtin",
+      "input": "7",
+      "invalid": false,
+      "expected": [
+        511,
+        4,
+        128,
+        3968,
+        6,
+        32,
+        4064,
+        255
+      ],
+      "wall_ns": 14419000,
+      "peak_rss_bytes": 2310144,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "511\n4 128 3968\n6 32 4064\n255\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/binary-trees-7-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/binary-trees-7-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/binary-trees-7-builtin.stderr"
+      }
+    },
+    {
+      "case": "binary-trees",
+      "allocator": "system",
+      "input": "8",
+      "invalid": false,
+      "expected": [
+        1023,
+        4,
+        256,
+        7936,
+        6,
+        64,
+        8128,
+        8,
+        16,
+        8176,
+        511
+      ],
+      "wall_ns": 14883000,
+      "peak_rss_bytes": 2048000,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "1023\n4 256 7936\n6 64 8128\n8 16 8176\n511\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/binary-trees-8-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/binary-trees-8-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/binary-trees-8-system.stderr"
+      }
+    },
+    {
+      "case": "binary-trees",
+      "allocator": "builtin",
+      "input": "8",
+      "invalid": false,
+      "expected": [
+        1023,
+        4,
+        256,
+        7936,
+        6,
+        64,
+        8128,
+        8,
+        16,
+        8176,
+        511
+      ],
+      "wall_ns": 15135000,
+      "peak_rss_bytes": 2342912,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "1023\n4 256 7936\n6 64 8128\n8 16 8176\n511\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/binary-trees-8-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/binary-trees-8-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/binary-trees-8-builtin.stderr"
+      }
+    },
+    {
+      "case": "text-scan",
+      "allocator": "system",
+      "input": "0",
+      "invalid": false,
+      "expected": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "wall_ns": 15278000,
+      "peak_rss_bytes": 1966080,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "0 0 0 0\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-0-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-0-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-0-system.stderr"
+      }
+    },
+    {
+      "case": "text-scan",
+      "allocator": "builtin",
+      "input": "0",
+      "invalid": false,
+      "expected": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "wall_ns": 284142000,
+      "peak_rss_bytes": 2326528,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "0 0 0 0\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-0-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-0-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-0-builtin.stderr"
+      }
+    },
+    {
+      "case": "text-scan",
+      "allocator": "system",
+      "input": "1",
+      "invalid": false,
+      "expected": [
+        1,
+        0,
+        0,
+        23
+      ],
+      "wall_ns": 15052000,
+      "peak_rss_bytes": 1966080,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "1 0 0 23\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-1-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-1-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-1-system.stderr"
+      }
+    },
+    {
+      "case": "text-scan",
+      "allocator": "builtin",
+      "input": "1",
+      "invalid": false,
+      "expected": [
+        1,
+        0,
+        0,
+        23
+      ],
+      "wall_ns": 15807000,
+      "peak_rss_bytes": 2326528,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "1 0 0 23\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-1-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-1-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-1-builtin.stderr"
+      }
+    },
+    {
+      "case": "text-scan",
+      "allocator": "system",
+      "input": "1000",
+      "invalid": false,
+      "expected": [
+        1000,
+        333,
+        333,
+        4384500
+      ],
+      "wall_ns": 14425000,
+      "peak_rss_bytes": 1982464,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "1000 333 333 4384500\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-1000-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-1000-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-1000-system.stderr"
+      }
+    },
+    {
+      "case": "text-scan",
+      "allocator": "builtin",
+      "input": "1000",
+      "invalid": false,
+      "expected": [
+        1000,
+        333,
+        333,
+        4384500
+      ],
+      "wall_ns": 15982000,
+      "peak_rss_bytes": 2359296,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "1000 333 333 4384500\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-1000-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-1000-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-1000-builtin.stderr"
+      }
+    },
+    {
+      "case": "text-scan",
+      "allocator": "system",
+      "input": "independent",
+      "invalid": false,
+      "expected": [
+        4,
+        1,
+        2,
+        154447
+      ],
+      "wall_ns": 14479000,
+      "peak_rss_bytes": 1982464,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "4 1 2 154447\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-independent-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-independent-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-independent-system.stderr"
+      }
+    },
+    {
+      "case": "text-scan",
+      "allocator": "builtin",
+      "input": "independent",
+      "invalid": false,
+      "expected": [
+        4,
+        1,
+        2,
+        154447
+      ],
+      "wall_ns": 16223000,
+      "peak_rss_bytes": 2326528,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "4 1 2 154447\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-independent-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-independent-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-independent-builtin.stderr"
+      }
+    },
+    {
+      "case": "text-scan",
+      "allocator": "system",
+      "input": "partial",
+      "invalid": true,
+      "wall_ns": 14961000,
+      "peak_rss_bytes": 1982464,
+      "exit_code": 2,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 2,
+      "stdout": "",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-partial-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-partial-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-partial-system.stderr"
+      }
+    },
+    {
+      "case": "text-scan",
+      "allocator": "builtin",
+      "input": "partial",
+      "invalid": true,
+      "wall_ns": 15105000,
+      "peak_rss_bytes": 2293760,
+      "exit_code": 2,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 2,
+      "stdout": "",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-partial-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-partial-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-partial-builtin.stderr"
+      }
+    },
+    {
+      "case": "text-scan",
+      "allocator": "system",
+      "input": "severity",
+      "invalid": true,
+      "wall_ns": 13951000,
+      "peak_rss_bytes": 1949696,
+      "exit_code": 2,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 2,
+      "stdout": "",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-severity-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-severity-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-severity-system.stderr"
+      }
+    },
+    {
+      "case": "text-scan",
+      "allocator": "builtin",
+      "input": "severity",
+      "invalid": true,
+      "wall_ns": 15484000,
+      "peak_rss_bytes": 2326528,
+      "exit_code": 2,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 2,
+      "stdout": "",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-severity-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-severity-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-severity-builtin.stderr"
+      }
+    },
+    {
+      "case": "text-scan",
+      "allocator": "system",
+      "input": "digit",
+      "invalid": true,
+      "wall_ns": 14944000,
+      "peak_rss_bytes": 1966080,
+      "exit_code": 2,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 2,
+      "stdout": "",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-digit-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-digit-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-digit-system.stderr"
+      }
+    },
+    {
+      "case": "text-scan",
+      "allocator": "builtin",
+      "input": "digit",
+      "invalid": true,
+      "wall_ns": 14808000,
+      "peak_rss_bytes": 2310144,
+      "exit_code": 2,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 2,
+      "stdout": "",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-digit-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-digit-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-digit-builtin.stderr"
+      }
+    },
+    {
+      "case": "text-scan",
+      "allocator": "system",
+      "input": "delimiter",
+      "invalid": true,
+      "wall_ns": 15432000,
+      "peak_rss_bytes": 1982464,
+      "exit_code": 2,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 2,
+      "stdout": "",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-delimiter-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-delimiter-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-delimiter-system.stderr"
+      }
+    },
+    {
+      "case": "text-scan",
+      "allocator": "builtin",
+      "input": "delimiter",
+      "invalid": true,
+      "wall_ns": 15073000,
+      "peak_rss_bytes": 2310144,
+      "exit_code": 2,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 2,
+      "stdout": "",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-delimiter-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-delimiter-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-delimiter-builtin.stderr"
+      }
+    },
+    {
+      "case": "text-scan",
+      "allocator": "system",
+      "input": "newline",
+      "invalid": true,
+      "wall_ns": 15119000,
+      "peak_rss_bytes": 1966080,
+      "exit_code": 2,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 2,
+      "stdout": "",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-newline-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-newline-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-newline-system.stderr"
+      }
+    },
+    {
+      "case": "text-scan",
+      "allocator": "builtin",
+      "input": "newline",
+      "invalid": true,
+      "wall_ns": 14607000,
+      "peak_rss_bytes": 2310144,
+      "exit_code": 2,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 2,
+      "stdout": "",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-newline-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-newline-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/text-scan-newline-builtin.stderr"
+      }
+    },
+    {
+      "case": "fannkuch-redux",
+      "allocator": "system",
+      "input": "1",
+      "invalid": false,
+      "expected": [
+        0,
+        0
+      ],
+      "wall_ns": 14721000,
+      "peak_rss_bytes": 1949696,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "0 0\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-1-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-1-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-1-system.stderr"
+      }
+    },
+    {
+      "case": "fannkuch-redux",
+      "allocator": "builtin",
+      "input": "1",
+      "invalid": false,
+      "expected": [
+        0,
+        0
+      ],
+      "wall_ns": 294840000,
+      "peak_rss_bytes": 2277376,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "0 0\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-1-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-1-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-1-builtin.stderr"
+      }
+    },
+    {
+      "case": "fannkuch-redux",
+      "allocator": "system",
+      "input": "2",
+      "invalid": false,
+      "expected": [
+        -1,
+        1
+      ],
+      "wall_ns": 16137000,
+      "peak_rss_bytes": 1966080,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "-1 1\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-2-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-2-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-2-system.stderr"
+      }
+    },
+    {
+      "case": "fannkuch-redux",
+      "allocator": "builtin",
+      "input": "2",
+      "invalid": false,
+      "expected": [
+        -1,
+        1
+      ],
+      "wall_ns": 16788000,
+      "peak_rss_bytes": 2277376,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "-1 1\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-2-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-2-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-2-builtin.stderr"
+      }
+    },
+    {
+      "case": "fannkuch-redux",
+      "allocator": "system",
+      "input": "3",
+      "invalid": false,
+      "expected": [
+        2,
+        2
+      ],
+      "wall_ns": 15931000,
+      "peak_rss_bytes": 1982464,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "2 2\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-3-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-3-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-3-system.stderr"
+      }
+    },
+    {
+      "case": "fannkuch-redux",
+      "allocator": "builtin",
+      "input": "3",
+      "invalid": false,
+      "expected": [
+        2,
+        2
+      ],
+      "wall_ns": 17630000,
+      "peak_rss_bytes": 2277376,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "2 2\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-3-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-3-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-3-builtin.stderr"
+      }
+    },
+    {
+      "case": "fannkuch-redux",
+      "allocator": "system",
+      "input": "7",
+      "invalid": false,
+      "expected": [
+        228,
+        16
+      ],
+      "wall_ns": 14978000,
+      "peak_rss_bytes": 1949696,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "228 16\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-7-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-7-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-7-system.stderr"
+      }
+    },
+    {
+      "case": "fannkuch-redux",
+      "allocator": "builtin",
+      "input": "7",
+      "invalid": false,
+      "expected": [
+        228,
+        16
+      ],
+      "wall_ns": 14822000,
+      "peak_rss_bytes": 2277376,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "228 16\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-7-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-7-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/fannkuch-redux-7-builtin.stderr"
+      }
+    },
+    {
+      "case": "spectral-norm",
+      "allocator": "system",
+      "input": "1",
+      "invalid": false,
+      "expected": [
+        1
+      ],
+      "wall_ns": 14151000,
+      "peak_rss_bytes": 1933312,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "1\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-1-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-1-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-1-system.stderr"
+      }
+    },
+    {
+      "case": "spectral-norm",
+      "allocator": "builtin",
+      "input": "1",
+      "invalid": false,
+      "expected": [
+        1
+      ],
+      "wall_ns": 293750000,
+      "peak_rss_bytes": 2277376,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "1\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-1-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-1-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-1-builtin.stderr"
+      }
+    },
+    {
+      "case": "spectral-norm",
+      "allocator": "system",
+      "input": "2",
+      "invalid": false,
+      "expected": [
+        1.1833501765516568
+      ],
+      "wall_ns": 16466000,
+      "peak_rss_bytes": 1949696,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "1.1833501765516568\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-2-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-2-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-2-system.stderr"
+      }
+    },
+    {
+      "case": "spectral-norm",
+      "allocator": "builtin",
+      "input": "2",
+      "invalid": false,
+      "expected": [
+        1.1833501765516568
+      ],
+      "wall_ns": 17030000,
+      "peak_rss_bytes": 2277376,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "1.1833501765516568\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-2-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-2-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-2-builtin.stderr"
+      }
+    },
+    {
+      "case": "spectral-norm",
+      "allocator": "system",
+      "input": "10",
+      "invalid": false,
+      "expected": [
+        1.2718440192507248
+      ],
+      "wall_ns": 27360000,
+      "peak_rss_bytes": 1916928,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "1.2718440192507248\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-10-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-10-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-10-system.stderr"
+      }
+    },
+    {
+      "case": "spectral-norm",
+      "allocator": "builtin",
+      "input": "10",
+      "invalid": false,
+      "expected": [
+        1.2718440192507248
+      ],
+      "wall_ns": 18272000,
+      "peak_rss_bytes": 2277376,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "1.2718440192507248\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-10-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-10-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-10-builtin.stderr"
+      }
+    },
+    {
+      "case": "spectral-norm",
+      "allocator": "system",
+      "input": "100",
+      "invalid": false,
+      "expected": [
+        1.2742199912349306
+      ],
+      "wall_ns": 17540000,
+      "peak_rss_bytes": 1933312,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "1.2742199912349306\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-100-system.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-100-system.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-100-system.stderr"
+      }
+    },
+    {
+      "case": "spectral-norm",
+      "allocator": "builtin",
+      "input": "100",
+      "invalid": false,
+      "expected": [
+        1.2742199912349306
+      ],
+      "wall_ns": 19388000,
+      "peak_rss_bytes": 2293760,
+      "exit_code": 0,
+      "signal": 0,
+      "interruption": 0,
+      "sampler_exit": 0,
+      "stdout": "1.2742199912349306\n",
+      "stderr": "",
+      "files": {
+        "metrics": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-100-builtin.json",
+        "stdout": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-100-builtin.stdout",
+        "stderr": "/Users/houfeng/Repositories/feng-language/build/benchmarks/allocator-compare/2026-10-19T05-55-40-284Z-allocator/verification/spectral-norm-100-builtin.stderr"
+      }
+    }
+  ]
+}

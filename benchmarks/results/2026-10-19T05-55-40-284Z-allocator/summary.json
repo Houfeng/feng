@@ -1,0 +1,117 @@
+[
+  {
+    "case": "nbody",
+    "system": {
+      "milliseconds": 641.035,
+      "p25": 639.26875,
+      "p75": 642.2189999999999,
+      "min": 637.542,
+      "max": 643.418,
+      "rss_mib": 1.859375,
+      "rss_max_mib": 1.859375
+    },
+    "builtin": {
+      "milliseconds": 649.0645,
+      "p25": 645.1935,
+      "p75": 649.98825,
+      "min": 641.274,
+      "max": 659.612,
+      "rss_mib": 2.171875,
+      "rss_max_mib": 2.171875
+    },
+    "time_change_percent": 1.2525837122777883,
+    "rss_change_percent": 16.806722689075638
+  },
+  {
+    "case": "binary-trees",
+    "system": {
+      "milliseconds": 265.84799999999996,
+      "p25": 263.644,
+      "p75": 268.414,
+      "min": 260.413,
+      "max": 270.98,
+      "rss_mib": 18.0078125,
+      "rss_max_mib": 18.015625
+    },
+    "builtin": {
+      "milliseconds": 183.9565,
+      "p25": 180.361,
+      "p75": 184.93325,
+      "min": 179.094,
+      "max": 231.538,
+      "rss_mib": 18.28125,
+      "rss_max_mib": 18.28125
+    },
+    "time_change_percent": -30.80388041286749,
+    "rss_change_percent": 1.5184381778741818
+  },
+  {
+    "case": "text-scan",
+    "system": {
+      "milliseconds": 103.862,
+      "p25": 102.7915,
+      "p75": 104.66550000000001,
+      "min": 100.57,
+      "max": 106.461,
+      "rss_mib": 246.0625,
+      "rss_max_mib": 246.078125
+    },
+    "builtin": {
+      "milliseconds": 108.5335,
+      "p25": 107.7515,
+      "p75": 111.30425,
+      "min": 104.294,
+      "max": 113.165,
+      "rss_mib": 250.28125,
+      "rss_max_mib": 250.28125
+    },
+    "time_change_percent": 4.49779515125841,
+    "rss_change_percent": 1.7145034290068528
+  },
+  {
+    "case": "fannkuch-redux",
+    "system": {
+      "milliseconds": 1676.9945,
+      "p25": 1660.111,
+      "p75": 1686.44175,
+      "min": 1641.531,
+      "max": 1698.317,
+      "rss_mib": 1.859375,
+      "rss_max_mib": 1.875
+    },
+    "builtin": {
+      "milliseconds": 1671.9565,
+      "p25": 1650.4050000000002,
+      "p75": 1675.012,
+      "min": 1636.386,
+      "max": 1722.19,
+      "rss_mib": 2.171875,
+      "rss_max_mib": 2.171875
+    },
+    "time_change_percent": -0.300418397317348,
+    "rss_change_percent": 16.806722689075638
+  },
+  {
+    "case": "spectral-norm",
+    "system": {
+      "milliseconds": 113.491,
+      "p25": 113.14399999999999,
+      "p75": 113.75025,
+      "min": 111.915,
+      "max": 114.3,
+      "rss_mib": 1.859375,
+      "rss_max_mib": 1.859375
+    },
+    "builtin": {
+      "milliseconds": 113.9325,
+      "p25": 113.70675,
+      "p75": 114.337,
+      "min": 113.056,
+      "max": 117.435,
+      "rss_mib": 2.234375,
+      "rss_max_mib": 2.234375
+    },
+    "time_change_percent": 0.38901763135403833,
+    "rss_change_percent": 20.168067226890752
+  }
+]
