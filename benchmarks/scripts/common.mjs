@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 export const suite = join(root, 'benchmarks');
 export const work = join(root, 'build/benchmarks');
-export const languages = ['feng', 'cpp', 'rust', 'go', 'swift', 'csharp', 'csharp-aot', 'java'];
+export const languages = ['feng', 'cpp', 'rust', 'go', 'swift', 'csharp', 'csharp-aot', 'java', 'javascript'];
 
 /** Compute an identity for a source, executable or input file. */
 export function hashFile(path) {

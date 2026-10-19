@@ -7,13 +7,14 @@ import { filesUnder, hashFile, languageOrder, languages, quantile, readJson,
   root, sourceIdentities, suite, validateOutput, work, writeJson } from './common.mjs';
 import { cases, definitions, profiles } from './definitions.mjs';
 
-const extensions = { feng: 'ff', cpp: 'cpp', rust: 'rs', go: 'go', swift: 'swift', csharp: 'cs', java: 'java' };
+const extensions = { feng: 'ff', cpp: 'cpp', rust: 'rs', go: 'go', swift: 'swift', csharp: 'cs', java: 'java', javascript: 'js' };
 const controlledVariables = ['CFLAGS', 'CPPFLAGS', 'CXXFLAGS', 'LDFLAGS', 'FENG_CC_FLAGS', 'FENG_CC',
   'FENG_AR', 'FENG_RANLIB', 'RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'GOFLAGS', 'GOEXPERIMENT', 'GOARCH',
   'GOOS', 'GOAMD64', 'GOARM64', 'GOGC', 'GOMEMLIMIT', 'GODEBUG', 'SWIFTFLAGS', 'SDKROOT',
   'ASAN_OPTIONS', 'UBSAN_OPTIONS', 'LSAN_OPTIONS', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES', 'COMPILER_PATH',
   'JAVA_TOOL_OPTIONS', '_JAVA_OPTIONS', 'JDK_JAVA_OPTIONS', 'JDK_JAVAC_OPTIONS', 'CLASSPATH',
-  'DOTNET_STARTUP_HOOKS', 'DOTNET_ADDITIONAL_DEPS', 'DOTNET_SHARED_STORE'];
+  'DOTNET_STARTUP_HOOKS', 'DOTNET_ADDITIONAL_DEPS', 'DOTNET_SHARED_STORE',
+  'NODE_OPTIONS', 'NODE_PATH', 'NODE_V8_COVERAGE', 'NODE_COMPILE_CACHE', 'NODE_DISABLE_COMPILE_CACHE'];
 
 /** Pin measurement-relevant environment while preserving normal tool lookup. */
 export function benchmarkEnvironment() {
@@ -79,13 +80,15 @@ function build() {
   const env = benchmarkEnvironment();
   const selectors = { feng: process.env.FENG ?? join(root, 'build/bin/feng'), cc: process.env.CC ?? 'clang',
     cpp: process.env.CXX ?? 'clang++', rust: process.env.RUSTC ?? 'rustc', go: process.env.GO ?? 'go', swift: process.env.SWIFTC ?? 'swiftc',
-    csharp: process.env.DOTNET ?? 'dotnet', java: process.env.JAVA ?? 'java', javac: process.env.JAVAC ?? 'javac' };
+    csharp: process.env.DOTNET ?? 'dotnet', java: process.env.JAVA ?? 'java', javac: process.env.JAVAC ?? 'javac',
+    javascript: process.env.NODE ?? process.execPath };
   const tools = {};
   for (const [language, selector] of Object.entries(selectors)) {
     const path = executable(selector);
     tools[language] = { path, real_path: realpathSync(path), version: capture(path, language === 'go' ? ['version'] : ['--version'], env), sha256: hashFile(path) };
   }
   tools.csharp.info = capture(tools.csharp.path, ['--info'], env);
+  tools.javascript.versions = JSON.parse(capture(tools.javascript.path, ['-p', 'JSON.stringify(process.versions)'], env));
   tools['csharp-aot'] = { ...tools.csharp };
   if (!['darwin', 'linux'].includes(process.platform)) throw new Error('measurement currently supports macOS and Linux');
   const platform = process.platform === 'darwin' && process.arch === 'arm64' ? 'macos-arm64'
@@ -111,6 +114,14 @@ function build() {
       args = [source, '--target=bin', '--release', `--platform=${platform}`, `--pkg=${stdPackage}`, `--out=${output}`, `--name=${name}`];
       compile(command, args, `${name}-${language}`, env, commands);
       copyFileSync(join(output, 'bin', name), binary); chmodSync(binary, 0o755);
+    } else if (language === 'javascript') {
+      // Syntax-check outside timing, then launch the identified script directly.
+      const directory = join(work, 'managed', name, language);
+      mkdirSync(directory, { recursive: true });
+      artifact = join(directory, 'main.js');
+      copyFileSync(source, artifact);
+      compile(command, ['--check', artifact], `${name}-${language}`, env, commands);
+      launch = { command, args: [artifact] };
     } else if (sourceLanguage === 'csharp') {
       const directory = join(work, 'managed', name, language);
       rmSync(directory, { recursive: true, force: true });
