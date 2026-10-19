@@ -1,0 +1,129 @@
+{
+  "schema": 1,
+  "id": "2026-10-19T08-32-56-710Z",
+  "started_at": "2026-10-19T08:32:56.711Z",
+  "config": {
+    "profile": "standard",
+    "rounds": 7,
+    "warmup": 2,
+    "timeout": 120,
+    "cases": [
+      "nbody",
+      "binary-trees",
+      "text-scan",
+      "fannkuch-redux",
+      "spectral-norm"
+    ]
+  },
+  "host": {
+    "platform": "linux",
+    "arch": "arm64",
+    "release": "6.18.15",
+    "version": "#1 SMP Tue Mar 17 01:36:53 UTC 2026",
+    "cpu": "unknown",
+    "logical_cpus": 5,
+    "total_memory_bytes": 8474984448,
+    "node": "v22.22.1",
+    "load_average": [
+      0.18,
+      0.06,
+      0.09
+    ]
+  },
+  "inputs": {
+    "nbody": {
+      "args": [
+        "20000000"
+      ],
+      "expected": [
+        -0.16907516382852447,
+        -0.1690316645525591
+      ],
+      "units": 20000000,
+      "unit": "steps/s",
+      "tolerance": 1e-8,
+      "size": 20000000
+    },
+    "binary-trees": {
+      "args": [
+        "16"
+      ],
+      "expected": [
+        262143,
+        4,
+        65536,
+        2031616,
+        6,
+        16384,
+        2080768,
+        8,
+        4096,
+        2093056,
+        10,
+        1024,
+        2096128,
+        12,
+        256,
+        2096896,
+        14,
+        64,
+        2097088,
+        16,
+        16,
+        2097136,
+        131071
+      ],
+      "units": 14985902,
+      "unit": "nodes/s",
+      "tolerance": 0,
+      "size": 16
+    },
+    "text-scan": {
+      "args": [
+        "/workspace/temp/node-benchmark-20261019/repo/build/benchmarks/runs/2026-10-19T08-32-56-710Z/text-32000000.txt"
+      ],
+      "expected": [
+        32000000,
+        10666667,
+        10666666,
+        159984000000
+      ],
+      "units": 256000000,
+      "unit": "bytes/s",
+      "tolerance": 0,
+      "sha256": "9fac96966a4f9f1c7cb1584d94adbf010145c8d183182e05408d679c3a4d524c",
+      "size": 32000000
+    },
+    "fannkuch-redux": {
+      "args": [
+        "11"
+      ],
+      "expected": [
+        556355,
+        51
+      ],
+      "units": 39916800,
+      "unit": "permutations/s",
+      "tolerance": 0,
+      "size": 11
+    },
+    "spectral-norm": {
+      "args": [
+        "2000"
+      ],
+      "expected": [
+        1.274224152228617
+      ],
+      "units": 160000000,
+      "unit": "elements/s",
+      "tolerance": 1e-9,
+      "size": 2000
+    }
+  },
+  "completed_at": "2026-10-19T08:37:06.553Z",
+  "final_load_average": [
+    1.05,
+    0.64,
+    0.33
+  ]
+}
