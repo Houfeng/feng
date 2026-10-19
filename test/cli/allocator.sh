@@ -18,6 +18,16 @@ die() { echo "allocator test: $*" >&2; exit 1; }
 # compiler and instrumented runtime and verifies the rejected combination.
 feng() { env -u FENG_CC -u FENG_CC_FLAGS "${ROOT}/build/bin/feng" "$@"; }
 
+# Mach-O needs explicit permission for the fixture's optional weak observation.
+# Permit only this query to be absent; builtin must still pass real heap checks.
+native_feng() {
+  if [[ "${HOST}" == macos-* ]]; then
+    env -u FENG_CC FENG_CC_FLAGS=-Wl,-U,_mi_is_in_heap_region "${ROOT}/build/bin/feng" "$@"
+  else
+    feng "$@"
+  fi
+}
+
 # Require a diagnostic and a nonzero exit without ignoring unexpected success.
 reject() {
   local expected="$1"; shift
@@ -125,7 +135,7 @@ for platform in "${PLATFORMS[@]}"; do
     for lto in off thin; do
       for allocator in system builtin; do
         out="${WORK}/${platform}-${release}-${lto}-${allocator}"
-        feng "${FIXTURE}/main.ff" "--pkg=${bundle}" "--out=${out}" --name=app \
+        native_feng "${FIXTURE}/main.ff" "--pkg=${bundle}" "--out=${out}" --name=app \
           "${mode[@]}" "--lto=${lto}" "--alloc=${allocator}" \
           "--lib=${WORK}/native.o" "--lib=${shared[0]}"
         FENG_GC_THRESHOLD=1 "${out}/bin/app" "${allocator}"
@@ -147,13 +157,13 @@ done
 sed 's/@cdecl("libc", "allocator_native_check")/@cdecl("allocator_fixture", "allocator_native_check")/' \
   "${FIXTURE}/main.ff" >"${WORK}/app/src/main.ff"
 for allocator in builtin system builtin; do
-  LIBRARY_PATH="${WORK}${LIBRARY_PATH:+:${LIBRARY_PATH}}" feng build "${WORK}/app" --release --alloc=builtin "--alloc=${allocator}"
+  LIBRARY_PATH="${WORK}${LIBRARY_PATH:+:${LIBRARY_PATH}}" native_feng build "${WORK}/app" --release --alloc=builtin "--alloc=${allocator}"
   FENG_GC_THRESHOLD=1 "${WORK}/app/build/${HOST}/bin/allocator_app" "${allocator}"
-  FENG_GC_THRESHOLD=1 LIBRARY_PATH="${WORK}${LIBRARY_PATH:+:${LIBRARY_PATH}}" feng run "${WORK}/app" "--alloc=${allocator}" -- "${allocator}"
+  FENG_GC_THRESHOLD=1 LIBRARY_PATH="${WORK}${LIBRARY_PATH:+:${LIBRARY_PATH}}" native_feng run "${WORK}/app" "--alloc=${allocator}" -- "${allocator}"
 done
 # An option-looking program argument after -- must not be parsed by Feng.
 FENG_GC_THRESHOLD=1 LIBRARY_PATH="${WORK}${LIBRARY_PATH:+:${LIBRARY_PATH}}" \
-  feng run "${WORK}/app" --alloc=system -- system --alloc=other
+  native_feng run "${WORK}/app" --alloc=system -- system --alloc=other
 
 # A moved installation locates the allocator only relative to its executable.
 mkdir -p "${WORK}/install/bin" "${WORK}/install/lib/${HOST}"

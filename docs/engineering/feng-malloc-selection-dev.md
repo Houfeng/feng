@@ -309,6 +309,26 @@ runtime 目标的软链。macOS GNU Make 3.81 定向验证通过，清理旧的�
 runtime 文件 SHA-256 未变；Linux ARM64 容器再次完成全量 `make test`，Sanitizer 和
 普通两阶段均通过，最终退出码为 0，发行组装和安装校验通过。
 
+macOS CI 随后发现原生分配测试夹具定义 `_POSIX_C_SOURCE` 后使用
+`<malloc/malloc.h>`，使 SDK 隐藏了所需的 Darwin 类型声明。修复仅在该夹具的
+Apple 分支、所有头文件之前补充 `_DARWIN_C_SOURCE`，保留现有断言、编译参数及
+Linux 宏配置；不修改编译器或 runtime。
+宏修复后的 Linux ARM64 容器完整 `make test` 再次通过，退出码为 0；Sanitizer 和普通
+两阶段的 std 均为 610/610，FCTS 均为 1709/1709，allocator GNU/musl 矩阵通过。
+修复后的夹具在本机 SDK 26.5 和 27.0 下编译通过。macOS allocator 专项测试随后在
+system 链接阶段遇到 `mi_is_in_heap_region` 未定义：`weak_import` 声明未提供链接时
+所需的符号定义。无头文件的最小程序在 Apple ld 和 LLD 上均复现，该问题独立于
+宏修改。经人工批准，仅在 macOS 链接该原生夹具的测试调用中，通过现有
+`FENG_CC_FLAGS` 传入 `-Wl,-U,_mi_is_in_heap_region`，允许这一可选查询符号缺失；
+system 下弱引用为空，builtin 下仍调用 mimalloc 的真实查询函数。保留全部断言，
+其他未定义符号仍报错，不修改编译器、runtime、生产链接参数或 Linux 测试行为。
+该链接修复合入测试脚本后，Linux ARM64 容器完整 `make test` 再次通过，退出码为 0；
+两阶段 std 均为 610/610，FCTS 均为 1709/1709，普通阶段的 allocator GNU/musl
+矩阵、build/run 切换、发行布局及 system/builtin × LTO off/thin DAP 全部通过。
+macOS 本轮完整专项运行在前置 `asan-disabled/bin/empty` 启动时被 SIGKILL (9)
+终止，尚未执行到原生夹具。按人工安排，macOS 的完整 allocator 专项和全量回归
+由开发者稍后手工验证；不以此前临时对照程序通过代替完整测试结果。
+
 已确认的实现和证据：
 
 - 五个平台的 archive 均由 `scripts/build_mimalloc.sh` 生成，每份仅含原生

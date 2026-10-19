@@ -1,5 +1,8 @@
 /* Verify the allocator actually owning ordinary C and Feng runtime allocations. */
 #define _POSIX_C_SOURCE 200809L
+#if defined(__APPLE__)
+#define _DARWIN_C_SOURCE 1
+#endif
 #include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
