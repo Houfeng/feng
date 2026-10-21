@@ -67,3 +67,6 @@ open fit u32: Display {
     return (u32)result;
   }
 }
+
+/** 32 位无符号整数的异常契约。 */
+open fit u32: std.Throwable;

@@ -67,3 +67,6 @@ open fit u8: Display {
     return (byte)result;
   }
 }
+
+/** 8 位无符号整数的异常契约。 */
+open fit u8: std.Throwable;

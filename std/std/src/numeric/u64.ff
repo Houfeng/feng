@@ -71,3 +71,6 @@ open fit u64: Display {
     return result;
   }
 }
+
+/** 64 位无符号整数的异常契约。 */
+open fit u64: std.Throwable;

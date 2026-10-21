@@ -81,3 +81,6 @@ open fit i8: Display {
     return (i8)result;
   }
 }
+
+/** 8 位有符号整数的异常契约。 */
+open fit i8: std.Throwable;

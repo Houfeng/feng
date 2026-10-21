@@ -82,3 +82,6 @@ open fit i32: Display {
   }
 
 }
+
+/** 32 位有符号整数的异常契约。 */
+open fit i32: std.Throwable;

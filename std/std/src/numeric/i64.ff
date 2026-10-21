@@ -91,3 +91,6 @@ open fit i64: Display {
     return result;
   }
 }
+
+/** 64 位有符号整数的异常契约。 */
+open fit i64: std.Throwable;

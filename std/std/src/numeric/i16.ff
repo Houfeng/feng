@@ -81,3 +81,6 @@ open fit i16: Display {
     return (i16)result;
   }
 }
+
+/** 16 位有符号整数的异常契约。 */
+open fit i16: std.Throwable;

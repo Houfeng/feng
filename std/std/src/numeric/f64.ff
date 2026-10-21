@@ -59,3 +59,6 @@ open fit f64: Display {
     return result;
   }
 }
+
+/** 双精度浮点数的异常契约。 */
+open fit f64: std.Throwable;

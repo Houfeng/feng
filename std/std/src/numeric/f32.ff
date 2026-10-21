@@ -53,3 +53,6 @@ open fit f32: Display {
     return result;
   }
 }
+
+/** 单精度浮点数的异常契约。 */
+open fit f32: std.Throwable;

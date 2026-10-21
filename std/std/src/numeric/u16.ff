@@ -67,3 +67,6 @@ open fit u16: Display {
     return (u16)result;
   }
 }
+
+/** 16 位无符号整数的异常契约。 */
+open fit u16: std.Throwable;
