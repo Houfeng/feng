@@ -9,6 +9,7 @@ func main(args: string[]) {
       test_binding();
       test_g24_static_descriptors();
       test_name_binding_scope();
+      test_if_expression_binding();
       test_builtin_type();
       test_numeric_literal();
       test_expression();

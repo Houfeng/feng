@@ -34138,6 +34138,99 @@ static bool cg_assign_expr_result_to_slot(CG *cg,
         "codegen: try/catch branches yield mismatched types");
 }
 
+/* Keep condition bindings alive through an if expression's true branch.
+ * Guards release partially evaluated conditions before jumping to else;
+ * both branches use the existing result-slot and return/throw protocols. */
+static bool cg_emit_if_expr_with_bindings(CG *cg,
+                                         const FengExpr *e,
+                                         bool then_exits,
+                                         bool else_exits,
+                                         ExprResult *out) {
+    bool has_result = !then_exits || !else_exits;
+    const FengExpr *yield = cg_branch_yield_expr(
+        then_exits ? e->as.if_expr.else_block : e->as.if_expr.then_block);
+    CGType *result_type = has_result
+        ? cg_probe_branch_yield_type(cg, e, yield) : cgtype_new(CG_TYPE_VOID);
+    char *slot_name = has_result ? cg_fresh_temp(cg, "_ifv") : NULL;
+    char *otherwise = cg_fresh_temp(cg, "_if_else");
+    char *end = cg_fresh_temp(cg, "_if_end");
+    CGExpressionJoinSlot slot = {0};
+    Scope *outer_scope = cg->cur_scope;
+    Scope *condition_scope = NULL;
+    Buf failure;
+    bool managed = cgtype_is_managed(result_type);
+    bool aggregate = cgtype_is_aggregate(result_type);
+    bool ok = false;
+
+    buf_init(&failure);
+    if (result_type == NULL || (has_result && slot_name == NULL) ||
+        otherwise == NULL || end == NULL) {
+        goto cleanup;
+    }
+    buf_append_fmt(&failure, "goto %s;", otherwise);
+    if (failure.data == NULL) goto cleanup;
+
+    /* The default-initialized join slot belongs outside the condition scope.
+     * It is safe to clean up if a condition throws before either branch writes. */
+    if (has_result && !cg_emit_expression_join_slot(
+            cg, slot_name, result_type, managed, aggregate, e->token, &slot)) {
+        goto cleanup;
+    }
+    condition_scope = scope_push(outer_scope);
+    if (condition_scope == NULL) goto cleanup;
+    cg->cur_scope = condition_scope;
+    buf_append_cstr(cg->cur_body, "    {\n");
+    if (!cg_emit_condition_guards(cg, e->as.if_expr.condition,
+                                  condition_scope, failure.data)) {
+        goto cleanup;
+    }
+    if (then_exits) {
+        ok = cg_emit_nonresult_branch(cg, e->as.if_expr.then_block, e->token);
+    } else {
+        ok = cg_emit_branch_into_slot(cg, e->as.if_expr.then_block,
+                                      slot_name, result_type, managed, aggregate,
+                                      &slot, e->token);
+        if (ok) cg_release_scope(cg, condition_scope);
+    }
+    if (!ok) goto cleanup;
+    buf_append_fmt(cg->cur_body, "        goto %s;\n    }\n%s: ;\n", end, otherwise);
+    cg->cur_scope = outer_scope;
+    scope_pop_free(condition_scope);
+    condition_scope = NULL;
+
+    buf_append_cstr(cg->cur_body, "    {\n");
+    if (else_exits) {
+        ok = cg_emit_nonresult_branch(cg, e->as.if_expr.else_block, e->token);
+    } else {
+        ok = cg_emit_branch_into_slot(cg, e->as.if_expr.else_block,
+                                      slot_name, result_type, managed, aggregate,
+                                      &slot, e->token);
+    }
+    if (!ok) goto cleanup;
+    buf_append_fmt(cg->cur_body, "    }\n%s: ;\n", end);
+
+    out->c_expr = strdup(has_result ? slot_name : "(void)0");
+    out->type = result_type;
+    result_type = NULL;
+    out->is_addressable = has_result;
+    out->owns_ref = false;
+    ok = out->c_expr != NULL &&
+         (!has_result || cg_expression_join_slot_apply_to_result(&slot, out));
+
+cleanup:
+    cg->cur_scope = outer_scope;
+    scope_pop_free(condition_scope);
+    if (!ok) er_free(out);
+    cgtype_free(result_type);
+    cg_expression_join_slot_free(&slot);
+    buf_free(&failure);
+    free(slot_name);
+    free(otherwise);
+    free(end);
+    return ok;
+}
+
+/* Emit an if expression, preserving the simple path for unbound conditions. */
 static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     er_init(out);
 
@@ -34152,6 +34245,10 @@ static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         (!else_yield && !else_exits)) {
         return cg_fail(cg, e->token,
             "CE0199", "codegen: if-expression branches must produce a result or exit through return/throw");
+    }
+
+    if (cg_expr_has_visible_match_binding(e->as.if_expr.condition)) {
+        return cg_emit_if_expr_with_bindings(cg, e, then_exits, else_exits, out);
     }
 
     /* When both branches exit through return/throw, the expression has no

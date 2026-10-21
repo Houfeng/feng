@@ -8583,8 +8583,10 @@ static bool fit_branch_results_to_target(ResolveContext *context,
     return true;
 }
 
-static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
-    InferredExprType condition_type = infer_expr_type(context, expr->as.if_expr.condition);
+/* Validate branch results using the condition type derived in its head scope. */
+static bool validate_if_expr(ResolveContext *context,
+                             const FengExpr *expr,
+                             InferredExprType condition_type) {
     InferredExprType then_type;
     InferredExprType else_type;
 
@@ -9155,18 +9157,19 @@ static bool validate_match_label_records(ResolveContext *context,
     return true;
 }
 
-/* Return an expression's inferred type, falling back to a result fact captured
- * while its lexical branch scope was active. */
+/* Prefer the result fact captured in the lexical branch scope. Looking up a
+ * name after that scope is popped can otherwise select a shadowed outer local.
+ * Results without a recorded fact retain ordinary contextual inference. */
 static InferredExprType branch_result_inferred_type(ResolveContext *context,
                                                     const FengExpr *expr) {
-    InferredExprType inferred = infer_expr_type(context, expr);
+    InferredExprType recorded = inferred_expr_type_unknown();
 
-    if (!inferred_expr_type_is_known(inferred) && context != NULL &&
-        context->analysis != NULL && expr != NULL) {
-        inferred = inferred_expr_type_from_type_fact(
+    if (context != NULL && context->analysis != NULL && expr != NULL) {
+        recorded = inferred_expr_type_from_type_fact(
             feng_semantic_lookup_type_fact(context->analysis, expr));
     }
-    return inferred;
+    return inferred_expr_type_is_known(recorded)
+               ? recorded : infer_expr_type(context, expr);
 }
 
 /* Persist the selected result type on a branching expression so later
@@ -11172,6 +11175,36 @@ static bool register_visible_match_binding(ResolveContext *context,
         }
     }
     free(active_members);
+    return ok;
+}
+
+/* Resolve an if expression's true result block while its condition bindings
+ * remain visible. The result block owns a child scope and records its result
+ * type before both scopes are removed; the else block never sees bindings. */
+static bool resolve_if_expression_then_block(ResolveContext *context,
+                                             const FengExpr *expr,
+                                             bool allow_self,
+                                             InferredExprType *condition_type) {
+    VisibleMatchBindingSet bindings = {0};
+    bool pushed_scope = false;
+    bool ok = collect_visible_match_bindings(expr->as.if_expr.condition, &bindings);
+
+    if (ok && bindings.count > 0U) {
+        ok = resolver_push_scope(context);
+        pushed_scope = ok;
+        for (size_t index = 0U; ok && index < bindings.count; ++index) {
+            ok = register_visible_match_binding(context, &bindings.items[index]);
+        }
+    }
+    if (ok) {
+        *condition_type = infer_expr_type(context, expr->as.if_expr.condition);
+        ok = record_type_fact_for_site(context, expr->as.if_expr.condition, *condition_type) &&
+             resolve_branch_result_block(context, expr->as.if_expr.then_block, allow_self);
+    }
+    if (pushed_scope) {
+        resolver_pop_scope(context);
+    }
+    free_visible_match_binding_set(&bindings);
     return ok;
 }
 
@@ -21900,12 +21933,19 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
                        : inferred_expr_type_unknown();
 
         case FENG_EXPR_IF: {
-            InferredExprType condition_type = infer_expr_type(context, expr->as.if_expr.condition);
+            InferredExprType condition_type;
             InferredExprType then_type;
             InferredExprType else_type;
 
             if (expr->type != NULL) {
                 return inferred_expr_type_from_type_ref(expr->type);
+            }
+            /* A resolved condition may refer to bindings whose head scope has
+             * ended. Reuse its fact instead of looking up those names again. */
+            condition_type = inferred_expr_type_from_type_fact(
+                feng_semantic_lookup_type_fact(context->analysis, expr->as.if_expr.condition));
+            if (!inferred_expr_type_is_known(condition_type)) {
+                condition_type = infer_expr_type(context, expr->as.if_expr.condition);
             }
             if (!inferred_expr_type_is_bool(condition_type)) {
                 return inferred_expr_type_unknown();
@@ -31707,6 +31747,7 @@ static bool resolve_expr_impl(ResolveContext *context, const FengExpr *expr, boo
 
         case FENG_EXPR_IF: {
             ExpressionBranchBoundaryState boundary_state;
+            InferredExprType condition_type = inferred_expr_type_unknown();
             bool ok;
 
             if (!resolve_expr(context, expr->as.if_expr.condition, allow_self)) {
@@ -31716,14 +31757,12 @@ static bool resolve_expr_impl(ResolveContext *context, const FengExpr *expr, boo
                 context,
                 EXPRESSION_BRANCH_BOUNDARY_IF,
                 &boundary_state);
-            ok = resolve_branch_result_block(context,
-                                             expr->as.if_expr.then_block,
-                                             allow_self) &&
+            ok = resolve_if_expression_then_block(context, expr, allow_self, &condition_type) &&
                  resolve_branch_result_block(context,
                                              expr->as.if_expr.else_block,
                                              allow_self);
             leave_expression_branch_boundary(context, &boundary_state);
-            return ok && validate_if_expr(context, expr);
+            return ok && validate_if_expr(context, expr, condition_type);
         }
 
         case FENG_EXPR_MATCH: {

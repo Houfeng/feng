@@ -3,6 +3,7 @@ module hello_world;
 import std.io;
 import std;
 import std.collections;
+import std.text;
 
 
 enum FutureState {
@@ -19,7 +20,7 @@ type Future<T> {
 
   seal var _state = FutureState.Pending;
   seal var _value: Option<T> = none;
-  seal var _error: Option<string> = none;
+  seal var _error: Option<Throwable> = none;
 
   open func state(): FutureState { return self._state; }
 
@@ -42,7 +43,13 @@ type Future<T> {
   seal func poll(waitPtr: int): Option<T> {
     return match self._state {
       FutureState.Resolved { self._value }
-      FutureState.Rejected { throw "Future rejected" }
+      FutureState.Rejected {
+        if self._error match err: Throwable {
+          throw err;
+        } else {
+          throw "Future rejected";
+        }
+      }
       FutureState.Pending { self.waiters.add(waitPtr); none }
       else { none }
     };
@@ -57,7 +64,7 @@ type Future<T> {
   }
 
   @friend(Promise<T>)
-  seal func reject(error: string) {
+  seal func reject(error: Throwable) {
     self.checkPending();
     self._error = error;
     self._state = FutureState.Rejected;
@@ -73,12 +80,12 @@ type Future<T> {
 
 type Promise<T> {
   open let future = Future<T>();
-  
+
   open func resolve(value: T) {
     self.future.resolve(value);
   }
 
-  open func reject(error: string) {
+  open func reject(error: Throwable) {
     self.future.reject(error);
   }
 }

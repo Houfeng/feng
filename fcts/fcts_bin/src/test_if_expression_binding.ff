@@ -1,0 +1,252 @@
+module fcts_bin;
+
+import std;
+import std.numeric;
+import std.text;
+import std.test;
+
+/** Scalar alternatives used by direct and converted if expressions. */
+spec IfExprBindingValue: int | string;
+
+var ifExprBindingCreated: int = 0;
+var ifExprBindingDrops: int = 0;
+var ifExprBindingChecks: int = 0;
+
+/** A condition-owned resource exposes early release and missing cleanup. */
+type IfExprBindingResource {
+  let id: int;
+  /** Count explicit resources, excluding ordinary type-default objects. */
+  func ~IfExprBindingResource() {
+    if self.id > 0 { ifExprBindingDrops += 1; }
+  }
+}
+
+/** A value result must keep its managed field after condition cleanup. */
+@value type IfExprBindingAggregate { let resource: IfExprBindingResource; }
+
+/** Managed and aggregate alternatives exercise both result-slot forms. */
+spec IfExprBindingObjects: IfExprBindingResource | int;
+/** Preserve the value payload while narrowing a union condition. */
+spec IfExprBindingAggregates: IfExprBindingAggregate | int;
+/** A closure result retains the captured condition binding. */
+spec IfExprBindingReader(): int;
+
+/** Reset counters only after the preceding scenario has released its values. */
+func resetIfExprBindingCounts(): void {
+  ifExprBindingCreated = 0;
+  ifExprBindingDrops = 0;
+  ifExprBindingChecks = 0;
+}
+
+/** Produce a fresh temporary union with one managed active member. */
+func makeIfExprBindingObject(id: int): IfExprBindingObjects {
+  ifExprBindingCreated += 1;
+  return IfExprBindingResource { id: id };
+}
+
+/** Produce a fresh value payload containing one managed reference. */
+func makeIfExprBindingAggregate(id: int): IfExprBindingAggregates {
+  ifExprBindingCreated += 1;
+  return IfExprBindingAggregate { resource: IfExprBindingResource { id: id } };
+}
+
+/** Count evaluation of the right-hand condition without changing its value. */
+func checkIfExprBinding(value: bool): bool {
+  ifExprBindingChecks += 1;
+  return value;
+}
+
+/** Read a direct expression result from its condition binding. */
+func readIfExprBinding(value: IfExprBindingValue): int {
+  return if value match err: int && err > 0 { err } else { -1 };
+}
+
+/** The parser converts this match branch's final if into an expression. */
+func readIfExprBindingMatch(value: IfExprBindingValue): int {
+  return match 0 {
+    0 { if value match var err: int { err += 1; err } else { -1 } }
+    else { 0 }
+  };
+}
+
+/** Callable return must release the still-active condition scope. */
+func returnIfExprBinding(): int {
+  return if makeIfExprBindingObject(17) match item: IfExprBindingResource {
+    return item.id;
+  } else { 0 };
+}
+
+/** A thrown bound value leaves cleanup to the existing exception path. */
+func throwIfExprBinding(): int {
+  return if makeIfExprBindingObject(19) match item: IfExprBindingResource {
+    throw item.id;
+  } else { 0 };
+}
+
+/** Throw from condition evaluation before any result is written. */
+func raiseIfExprBindingCondition(): bool { throw 23; }
+
+/** Unwind a default-initialized result slot when a later guard throws. */
+func conditionIfExprBindingResult(): IfExprBindingResource {
+  return if makeIfExprBindingObject(21) match item: IfExprBindingResource &&
+            raiseIfExprBindingCondition() { item }
+         else { IfExprBindingResource { id: 0 } };
+}
+
+/** Preserve the reported Option<Throwable> and trailing-if control-flow shape. */
+func throwIfExprBindingOption(value: Option<Throwable>): int {
+  return match 0 {
+    0 {
+      if value match err: Throwable { throw err; } else { throw 0; }
+    }
+    else { 0 }
+  };
+}
+
+/** Verify condition binding values, visibility, short-circuiting and lifetime. */
+open func test_if_expression_binding() {
+  describe("if expression condition bindings", () {
+    test("direct if expression returns the bound value", () {
+      assert(readIfExprBinding(7) == 7 && readIfExprBinding(-2) == -1 &&
+             readIfExprBinding("text") == -1, "both condition outcomes return correctly");
+      let value: IfExprBindingValue = "bound";
+      let text = if value match err: string { err } else { "fallback" };
+      assert(text == "bound", "a string result retains its bound value");
+    });
+
+    test("match branch tail if preserves mutable binding", () {
+      assert(readIfExprBindingMatch(8) == 9 && readIfExprBindingMatch("text") == -1,
+             "the converted if preserves narrowing and mutation");
+    });
+
+    test("condition and body scopes restore the outer name", () {
+      let err = 41;
+      let value: IfExprBindingValue = "text";
+      let missed = if value match err: int { err } else { err };
+      let number: IfExprBindingValue = 3;
+      let shadowed = if number match err: int { let err = 9; err } else { 0 };
+      let nested = if value match err: int { err }
+                   else if number match err: int { err } else { 0 };
+      assert(missed == 41 && shadowed == 9 && nested == 3 && err == 41,
+             "else, nested branches and the continuation resolve their own names");
+    });
+
+    test("and guards keep bindings and evaluate each operand once", () {
+      resetIfExprBindingCounts();
+      let sum = if makeIfExprBindingObject(2) match left: IfExprBindingResource &&
+                   makeIfExprBindingObject(3) match right: IfExprBindingResource &&
+                   checkIfExprBinding(right.id > left.id) {
+        left.id + right.id
+      } else { 0 };
+      assert(sum == 5 && ifExprBindingCreated == 2 && ifExprBindingChecks == 1 &&
+             ifExprBindingDrops == 2, "condition temporaries end after the successful branch");
+    });
+
+    test("failed guards release condition values before else", () {
+      resetIfExprBindingCounts();
+      let failed = if makeIfExprBindingObject(1) match first: IfExprBindingResource &&
+                      makeIfExprBindingObject(2) match second: int &&
+                      checkIfExprBinding(second > first.id) {
+        1
+      } else {
+        assert(ifExprBindingDrops == 2, "both evaluated targets are released before else");
+        0
+      };
+      assert(failed == 0 && ifExprBindingCreated == 2 && ifExprBindingChecks == 0,
+             "a failed middle guard skips its right operand");
+    });
+
+    test("first failed guard skips later target construction", () {
+      resetIfExprBindingCounts();
+      let failed = if makeIfExprBindingObject(1) match first: int &&
+                      makeIfExprBindingObject(2) match second: IfExprBindingResource {
+        first + second.id
+      } else { 0 };
+      assert(failed == 0 && ifExprBindingCreated == 1 && ifExprBindingDrops == 1,
+             "short circuit prevents constructing the second target");
+    });
+
+    test("managed result survives condition scope cleanup", () {
+      resetIfExprBindingCounts();
+      {
+        let result = if makeIfExprBindingObject(11) match item: IfExprBindingResource {
+          item
+        } else { IfExprBindingResource { id: 0 } };
+        assert(result.id == 11 && ifExprBindingDrops == 0,
+               "the result owns its subject after the condition ends");
+      }
+      assert(ifExprBindingDrops == 1, "the managed result is released exactly once");
+    });
+
+    test("aggregate result survives a converted if expression", () {
+      resetIfExprBindingCounts();
+      {
+        let result = match 0 {
+          0 {
+            if makeIfExprBindingAggregate(13) match item: IfExprBindingAggregate {
+              item
+            } else { IfExprBindingAggregate { resource: IfExprBindingResource { id: 0 } } }
+          }
+          else { IfExprBindingAggregate { resource: IfExprBindingResource { id: 0 } } }
+        };
+        assert(result.resource.id == 13 && ifExprBindingDrops == 0,
+               "the aggregate result retains its field after condition cleanup");
+      }
+      assert(ifExprBindingDrops == 1, "the aggregate field is released exactly once");
+    });
+
+    test("closure result retains its condition binding", () {
+      resetIfExprBindingCounts();
+      {
+        let reader: IfExprBindingReader =
+          if makeIfExprBindingObject(15) match item: IfExprBindingResource {
+            let captured: IfExprBindingReader = () { return item.id; };
+            captured
+          } else {
+            let fallback: IfExprBindingReader = () { return 0; };
+            fallback
+          };
+        assert(reader() == 15 && ifExprBindingDrops == 0,
+               "the captured condition binding survives its lexical scope");
+      }
+      assert(ifExprBindingDrops == 1, "closure cleanup releases the captured resource");
+    });
+
+    test("return and throw clean active condition bindings", () {
+      resetIfExprBindingCounts();
+      assert(returnIfExprBinding() == 17 && ifExprBindingDrops == 1,
+             "callable return cleans its condition scope");
+      try throwIfExprBinding() catch err: int {
+        assert(err == 19 && ifExprBindingDrops == 2,
+               "throw cleanup finishes before the outer catch");
+      }
+      assert(ifExprBindingCreated == 2 && ifExprBindingDrops == 2,
+             "both non-result branches release their resources once");
+    });
+
+    test("condition throw cleans an unwritten managed result slot", () {
+      resetIfExprBindingCounts();
+      var caught = false;
+      try conditionIfExprBindingResult() catch err: int {
+        caught = err == 23;
+      }
+      assert(caught && ifExprBindingCreated == 1 && ifExprBindingDrops == 1,
+             "unwinding releases the evaluated target and empty join slot safely");
+    });
+
+    test("Option Throwable binding works in a match tail if", () {
+      let root: Throwable = "bound error";
+      let present: Option<Throwable> = root;
+      var observed = 0;
+      try throwIfExprBindingOption(present) catch err: string {
+        assert(err == "bound error", "the bound root keeps the original payload");
+        observed += 1;
+      }
+      try throwIfExprBindingOption(none) catch err: int {
+        assert(err == 0, "the missing option takes the else branch");
+        observed += 1;
+      }
+      assert(observed == 2, "both throw-only branches are observed");
+    });
+  });
+}

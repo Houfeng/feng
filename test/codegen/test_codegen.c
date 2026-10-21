@@ -57,6 +57,8 @@ void test_array_static_parity_codegen(void (*compile_c)(const char *));
 void test_generic_argument_static_codegen(void (*compile_c)(const char *));
 /* G25 closed pointer values and generic identities survive FT import. */
 void test_g25_codegen(void (*compile_c)(const char *));
+/* If expression bindings retain their lexical and cleanup scopes in C. */
+void test_if_expression_binding_codegen(void (*compile_c)(const char *));
 
 #include <ctype.h>
 #include <stdio.h>
@@ -17639,6 +17641,7 @@ int main(void) {
     test_open_generic_param_descriptor_forwards_static_arguments();
     test_generic_argument_static_codegen(compile_generated_c_or_die);
     test_g25_codegen(compile_generated_c_or_die);
+    test_if_expression_binding_codegen(compile_generated_c_or_die);
     test_runtime_extern_codegen_rejects_non_contract_symbol();
     test_unsupported_pointer_pointee_reports_explicit_error();
     test_generic_function_codegen_failure_propagates();
