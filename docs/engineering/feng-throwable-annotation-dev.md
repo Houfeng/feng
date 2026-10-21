@@ -568,7 +568,7 @@ R04 已确认三参数传递、异常记录 witness 字段及读取入口是新�
 ### 7.2 标准库与调用方
 
 当前 `std.Error` 是满足 `Display` 的具体 type；`FengCompileError` 也是具体 type。
-标准库多处直接抛出 string，并有具体 string catch。已确定通过 `fit` 为原有合法
+标准库多处直接抛出 string，并有具体 string catch。通过类型声明或 `fit` 为原有合法
 载荷建立根契约关系，保留现有 throw 表达式、具体 catch 与行为断言，不将原有
 用例改写为抛出新的包装异常类型。适配必须满足根契约成员及普通可见性规则。
 
@@ -581,7 +581,15 @@ R04 已确认三参数传递、异常记录 witness 字段及读取入口是新�
 `toString()` 实现所在文件的模块顶层，紧邻已有 `Display` 适配。仅声明满足关系
 时使用 `open fit T: std.Throwable;`，语法依据 [fit 主规范 §3](../specifications/feng-fit.md#3-语法)。
 这两组声明不单独保留 `Throwable.ff`，也不移入根所在的 `std` 模块；所属模块、
-公开可见性和调用方需要导入的模块保持不变。其他异常适配不属于本次文件整理范围。
+公开可见性和调用方需要导入的模块保持不变。
+
+`bool` 的 `open fit bool: Throwable;` 同样放在 `basic/bool.ff` 的 `Display`
+实现之后。`Error` 与 `FengCompileError` 直接在各自类型声明头满足 `Throwable`，
+替换原有的直接 `Display` 声明；通过 `Throwable: Display` 保留父契约能力。
+`FengCompileError` 的 `JsonSerializable<FengCompileError>` 声明保持原样。
+`basic/Throwable.ff` 仅保留根定义，删除不再包含声明的
+`compiler/common/Throwable.ff`。类型声明与父契约闭包沿用 [spec 主规范](../specifications/feng-spec.md)，
+不引入新的满足规则。
 
 统一根值应验证跨字段、容器和泛型返回的保存／再抛出能力。Future 可作为这种能力
 的应用场景；本方案不顺带重设计 Future / Promise 的调度、状态机或公开 API。
@@ -1122,3 +1130,45 @@ UTF-8 环境在 Codex 沙箱外执行完整 `make test`。验证结果以本轮�
 `test-inputs.sha256`。CLI 测试会清理仓库 `temp/`；本轮通过持有日志文件描述符
 完整收集输出，再取回本地，退出码由执行会话确认。日志收集说明保存在同目录
 `log-recovery.txt`，这些验证产物不提交到仓库。
+
+### 11.9 bool 与错误类型的根声明归位（2026-10-21）
+
+用户确认继续按 §7.2 整理剩余三项标准库关系，先更新文档，再实施：
+
+- 将 `basic/Throwable.ff` 中的 bool 适配移至 `basic/bool.ff`，使用分号形式。
+- 将 `Error` 的类型声明改为 `open type Error: Throwable`，移除其独立 fit。
+- 将 `FengCompileError` 的类型声明改为
+  `open type FengCompileError: JsonSerializable<FengCompileError>, std.Throwable`，
+  删除原独立适配文件 `compiler/common/Throwable.ff`。
+
+范围仅为上述五个标准库文件及本文；保留类型成员、`toString()` 实现、模块导入、
+JSON 能力与公开可见性，不修改编译器、泛型机制、共享体通用实现或现有测试。
+核对声明迁移及父契约闭包后，复用现有 Linux ARM64 容器
+`feng-throwable-20261020`，按 §11.6 的工具链和 UTF-8 环境，在 Codex 沙箱外
+执行完整 `make test`。本轮日志与状态文件直接保存在容器独立临时目录，避免
+CLI 测试清理仓库 `temp/` 影响取证。
+
+当前状态：三项关系已按上述方式归位，冗余适配文件已删除；本轮完整 `make test`
+已通过，执行进程退出码为 0。本轮范围已交付，代码未自动提交。
+
+迁移核对：`bool.ff` 仅在原实现之后追加分号形式声明；两个错误类型除声明头外
+逐字节保持原样；根定义本身未改变。类型成员、导入、JSON 契约和公开可见性
+均保留，编译器、泛型机制、共享体通用实现与测试未改动。现有 FCTS 的 bool
+泛型 throw，以及标准库的 `Error` 异常和 Lexer／Parser 编译诊断 catch 用例，
+均从常规入口参与本轮回归。
+
+| 验收项 | ASan／UBSan（含泄漏检查） | 普通构建 |
+| --- | --- | --- |
+| Smoke | 91/91 | 91/91 |
+| 标准库 | 611/611，失败与跳过均为 0 | 611/611，失败与跳过均为 0 |
+| FCTS | 1732/1732，失败与跳过均为 0 | 1732/1732，失败与跳过均为 0 |
+| 编译器、runtime、Codegen、CLI、LSP 生命周期与 Symbol | 通过 | 通过 |
+| 性能约束、LLVM C EH 与 native symbols | 通过 | 通过 |
+
+完整目标包含的增量构建、发布与安装脚本、内置包及工具链恢复等检查均通过。
+工作区与容器的 1031 个回归输入在执行前后均通过 SHA-256 校验；冗余适配文件
+在回归结束后仍确认不存在，`git diff --check` 通过。
+
+完整日志已取回本地 `temp/throwable-root-declarations/make-test.log`；同目录
+`make-test.started`、`make-test.finished`、`make-test.exit` 保存容器生成的起止
+时间及退出码，`test-inputs.sha256` 保存输入校验清单。这些验证产物不提交到仓库。

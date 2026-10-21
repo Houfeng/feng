@@ -3,10 +3,3 @@ open module std;
 /** 所有异常的根契约，复用 Display 提供的文本表示。 */
 @throwable
 open spec Throwable: Display {}
-
-/** 标准错误保留原有类型、成员和异常身份。 */
-open fit Error: Throwable {}
-
-/** 布尔异常沿用现有 Display 实现。 */
-open fit bool: Throwable {}
-

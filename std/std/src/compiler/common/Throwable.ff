@@ -1,6 +1,0 @@
-open module std.compiler.common;
-
-import std;
-
-/** 编译诊断作为异常抛出时，保留原类型及文本表示。 */
-open fit FengCompileError: std.Throwable {}

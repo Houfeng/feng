@@ -14,7 +14,7 @@ import std.numeric;
  *
  * throw 会装箱，但异常路径 RC 开销可忽略。
  */
-open type FengCompileError: JsonSerializable<FengCompileError>, Display {
+open type FengCompileError: JsonSerializable<FengCompileError>, std.Throwable {
   /** 错误码（如 "LE0001"） */
   let code: string;
 

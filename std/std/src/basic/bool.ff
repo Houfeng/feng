@@ -96,3 +96,6 @@ open fit bool: Display {
   }
 
 }
+
+/** 布尔异常沿用现有 Display 实现。 */
+open fit bool: Throwable;
