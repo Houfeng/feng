@@ -1715,6 +1715,76 @@ static char *run_lsp_server_capture(FILE *input) {
 
 typedef void (*LspTestReadyAction)(FILE *input, int output_fd, void *user);
 
+/* One position query and the observable text required before continuing. */
+typedef struct LspTestPositionReadiness {
+    const char *method;
+    const char *uri;
+    unsigned int line;
+    unsigned int character;
+    const char *expected;
+} LspTestPositionReadiness;
+
+/* Polls a position through complete protocol barriers, returning the ready
+ * response batch or NULL after the existing bounded publication window. */
+static char *wait_lsp_test_position_ready(FILE *input,
+                                          int output_fd,
+                                          const LspTestPositionReadiness *position) {
+    enum {
+        MAX_READY_PROBES = 200,
+        READY_PROBE_DELAY_US = 25U * 1000U
+    };
+
+    for (size_t probe_index = 0U; probe_index < MAX_READY_PROBES; ++probe_index) {
+        unsigned int probe_id = 1000U + (unsigned int)probe_index;
+        unsigned int barrier_id = 2000U + (unsigned int)probe_index;
+        char *probe = dup_printf(
+            "{\"jsonrpc\":\"2.0\",\"id\":%u,\"method\":\"%s\","
+            "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+            "\"position\":{\"line\":%u,\"character\":%u}}}",
+            probe_id,
+            position->method,
+            position->uri,
+            position->line,
+            position->character);
+        char *barrier = dup_printf(
+            "{\"jsonrpc\":\"2.0\",\"id\":%u,"
+            "\"method\":\"feng/testReadinessBarrier\",\"params\":null}",
+            barrier_id);
+        char *output;
+
+        write_lsp_message(input, probe);
+        write_lsp_message(input, barrier);
+        free(probe);
+        free(barrier);
+        ASSERT(fflush(input) == 0);
+        output = read_lsp_test_response(output_fd, barrier_id);
+        if (strstr(output, position->expected) != NULL) {
+            return output;
+        }
+        free(output);
+        if (probe_index + 1U < MAX_READY_PROBES) {
+            (void)usleep(READY_PROBE_DELAY_US);
+        }
+    }
+    return NULL;
+}
+
+/* Adds another observable readiness condition to an already live session. */
+static void wait_lsp_test_position_ready_action(FILE *input,
+                                                int output_fd,
+                                                void *user) {
+    const LspTestPositionReadiness *position = (const LspTestPositionReadiness *)user;
+    char *output = wait_lsp_test_position_ready(input, output_fd, position);
+
+    if (output == NULL) {
+        fprintf(stderr, "lsp readiness failed: %s %s (%u,%u), expected: %s\n",
+                position->method, position->uri, position->line,
+                position->character, position->expected);
+    }
+    ASSERT(output != NULL);
+    free(output);
+}
+
 /* Extended readiness runner that can perform ordered protocol actions before
  * the final request batch while the same LSP process remains alive. */
 static char *run_lsp_server_capture_after_position_ready_action(
@@ -1731,16 +1801,12 @@ static char *run_lsp_server_capture_after_position_ready_action(
     const char *const *requests,
     size_t request_count,
     char **out_ready_output) {
-    enum {
-        MAX_READY_PROBES = 200,
-        READY_PROBE_DELAY_US = 25U * 1000U
-    };
+    LspTestPositionReadiness position = {method, uri, line, character, ready_text};
     int input_pipe[2];
     int output_pipe[2];
     FILE *errors = temp_file();
     FILE *input;
     pid_t child;
-    size_t probe_index;
     size_t request_index;
     char *readiness_output;
     char *captured;
@@ -1783,42 +1849,13 @@ static char *run_lsp_server_capture_after_position_ready_action(
     if (after_open != NULL) {
         write_lsp_message(input, after_open);
     }
-    ready = false;
-    for (probe_index = 0U; probe_index < MAX_READY_PROBES; ++probe_index) {
-        unsigned int probe_id = 1000U + (unsigned int)probe_index;
-        unsigned int barrier_id = 2000U + (unsigned int)probe_index;
-        char *probe = dup_printf(
-            "{\"jsonrpc\":\"2.0\",\"id\":%u,\"method\":\"%s\","
-            "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
-            "\"position\":{\"line\":%u,\"character\":%u}}}",
-            probe_id,
-            method,
-            uri,
-            line,
-            character);
-        char *barrier = dup_printf(
-            "{\"jsonrpc\":\"2.0\",\"id\":%u,"
-            "\"method\":\"feng/testReadinessBarrier\",\"params\":null}",
-            barrier_id);
-        write_lsp_message(input, probe);
-        write_lsp_message(input, barrier);
-        free(probe);
-        free(barrier);
-        ASSERT(fflush(input) == 0);
-        readiness_output = read_lsp_test_response(output_pipe[0], barrier_id);
-        ready = strstr(readiness_output, ready_text) != NULL;
-        if (ready && out_ready_output != NULL) {
-            *out_ready_output = readiness_output;
-            readiness_output = NULL;
-        }
-        free(readiness_output);
-        if (ready) {
-            break;
-        }
-        if (probe_index + 1U < MAX_READY_PROBES) {
-            (void)usleep(READY_PROBE_DELAY_US);
-        }
+    readiness_output = wait_lsp_test_position_ready(input, output_pipe[0], &position);
+    ready = readiness_output != NULL;
+    if (ready && out_ready_output != NULL) {
+        *out_ready_output = readiness_output;
+        readiness_output = NULL;
     }
+    free(readiness_output);
 
     if (ready && action != NULL) {
         action(input, output_pipe[0], action_user);
@@ -12023,12 +12060,86 @@ static void assert_lsp_test_response_contains(const char *output,
 
     ASSERT(id_marker != NULL);
     response = strstr(output, id_marker);
+    free(id_marker);
+    next_response = response != NULL ? strstr(response, "Content-Length:") : NULL;
+    match = response != NULL ? strstr(response, expected) : NULL;
+    if (response == NULL || match == NULL ||
+        (next_response != NULL && match >= next_response)) {
+        fprintf(stderr, "lsp response assertion: id=%u\nexpected:\n%s\nactual response from id:\n",
+                id, expected);
+        if (response != NULL) {
+            size_t length = next_response != NULL
+                ? (size_t)(next_response - response) : strlen(response);
+
+            (void)fwrite(response, 1U, length, stderr);
+            fputc('\n', stderr);
+        } else {
+            fputs("<response missing>\n", stderr);
+        }
+    }
     ASSERT(response != NULL);
-    next_response = strstr(response, "Content-Length:");
-    match = strstr(response, expected);
     ASSERT(match != NULL);
     ASSERT(next_response == NULL || match < next_response);
-    free(id_marker);
+}
+
+/* Failing response assertions retain their checks, report only the requested
+ * response, and release the temporary ID before normal exit runs sanitizers. */
+static void test_lsp_response_assertion_failure_diagnostics(void) {
+    static const char *kOutput =
+        "Content-Length: 44\r\n\r\n"
+        "{\"jsonrpc\":\"2.0\",\"id\":11,\"result\":\"unready\"}"
+        "Content-Length: 42\r\n\r\n"
+        "{\"jsonrpc\":\"2.0\",\"id\":12,\"result\":\"later\"}";
+    /* Each case reaches a different original assertion failure. */
+    static const struct {
+        unsigned int id;
+        const char *id_diagnostic;
+        const char *expected;
+        const char *actual;
+        const char *assertion;
+    } kCases[] = {
+        {99U, "id=99", "unready", "<response missing>", "response != NULL"},
+        {11U, "id=11", "absent", "\"id\":11,\"result\":\"unready\"}",
+         "match != NULL"},
+        {11U, "id=11", "later", "\"id\":11,\"result\":\"unready\"}",
+         "next_response == NULL || match < next_response"}
+    };
+
+    for (size_t index = 0U; index < sizeof(kCases) / sizeof(kCases[0]); ++index) {
+        FILE *errors = temp_file();
+        pid_t child;
+        int status;
+        char *output;
+        const char *expected;
+        const char *actual;
+
+        ASSERT(errors != NULL);
+        ASSERT(fflush(NULL) == 0);
+        child = fork();
+        ASSERT(child >= 0);
+        if (child == 0) {
+            ASSERT(dup2(fileno(errors), STDERR_FILENO) >= 0);
+            fclose(errors);
+            assert_lsp_test_response_contains(kOutput, kCases[index].id,
+                                              kCases[index].expected);
+            _exit(0);
+        }
+        ASSERT(waitpid(child, &status, 0) == child);
+        output = read_text_stream(errors);
+        fclose(errors);
+        ASSERT(WIFEXITED(status) && WEXITSTATUS(status) == 1);
+        ASSERT(strstr(output, kCases[index].id_diagnostic) != NULL);
+        expected = strstr(output, "\nexpected:\n");
+        actual = strstr(output, "\nactual response from id:\n");
+        ASSERT(expected != NULL && actual != NULL && expected < actual);
+        ASSERT(strncmp(expected + strlen("\nexpected:\n"), kCases[index].expected,
+                       strlen(kCases[index].expected)) == 0);
+        ASSERT(strstr(actual, kCases[index].actual) != NULL);
+        ASSERT(strstr(output, kCases[index].assertion) != NULL);
+        ASSERT(strstr(output, "\"id\":12") == NULL);
+        ASSERT(strstr(output, "LeakSanitizer") == NULL);
+        free(output);
+    }
 }
 
 /* Asserts one framed LSP response does not contain text from another
@@ -27845,6 +27956,8 @@ static void assert_lsp_annotation_argument_navigation(bool packaged,
     char *did_open;
     char *did_save;
     char *ready_output = NULL;
+    char *source_ready_location = NULL;
+    LspTestPositionReadiness source_readiness = {0};
     char *output;
     char *remove_error = NULL;
     char *owned_requests[2U * sizeof(kCases) / sizeof(kCases[0])];
@@ -27910,11 +28023,30 @@ static void assert_lsp_annotation_argument_navigation(bool packaged,
     requests[2U * index + 1U] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
     find_line_character(source, "let readiness", strlen("let ") + 1U,
                         &ready_line, &ready_character);
-    output = run_lsp_server_capture_after_position_ready(
+    if (!packaged) {
+        unsigned int declaration_line;
+        unsigned int declaration_character;
+
+        /* Consumer facts and dependency source mappings publish separately. */
+        source_readiness.method = "textDocument/definition";
+        source_readiness.uri = uri;
+        find_line_character(source, "func ordinary(manager: ViewManager)",
+                            strlen("func ordinary(manager: ") + 1U,
+                            &source_readiness.line, &source_readiness.character);
+        find_line_character(kProvider, kCases[0].declaration,
+                            strlen(kCases[0].declaration_prefix),
+                            &declaration_line, &declaration_character);
+        source_ready_location = build_lsp_test_location_marker(
+            provider_uri, declaration_line, declaration_character);
+        source_readiness.expected = source_ready_location;
+    }
+    output = run_lsp_server_capture_after_position_ready_action(
         kInitialize, did_open, semantic_failure ? did_save : NULL,
         "textDocument/hover", uri, ready_line, ready_character,
         semantic_failure ? "\"source\":\"semantic\"" : "let readiness: string",
+        packaged ? NULL : wait_lsp_test_position_ready_action, &source_readiness,
         requests, sizeof(requests) / sizeof(requests[0]), &ready_output);
+    free(source_ready_location);
     if (!semantic_failure) {
         ASSERT(strstr(ready_output, "\"severity\":1") == NULL);
     }
@@ -33228,6 +33360,7 @@ int main(void) {
     test_lsp_help_writes_stdout_not_stderr();
     test_lsp_rejects_unknown_option();
     test_lsp_unknown_option_stays_on_stderr();
+    test_lsp_response_assertion_failure_diagnostics();
     test_lsp_request_wait_reads_complete_long_response();
     test_lsp_response_reader_handles_fragmentation();
     test_lsp_response_reader_preserves_message_boundaries();
