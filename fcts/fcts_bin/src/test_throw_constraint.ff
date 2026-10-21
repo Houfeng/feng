@@ -1,16 +1,20 @@
 module fcts_bin;
+import std.numeric;
+import std.text;
+
+import std;
 
 import std.test;
 import fcts_lib.test;
 
 /** Shared local throw, including caller-owned and temporary values. */
-func raiseConstrained<E: throw>(error: E): void { throw error; }
+func raiseConstrained<E: Throwable>(error: E): void { throw error; }
 
 /** Generic return preserves the descriptor while transferring a value. */
 func keepThrowValue<T>(value: T): T { return value; }
 
 /** Throw an owned generic result using the same cleanup authority. */
-func raiseReturned<E: throw>(value: E): void { throw keepThrowValue<E>(value); }
+func raiseReturned<E: Throwable>(value: E): void { throw keepThrowValue<E>(value); }
 
 /** Callable surface used to exercise generic function and method values. */
 spec ThrowAction<T>(value: T): void;
@@ -18,15 +22,15 @@ spec ThrowAction<T>(value: T): void;
 spec ThrowClosure(): void;
 
 /** Capture the value and its existing bound descriptor together. */
-func captureThrow<E: throw>(value: E): ThrowClosure {
+func captureThrow<E: Throwable>(value: E): ThrowClosure {
   return () { throw value; };
 }
 
 /** Array storage still yields a direct E operand. */
-func raiseFirst<E: throw>(values: E[]): void { throw values[0]; }
+func raiseFirst<E: Throwable>(values: E[]): void { throw values[0]; }
 
 /** Variadic packing must preserve the same element descriptor. */
-func raiseFirstVariadic<E: throw>(first: E, values: E...): void {
+func raiseFirstVariadic<E: Throwable>(first: E, values: E...): void {
   throw values[0];
 }
 
@@ -50,14 +54,14 @@ type ThrowReference<T> { let value: T; }
 @value @abi type ThrowAbiValue { let code: i32; }
 
 /** Local owner tests both implicit descriptor entrances. */
-type ThrowOwner<E: throw> {
+type ThrowOwner<E: Throwable> {
   let error: E;
   /** The field's E descriptor is obtained from the owner. */
   func raise(): void { throw self.error; }
   /** Method-level U is independent of E. */
-  func method<U: throw>(value: U): void { throw value; }
+  func method<U: Throwable>(value: U): void { throw value; }
   /** Static method descriptors use the existing calling convention. */
-  static func send<U: throw>(value: U): void { throw value; }
+  static func send<U: Throwable>(value: U): void { throw value; }
 }
 
 /** An extension shares the original owner's bound and descriptor domain. */
@@ -67,7 +71,7 @@ fit ThrowOwner<E> {
 }
 
 /** Constructor bodies use the owner descriptor before returning an object. */
-type ThrowConstructor<E: throw> {
+type ThrowConstructor<E: Throwable> {
   /** A failed construction propagates the exact E payload. */
   func ThrowConstructor(error: E) { throw error; }
 }
@@ -76,7 +80,7 @@ type ThrowConstructor<E: throw> {
 type ThrowMixed: LibThrowSurface { ...: LibThrowMixin; }
 
 /** Recursive calls forward the descriptor without reconstructing metadata. */
-func recursiveRaise<E: throw>(error: E, depth: i32): void {
+func recursiveRaise<E: Throwable>(error: E, depth: i32): void {
   if depth == 0 { throw error; }
   recursiveRaise<E>(error, depth - 1);
 }
@@ -114,7 +118,7 @@ func makeTrackedThrowValue(): ThrowTrackedValue {
 }
 
 /** Existing defer and anonymous-rethrow semantics must compose with E. */
-func deferredConstrained<E: throw>(value: E): void {
+func deferredConstrained<E: Throwable>(value: E): void {
   defer { ThrowTracker.deferred += 1; }
   try raiseConstrained<E>(value) catch { throw; }
 }
@@ -145,7 +149,7 @@ func checkReferenceThrowCleanup(): void {
   assert(ThrowTracker.alive == 1 && ThrowTracker.destroyed == 0, "source reference remains owned");
 }
 
-/** New builtin constraint runtime behavior, locally and across an FB provider. */
+/** Root-constrained generic throws, locally and across an FB provider. */
 open func test_throw_constraint(): void {
   describe("throw generic constraint", () {
     test("all builtin payloads keep exact types and values", () {

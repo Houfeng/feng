@@ -1,5 +1,8 @@
 module fcts_bin;
 
+import std.text;
+import std.numeric;
+
 import std.test;
 
 /** Callable used to prove that a nested Lambda owns its return statements. */

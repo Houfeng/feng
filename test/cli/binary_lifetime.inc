@@ -2,7 +2,7 @@
  * normal and exceptional exits, independent of representation or producer. */
 static void test_binary_operand_lifetime(void) {
     static const char source[] =
-        "module binary_lifetime;\n"
+        "open module binary_lifetime;\n"
         "var made=0;var dropped=0;var calls=0;\n"
         "func require(ok:bool):void{if !ok{throw 99;}}\n"
         "spec View{let n:int;}\n"
@@ -57,7 +57,8 @@ static void test_binary_operand_lifetime(void) {
         "require(true && text()==\"ab\");require(calls==8);\n"
         "require(false || text()==\"ab\");require(calls==9);}\n"
         "func main(args:string[]):void{strings();references();require(made==dropped);\n"
-        "borrowed();require(made==dropped);exceptions();require(made==dropped);loops();}\n";
+        "borrowed();require(made==dropped);exceptions();require(made==dropped);loops();}\n"
+        THROW_TEST_ROOT;
     char workspace[] = "temp/binary-lifetime-XXXXXX";
     ASSERT(mkdtemp(workspace) != NULL);
     char *path = path_join(workspace, "main.ff");

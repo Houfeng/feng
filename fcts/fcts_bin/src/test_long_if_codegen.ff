@@ -1,4 +1,6 @@
 module fcts_bin;
+
+import std.text;
 import std.test;
 
 /** Observe evaluation and destruction without counting synthesized defaults. */

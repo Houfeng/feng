@@ -45,7 +45,9 @@ static void test_keyword_and_annotation_counts(void) {
 
     ASSERT(feng_keyword_count() == 29U);
     ASSERT(feng_reserved_word_count() == 5U);
-    ASSERT(feng_builtin_annotation_count() == 10U);
+    ASSERT(feng_builtin_annotation_count() == 11U);
+    ASSERT(feng_lookup_builtin_annotation("throwable", 9U, &annotation_kind));
+    ASSERT(annotation_kind == FENG_ANNOTATION_THROWABLE);
     ASSERT(feng_lookup_keyword("enum", 4U, &keyword_kind));
     ASSERT(keyword_kind == FENG_TOKEN_KW_ENUM);
     ASSERT(feng_lookup_keyword("spec", 4U, &keyword_kind));

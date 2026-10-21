@@ -1,0 +1,44 @@
+open module fcts_lib.test;
+
+import std;
+
+/** The field type need not itself satisfy the exception root. */
+open type LibRootError<T>: Throwable {
+  open let value: T;
+  open let text: string;
+  /** Read a real field through the root witness. */
+  func toString(): string { return self.text; }
+}
+
+/** Open aggregate payloads keep descriptor-sized managed fields. */
+@value open type LibRootValue<T>: Throwable {
+  open let value: T;
+  open let text: string;
+  /** Read the boxed payload rather than return a constant. */
+  func toString(): string { return self.text; }
+}
+
+/** Throw an open reference payload from a provider shared function. */
+open func libRaiseRootError<T>(value: LibRootError<T>): void { throw value; }
+
+/** Throw an open aggregate payload from a provider shared function. */
+open func libRaiseRootValue<T>(value: LibRootValue<T>): void { throw value; }
+
+/** Exercise owner and method descriptor domains with named open payloads. */
+open type LibRootOwner<T> {
+  open let reference: LibRootError<T>;
+  open let value: LibRootValue<T>;
+  /** Resolve a reference payload using the owner argument. */
+  open func raiseReference(): void { throw self.reference; }
+  /** Resolve an aggregate payload using the owner argument. */
+  open func raiseValue(): void { throw self.value; }
+  /** Resolve an aggregate payload using an independent method argument. */
+  open func raiseMethod<U>(value: LibRootValue<U>): void { throw value; }
+}
+
+/** Value-owner methods obtain their closed layout from the aggregate owner. */
+@value open type LibRootValueOwner<T> {
+  open let value: LibRootValue<T>;
+  /** Throw the named open field through the existing owner descriptor. */
+  open func raiseValue(): void { throw self.value; }
+}

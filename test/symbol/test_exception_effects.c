@@ -252,19 +252,19 @@ static void effects_consumer(const FengSemanticImportedModuleQuery *query, const
 void test_exception_effects_ft(void) {
     const char *source =
         "open module effects.api;"
-        "func hidden<T:throw>(x:T){throw x;}"
+        "func hidden<T:Throwable>(x:T){throw x;}"
         "/** Structured exception metadata documentation. */"
-        "open func raise<T:throw>(x:T){hidden(x);}"
-        "open func filtered<T:throw>(x:T){try hidden(x) catch e:string{}}"
+        "open func raise<T:Throwable>(x:T){hidden(x);}"
+        "open func filtered<T:Throwable>(x:T){try hidden(x) catch e:string{}}"
         "open spec Action():void;"
         "var callback:Action=(){};open func opaque(){callback();}"
         "open func invoke(f:Action){f();}"
         "open func mixed(f:Action,w:Worker){f();w.work();throw true;}"
-        "open func factory<T:throw>(x:T):Action{return (){throw x;};}"
-        "open type Box<T:throw>{open let value:T;open func fail(){hidden(self.value);}"
-        "open func method<U:throw>(x:U){hidden(x);}"
-        "open func both<U:throw>(x:U){if false{hidden(self.value);}hidden(x);}}"
-        "open type Fitted<T:throw>{open let value:T;}open fit Fitted<T>{open func "
+        "open func factory<T:Throwable>(x:T):Action{return (){throw x;};}"
+        "open type Box<T:Throwable>{open let value:T;open func fail(){hidden(self.value);}"
+        "open func method<U:Throwable>(x:U){hidden(x);}"
+        "open func both<U:Throwable>(x:U){if false{hidden(self.value);}hidden(x);}}"
+        "open type Fitted<T:Throwable>{open let value:T;}open fit Fitted<T>{open func "
         "fail(){hidden(self.value);}}"
         "open spec Worker{func work():void;}open type W:Worker{func work():void{throw \"x\";}}"
         "open fit i32[]:Worker{func work():void{throw true;}}"
@@ -274,9 +274,9 @@ void test_exception_effects_ft(void) {
         "true;}}"
         "open func staticWork<T:Factory>(){T.work();}"
         "open func staticAction<T:Factory>():Action{return T.work;}"
-        "func initial<T:throw>():i32{let x:T;throw x;}"
+        "func initial<T:Throwable>():i32{let x:T;throw x;}"
         "open let fixed:i32=initial<string>();open var changing:i32=initial<bool>();"
-        "open type Lazy<T:throw>{open static let value:i32=initial<T>();"
+        "open type Lazy<T:Throwable>{open static let value:i32=initial<T>();"
         "open static var current:i32=initial<T>();}"
         "open spec Stored{static var value:i32;}"
         "open type Store:Stored{static var value:i32=initial<bool>();}"
@@ -284,8 +284,9 @@ void test_exception_effects_ft(void) {
         "open type Failure{open let code:i32;}open func failNominal(x:Failure){throw x;}"
         "open enum Status{Failed}open type Pair(i32,string);@value open type ValueError{open let code:i32;}"
         "open func work<T:Worker>(x:T){x.work();}"
-        "open func recurse<T:throw>(x:T,n:i32){if n==0{hidden(x);}else{recurse(x,n-1);}}";
-    ThrowConstraintUnit unit = throw_constraint_analyze(source, NULL, NULL);
+        "open func recurse<T:Throwable>(x:T,n:i32){if n==0{hidden(x);}else{recurse(x,n-1);}}";
+    ThrowConstraintUnit unit = throw_constraint_analyze_with_root(source, "open fit Failure:Throwable{}open fit Status:Throwable{}"
+        "open fit Pair:Throwable{}open fit ValueError:Throwable{}open fit Box<T>:Throwable{}", NULL, NULL);
     FengSymbolError error = {0};
     FengSymbolGraph *graph = NULL;
     THROW_CHECK(feng_symbol_build_graph(unit.analysis, &graph, &error));
@@ -332,8 +333,8 @@ void test_exception_effects_ft(void) {
         THROW_CHECK(cache != NULL);
         FengSemanticImportedModuleQuery query = feng_symbol_imported_module_cache_as_query(cache);
         effects_consumer(&query, "func run(){raise(\"x\");}", "string");
-        effects_consumer(&query, "func run<T:throw>(x:T){raise(x);}", "T");
-        effects_consumer(&query, "func run<T:throw>(x:T){filtered(x);}", "T");
+        effects_consumer(&query, "func run<T:Throwable>(x:T){raise(x);}", "T");
+        effects_consumer(&query, "func run<T:Throwable>(x:T){filtered(x);}", "T");
         effects_consumer(&query, "func run(f:Action){invoke(f);}", "unknown");
         effects_consumer(&query, "func run(){opaque();}", "unknown");
         effects_consumer(&query, "func run(){try opaque() catch e:string{}}", "unknown");

@@ -20,14 +20,15 @@ static void native_exception_build(const char *source, const char *out,
 /* Keep the original S11 reproducer independent of std and test-framework code. */
 static void test_native_exception_release_reproducer(void) {
     static const char source[] =
-        "module release_catch_audit;\n"
+        "open module release_catch_audit;\n"
         "@cdecl(\"libc\", \"exit\") extern func quit(code:i32):void;\n"
         "spec Callback():void;\n"
         "func fail(value:string):void{throw value;}\n"
         "func invoke(callback:Callback):void{callback();}\n"
         "func main(args:string[]):void{invoke((){var observed=\"\";"
         "try fail(\"header\") catch error:string{observed=error;"
-        "let error=\"body\";observed=error;}if observed!=\"body\"{quit(1);}});}\n";
+        "let error=\"body\";observed=error;}if observed!=\"body\"{quit(1);}});}\n"
+        THROW_TEST_ROOT;
     char workspace[] = "temp/native-eh-reproducer-XXXXXX";
     ASSERT(mkdtemp(workspace) != NULL);
     char *path = path_join(workspace, "main.ff");
@@ -54,10 +55,12 @@ static void test_native_exception_source_hidden_optimization_matrix(void) {
     static const char provider[] =
         "open module native.package;\n"
         "@value open type Payload{open let text:string;open let code:int;}\n"
-        "open func raise<T:throw>(value:T):T{throw value;}\n"
+        "open func raise<T:Throwable>(value:T):T{throw value;}\n"
         "open func relay(value:int):int{return raise<int>(value);}\n"
-        "open type Owner<T:throw>{open let value:T;open func fail():T{throw self.value;}"
-        "open func send<U:throw>(other:U):U{throw other;}}\n";
+        "open type Owner<T:Throwable>{open let value:T;open func fail():T{throw self.value;}"
+        "open func send<U:Throwable>(other:U):U{throw other;}}\n"
+        THROW_TEST_ROOT
+        "open fit Payload:Throwable{}";
     static const char consumer[] =
         "module native.consumer;import native.package;\n"
         "@cdecl(\"libc\") extern func puts(message:string*):int;\n"
@@ -73,7 +76,8 @@ static void test_native_exception_source_hidden_optimization_matrix(void) {
         "try owner.send<string>(\"method\")catch e:string{if e==\"method\"{count+=1;}}"
         "let callback:Action=raise<int>;try callback(19)catch e:int{if e==19{count+=1;}}"
         "try(try relay(23)catch{throw;})catch e:int{if e==23{count+=1;}}"
-        "if count!=8{throw \"native package mismatch\";}puts(&\"native-package\");}\n";
+        "if count!=8{throw \"native package mismatch\";}puts(&\"native-package\");}\n"
+        "fit Pair:Throwable{}";
     for (int producer_release = 0; producer_release < 2; ++producer_release) {
         char workspace[] = "temp/native-eh-package-XXXXXX";
         ASSERT(mkdtemp(workspace) != NULL);

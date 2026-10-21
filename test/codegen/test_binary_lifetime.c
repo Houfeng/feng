@@ -28,7 +28,7 @@ void test_binary_operand_lifetime_codegen(void (*compile_c)(const char *)) {
         "open func chain(a:string,b:string,c:string):string{return a+b+c;}"
         "open func guarded(a:string,b:string):string{return (a+b)+fail();}"
         "open func borrowed(a:string,b:string):bool{return a==b;}";
-    ThrowConstraintUnit unit = throw_constraint_analyze(source, NULL, NULL);
+    ThrowConstraintUnit unit = throw_constraint_analyze_with_root(source, NULL, NULL, NULL);
     FengCodegenOutput output = {0};
     FengCodegenError error = {0};
     bool ok = feng_codegen_emit_program(unit.analysis, FENG_COMPILE_TARGET_LIB,

@@ -1,5 +1,7 @@
 module fcts_bin;
 
+import std.text;
+
 import std.test;
 import fcts_lib.test;
 import fcts_lib.test.lib_spec_method_value;

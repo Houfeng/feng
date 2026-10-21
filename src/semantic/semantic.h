@@ -231,7 +231,10 @@ typedef enum FengSpecCoercionForm {
     /* Explicit intersection value -> declared component/ancestor view.
      * Uses the same subject-preserving witness path as OBJECT_UPCAST, but
      * never participates in implicit coercion or overload matching. */
-    FENG_SPEC_COERCION_FORM_INTERSECTION_UPCAST
+    FENG_SPEC_COERCION_FORM_INTERSECTION_UPCAST,
+    /* An exception-only preparation dependency for an erased parameter.
+     * Ordinary expression conversion must leave the source representation intact. */
+    FENG_SPEC_COERCION_FORM_THROW_ROOT
 } FengSpecCoercionForm;
 
 /* Origin of the callable value being coerced to a callable-form spec. The
@@ -501,6 +504,11 @@ typedef struct FengImportedSymbolIdentity {
 } FengImportedSymbolIdentity;
 
 typedef struct FengSemanticAnalysis {
+    /* Borrowed canonical root declaration and defining program for this analysis. */
+    const FengDecl *exception_root;
+    const FengProgram *exception_root_program;
+    /* Owned through synthesized_type_refs; usable outside the defining module. */
+    const FengTypeRef *exception_root_type;
     /* Unified compile-time exception summaries and callable value origins. */
     struct FengExceptionAnalysis *exception_analysis;
     FengConstraintProjectionUse *constraint_projection_uses;
@@ -613,6 +621,12 @@ typedef struct FengSemanticImportedModuleQuery {
     const FengSemanticModule *(*get_module)(const void *user,
                                             const FengSlice *segments,
                                             size_t segment_count);
+    /* Indexed dependency modules, including modules not referenced by source.
+     * A successful query may return NULL for a module with no root; only root
+     * candidate modules need declaration restoration. False reports failure. */
+    size_t (*root_candidate_module_count)(const void *user);
+    bool (*get_root_candidate_module)(const void *user, size_t index,
+                                      const FengSemanticModule **out_module);
 } FengSemanticImportedModuleQuery;
 
 typedef struct FengSemanticAnalyzeOptions {
@@ -1353,6 +1367,12 @@ bool feng_semantic_reifiable_dep_set_append_union_projection(
 bool feng_semantic_record_spec_view_coercion_use(
     const FengSemanticAnalysis *analysis, const FengExpr *expr,
     const FengTypeRef *source, const FengTypeRef *target);
+
+/* Preserve exception-root evidence and its static preparation dependency
+ * without converting the generic expression in ordinary expression lowering. */
+bool feng_semantic_record_throw_root_preparation(
+    const FengSemanticAnalysis *analysis, const FengExpr *expr,
+    const FengTypeRef *source, const FengTypeRef *root);
 
 /* Store/deduplicate a view use; records borrow analysis-owned type refs. */
 bool feng_semantic_reifiable_dep_set_append_spec_view_coercion(

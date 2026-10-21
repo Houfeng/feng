@@ -617,13 +617,9 @@ static bool parse_type_params(Parser *parser,
             return false;
         }
         if (parser_match(parser, FENG_TOKEN_COLON)) {
-            if (parser_match(parser, FENG_TOKEN_KW_THROW)) {
-                param.constraint_kind = FENG_CONSTRAINT_THROW;
-            } else {
-                param.constraint_kind = FENG_CONSTRAINT_SPEC;
-                param.constraint = parse_type_ref(parser);
-            }
-            if (param.constraint_kind == FENG_CONSTRAINT_SPEC && param.constraint == NULL) {
+            param.constraint_kind = FENG_CONSTRAINT_SPEC;
+            param.constraint = parse_type_ref(parser);
+            if (param.constraint == NULL) {
                 free_type_params(*out_params, *out_count);
                 *out_params = NULL;
                 *out_count = 0U;

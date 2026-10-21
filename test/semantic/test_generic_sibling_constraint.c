@@ -1,3 +1,4 @@
+#include "../throw_constraint_helpers.h"
 #include "../generic_sibling_constraint_helpers.h"
 
 /* Each positive closes the sibling relation through a distinct language path. */
@@ -113,8 +114,8 @@ void test_generic_sibling_constraint_semantics(void) {
         {"spec Required<E:Tag>{}func bad<B:Required<A>,A>(){}", "AE0710", "A"},
         {"func bad<T,U:Box<T>,T>(){}", "AE1017", "T"},
         {"func bad<T:Box<U>,U,U>(){}", "AE1017", "U"},
-        {"type U<V>{}func invoke(){bad<i32>();}func bad<U>():U<i32>{throw \"bad\";}", "AE1012", "U"},
-        {"type T<V>{}func invoke(){bad<i32>();}func bad<T>():T<i32>{throw \"bad\";}", "AE1012", "T"},
+        {"type U<V>{}func invoke(){bad<i32>();}func bad<U>():U<i32>{throw \"bad\";}" THROW_TEST_ROOT, "AE1012", "U"},
+        {"type T<V>{}func invoke(){bad<i32>();}func bad<T>():T<i32>{throw \"bad\";}" THROW_TEST_ROOT, "AE1012", "T"},
         {"func bad(x:Ref<i32>){Methods<string>.later<Ref<i32>,string>(x,\"wrong\");}", "AE0512", "later"},
         {"func bad(x:Ref<i32>){Methods<string>().first<string,Ref<i32>>(x,\"wrong\");}", "AE0512", "first"},
         {"func bad(x:Ref<i32>){Methods<string>().fitLater<Ref<i32>,string>(x,\"wrong\");}", "AE0512", "fitLater"},

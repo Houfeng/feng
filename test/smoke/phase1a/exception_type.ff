@@ -1,4 +1,4 @@
-module feng.smoke;
+open module feng.smoke;
 
 @cdecl("libc")
 extern func puts(msg: string*): int;
@@ -42,3 +42,7 @@ func main(args: string[]) {
 
     puts(&"done");
 }
+
+/** Exception declarations for this standalone regression fixture. */
+@throwable open spec Throwable {}
+fit AppError:Throwable {}

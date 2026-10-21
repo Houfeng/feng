@@ -1,3 +1,4 @@
+#include "../throw_constraint_helpers.h"
 #include <fcntl.h>
 #include <errno.h>
 #include <limits.h>
@@ -12405,13 +12406,14 @@ static void effects_lsp_quiet_save(FILE *input, int output_fd, void *user) {
 /* Hover contains only possible types, preserving declaration slots, call-site
  * substitution and unknown; empty sets add no extra Hover entry. */
 static void test_lsp_exception_effects(void) {
-    const char *source = "module test.effects;\n"
-        "func fail<T:throw>(x:T){throw x;}\n"
+    const char *source = "open module test.effects;\n"
+        "func fail<T:Throwable>(x:T){throw x;}\n"
         "func handled(){try fail(\"x\") catch{}}\n"
         "func main(args:string[]){fail(true);}\n"
         "spec Action():void;spec Worker{func work():void;}\n"
         "func mixed(f:Action,w:Worker){f();w.work();throw true;}\n"
-        "func filtered<T:throw>(x:T){try fail(x) catch e:string{}}\n";
+        "func filtered<T:Throwable>(x:T){try fail(x) catch e:string{}}\n"
+        THROW_TEST_ROOT;
     const char *plain = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
     const char *markdown = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{\"textDocument\":{\"hover\":{\"contentFormat\":[\"markdown\"]}}}}}";
     const char *needles[] = {"func fail", "fail(true)", "func handled", "fail(\"x\")", "func mixed", "func filtered"};
@@ -12468,7 +12470,8 @@ static void test_lsp_exception_effects_diagnostics(void) {
     for (size_t i = 0U; i < sizeof bodies / sizeof *bodies; ++i) {
         char directory[] = "temp/effects-lsp-diagnostic-XXXXXX";
         ASSERT(mkdtemp(directory) != NULL);
-        char *source = dup_printf("module test.effects;\n%s\nfunc main(args:string[]){}", bodies[i]);
+        char *source = dup_printf("open module test.effects;\n%s\nfunc main(args:string[]){}"
+                                  THROW_TEST_ROOT, bodies[i]);
         char *path = path_join(directory, "main.ff");
         write_text_file(path, source);
         char *uri = file_uri_from_path(path), *escaped = json_escape_text(source);
@@ -12507,8 +12510,9 @@ static void test_lsp_exception_effects_source_modules(void) {
     char *provider = path_join(src, "provider.ff"), *consumer = path_join(src, "consumer.ff");
     mkdir_p(src);
     write_text_file(manifest, "[package]\nname: \"effects_local\"\nversion: \"0.1.0\"\ntarget: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n");
-    write_text_file(provider, "open module effects.local;open func raise<T:throw>(x:T){throw x;}");
-    const char *source = "module effects.user;import effects.local as a;func run(){a.raise(true);}";
+    write_text_file(provider, "open module effects.local;open func raise<T:Throwable>(x:T){throw x;}"
+        THROW_TEST_ROOT);
+    const char *source = "module effects.user;import effects.local;import effects.local as a;func run(){a.raise(true);}";
     write_text_file(consumer, source);
     const char *initialize = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}";
     char *output = capture_lsp_position_response_at_path(consumer, source, initialize,
@@ -12596,17 +12600,18 @@ static void test_lsp_exception_effects_packages(void) {
     char directory[] = "temp/effects-lsp-packages-XXXXXX";
     ASSERT(mkdtemp(directory) != NULL);
     char *provider = effects_lsp_pack(directory, "effects_provider",
-        "open module effects.api;open func raise<T:throw>(x:T){throw x;}", NULL);
+        "open module effects.api;open func raise<T:Throwable>(x:T){throw x;}"
+        THROW_TEST_ROOT, NULL);
     char *middle = effects_lsp_pack(directory, "effects_middle",
         "open module effects.middle;import effects.api as a;"
-        "open func relay<U:throw>(x:U){try a.raise(x) catch e:string{}}", provider);
+        "open func relay<U:a.Throwable>(x:U){try a.raise(x) catch e:string{}}", provider);
     char *consumer = path_join(directory, "consumer"), *src = path_join(consumer, "src");
     char *path = path_join(src, "main.ff"), *manifest = path_join(consumer, "feng.fm");
     mkdir_p(src);
     char *config = dup_printf("[package]\nname: \"effects_consumer\"\nversion: \"0.1.0\"\ntarget: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n[dependencies]\neffects_provider: \"%s\"\neffects_middle: \"%s\"\n", provider, middle);
     write_text_file(manifest, config);
-    const char *source = "module effects.consumer;import effects.middle as m;\nfunc run(){m.relay(true);}\n";
-    const char *changed = "module effects.consumer;import effects.middle as m;\nfunc run(){m.relay(\"handled\");}\n"
+    const char *source = "module effects.consumer;import effects.middle as m;import effects.api;\nfunc run(){m.relay(true);}\n";
+    const char *changed = "module effects.consumer;import effects.middle as m;import effects.api;\nfunc run(){m.relay(\"handled\");}\n"
         "func updated(){m.relay(true);}\n";
     write_text_file(path, source);
     const char *initialize = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
@@ -12638,7 +12643,7 @@ static void test_exception_effects_thread_boundary(void) {
     char *config = dup_printf("[package]\nname: \"effects_thread\"\nversion: \"0.1.0\"\ntarget: \"bin\"\nsrc: \"src/\"\nout: \"build/\"\n[dependencies]\nstd: \"%s\"\n", std);
     mkdir_p(src);
     write_text_file(manifest, config);
-    write_text_file(path, "module effects.thread;import std.thread;func main(args:string[]){"
+    write_text_file(path, "module effects.thread;import std.thread;import std.text;func main(args:string[]){"
         "let worker=Thread.spawn((){throw \"unhandled thread exception\";});worker.join();}");
     char *argv[] = {directory};
     ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
@@ -15908,7 +15913,7 @@ static void test_friend_generic_packages_and_lsp(void) {
     mkdir_p(src);
     char *config = dup_printf("[package]\nname: \"friend_consumer\"\nversion: \"0.1.0\"\ntarget: \"bin\"\nsrc: \"src/\"\nout: \"build/\"\n[dependencies]\nfriend_provider: \"%s\"\nfriend_middle: \"%s\"\n", provider, middle);
     write_text_file(manifest, config);
-    const char *source = "module friend.consumer;import friend.api;import friend.middle;\n"
+    const char *source = "open module friend.consumer;import friend.api;import friend.middle;\n"
         "fit Reader<T>{func replace(v:Vault<Reader<T>,T>,x:T):T{v.value=x;return v.read();}\n"
         "static func count():int{return Vault<Reader<T>,T>.shared+Vault<Reader<T>,T>.count();}\n"
         "func extra(v:Target<Reader<T>>):int{return v.extra();}}\n"
@@ -15916,7 +15921,8 @@ static void test_friend_generic_packages_and_lsp(void) {
         "func outside(v:Vault<Local,int>):int{return v.visible();}\n"
         "func main(args:string[]){let r=Reader<int>();let v=Vault<Reader<int>,int>(7);"
         "if r.read(v)!=7||r.replace(v,11)!=11||Reader<int>.count()!=8||r.extra(Target<Reader<int>>())!=13"
-        "||r.surface(SurfaceValue<Reader<int>>())!=17{throw \"friend bundle behavior\";}relay<Local>();}\n";
+        "||r.surface(SurfaceValue<Reader<int>>())!=17{throw \"friend bundle behavior\";}relay<Local>();}\n"
+        THROW_TEST_ROOT;
     write_text_file(path, source);
     char *argv[] = {consumer};
     ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
@@ -15979,10 +15985,11 @@ static void test_friend_private_bundle_and_lsp(void) {
     mkdir_p(src);
     char *config = dup_printf("[package]\nname: \"privatefriend_consumer\"\nversion: \"0.1.0\"\ntarget: \"bin\"\nsrc: \"src/\"\nout: \"build/\"\n[dependencies]\nprivatefriend: \"%s\"\n", bundle);
     write_text_file(manifest, config);
-    const char *source = "module consumer;import privatefriend.api;\n"
+    const char *source = "open module consumer;import privatefriend.api;\n"
         "fit Reader<T>{func through(v:Vault<Reader<T>,T>):T{return v.read();}}\n"
         "func main(args:string[]){let r=Reader<string>();let v=Vault<Reader<string>,string>(\"retained\");"
-        "if r.read(v)!=\"retained\"||r.through(v)!=\"retained\"{throw \"private friend layout\";}}\n";
+        "if r.read(v)!=\"retained\"||r.through(v)!=\"retained\"{throw \"private friend layout\";}}\n"
+        THROW_TEST_ROOT;
     write_text_file(path, source);
     char *argv[] = {consumer};
     ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
@@ -16445,9 +16452,10 @@ static char *friend_lsp_lifecycle_source(bool imported, bool revoked,
         "type Other{}type Reader<T>{}\n"
         "type Vault<F>{@friend(%s) seal let secret:i32=7;let visible:int=1;}\n"
         "func stamp():bool{return true;}\n", revoked ? "Other" : "F");
-    char *source = dup_printf("module friend.live;\n%s"
+    char *source = dup_printf("open module friend.live;\n%s"
         "fit Reader<T>{func probe(v:Vault<Reader<%s>>):i32{return v.secret;}}\n"
-        "func generation%u(){throw stamp();}\n", declarations,
+        "func generation%u(){throw stamp();}\n"
+        THROW_TEST_ROOT, declarations,
         mismatched ? "T[]" : "T", generation);
     free(declarations);
     return source;
@@ -22278,7 +22286,8 @@ static void test_project_build_release_cleans_binary_symbols(void) {
                     "open func cleanupUnused(): int {\n"
                     "  puts(&\"release-cleanup-unused\");\n"
                     "  return 0;\n"
-                    "}\n");
+                    "}\n"
+        THROW_TEST_ROOT);
     write_text_file(root_manifest_path,
                     "[package]\n"
                     "name: \"release_cleanup_app\"\n"
@@ -31541,10 +31550,11 @@ static void test_runtime_inline_distribution(void) {
         free(source_dir); free(manifest); free(source);
     }
     char *source = path_join(work, "main.ff");
-    write_text_file(source, "module inline_test.main;\nimport inline_test.first;\n"
+    write_text_file(source, "open module inline_test.main;\nimport inline_test.first;\n"
         "import inline_test.last;\nfunc main(args: string[]) {\n"
         " let values: int[] = [7, 13];\n"
-        " if first(values) != 7 || last(values) != 13 { throw \"inline/package-result\"; }\n}\n");
+        " if first(values) != 7 || last(values) != 13 { throw \"inline/package-result\"; }\n}\n"
+        THROW_TEST_ROOT);
     for (size_t release = 0; release < 2; ++release) {
         runtime_inline_command("build/bin/feng '%s' --target=bin --platform='%s' %s "
             "--pkg='%s/first/build/pkg/first-0.1.0.fb' "
@@ -32498,7 +32508,7 @@ static void test_thin_lto_linux_abi_matrix(void) {
     bool instrumented = sanitizers != NULL && strstr(sanitizers, "-fsanitize=") != NULL;
     size_t links = 0U, executions = 0U;
     write_text_file(source,
-        "module test.cli.ltoabi;\n"
+        "open module test.cli.ltoabi;\n"
         "@cdecl(\"libc\")\nextern func puts(text: string*): i32;\n"
         "@cdecl(\"libc\")\nextern func exit(code: i32): void;\n"
         "var drops: int = 0;\n"
@@ -32510,7 +32520,8 @@ static void test_thin_lto_linux_abi_matrix(void) {
         "func main(args: string[]) {\n  var caught = false;\n"
         "  if boxedValue() != 9 || drops != 1 { exit(1); }\n"
         "  try raise() catch error: string { caught = error == \"lto-abi\"; }\n"
-        "  if !caught { exit(2); }\n  puts(&\"lto-abi-ok\");\n}\n");
+        "  if !caught { exit(2); }\n  puts(&\"lto-abi-ok\");\n}\n"
+        THROW_TEST_ROOT);
     for (size_t target = 0U; target < 4U; ++target) {
         /* Development builds provide GNU/musl runtimes for the host architecture.
          * Each architecture runs this scenario in its own full-regression job. */
@@ -32577,7 +32588,8 @@ static void test_thin_lto_dap_dependencies(void) {
         "  return i; // breakpoint: dep_return\n}\n"
         "open func fail(): void {\n"
         "  let tag = \"thin-lto-debug\";\n"
-        "  throw tag; // breakpoint: dep_throw\n}\n";
+        "  throw tag; // breakpoint: dep_throw\n}\n"
+        THROW_TEST_ROOT;
     static const char *app_source_text =
         "module test.cli.ltodebugapp;\nimport test.cli.ltodebugdep;\nimport test.cli.ltopublished;\n"
         "@cdecl(\"libc\")\nextern func puts(text: string*): i32;\n"
@@ -33164,6 +33176,8 @@ int main(void) {
     test_exception_effects_thread_boundary();
     test_lsp_throw_constraint_source();
     test_throw_constraint_source_hidden_bundle();
+    test_throwable_source_hidden_bundle();
+    test_throwable_lsp_root_lifecycle();
 
     test_platform_detects_complete_native_platform();
     test_manifest_defaults();

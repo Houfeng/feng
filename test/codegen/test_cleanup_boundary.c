@@ -83,7 +83,7 @@ void test_cleanup_boundary_codegen(void (*compile_c)(const char *)) {
         "catch ex:string{0;}) catch ex:int{ex;};}"
         "open func indirect(f:Action,n:int):int{return f(n);}"
         "open func captured(n:int):Action{return (v:int){return v+n;};}";
-    ThrowConstraintUnit unit = throw_constraint_analyze(source, NULL, NULL);
+    ThrowConstraintUnit unit = throw_constraint_analyze_with_root(source, NULL, NULL, NULL);
     FengCodegenOutput output = {0};
     FengCodegenError error = {0};
     bool emitted = feng_codegen_emit_program(unit.analysis, FENG_COMPILE_TARGET_LIB,

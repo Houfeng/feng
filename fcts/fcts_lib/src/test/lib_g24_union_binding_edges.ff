@@ -1,5 +1,7 @@
 open module fcts_lib.test.g24_binding_edges;
 
+import std.text;
+
 import fcts_lib.test.g24_union_bindings;
 
 /** Captured narrowed variables use the same cell as subsequent assignments. */

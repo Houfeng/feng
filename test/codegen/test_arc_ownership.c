@@ -132,7 +132,7 @@ void test_arc_constraint_context_codegen(void (*compile_c)(const char *)) {
             THROW_CHECK(used < capacity);
         }
         THROW_CHECK(snprintf(source + used, capacity - used, "return total;}") > 0);
-        ThrowConstraintUnit unit = throw_constraint_analyze(source, NULL, NULL);
+        ThrowConstraintUnit unit = throw_constraint_analyze_with_root(source, NULL, NULL, NULL);
         FengCodegenOutput output = {0};
         FengCodegenError error = {0};
         bool emitted = feng_codegen_emit_program(unit.analysis, FENG_COMPILE_TARGET_LIB,
@@ -206,7 +206,7 @@ void test_arc_ownership_codegen(void (*compile_c)(const char *)) {
         "open func reboundGeneric<T>(first:T,second:T):T{var value=first;"
         "return firstArgument<T>(value,if true{value=second;1;}else{0;});}"
         "open func instantiateRebound(value:Ref):Ref{return reboundGeneric<Ref>(value,value);}";
-    ThrowConstraintUnit unit = throw_constraint_analyze(source, NULL, NULL);
+    ThrowConstraintUnit unit = throw_constraint_analyze_with_root(source, NULL, NULL, NULL);
     FengCodegenOutput output = {0};
     FengCodegenError error = {0};
     bool emitted = feng_codegen_emit_program(unit.analysis, FENG_COMPILE_TARGET_LIB,

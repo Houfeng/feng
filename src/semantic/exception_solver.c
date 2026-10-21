@@ -27,6 +27,7 @@ struct FengExceptionSolver {
     uint32_t *queue;
     size_t queue_count, queue_capacity, queue_head;
     FengExceptionMethodResolver resolver;
+    FengExceptionPayloadViewQuery payload_view;
     void *user;
 };
 
@@ -593,6 +594,9 @@ static uint32_t es_eval(ExceptionEvaluation *evaluation, uint32_t id) {
         free(args);
     } else if (n.kind == FENG_EXCEPTION_THROW || n.kind == FENG_EXCEPTION_VALUE_TYPE) {
         uint32_t type = es_eval(evaluation, n.x);
+        if (n.kind == FENG_EXCEPTION_THROW && s->payload_view != NULL &&
+            s->payload_view(s->user, type))
+            type = feng_exception_unknown(g);
         result = feng_exception_node(g, n.kind, type, 0, 0, NULL, NULL, 0);
         if (n.kind == FENG_EXCEPTION_THROW && g->nodes[type].kind == FENG_EXCEPTION_UNKNOWN)
             result = type;
@@ -605,11 +609,14 @@ static uint32_t es_eval(ExceptionEvaluation *evaluation, uint32_t id) {
 }
 
 FengExceptionSolver *feng_exception_solver_create(FengExceptionGraph *graph,
-                                                  FengExceptionMethodResolver resolver, void *user) {
+                                                  FengExceptionMethodResolver resolver,
+                                                  FengExceptionPayloadViewQuery payload_view,
+                                                  void *user) {
     FengExceptionSolver *s = calloc(1U, sizeof(*s));
     if (s != NULL) {
         s->graph = graph;
         s->resolver = resolver;
+        s->payload_view = payload_view;
         s->user = user;
     }
     return s;

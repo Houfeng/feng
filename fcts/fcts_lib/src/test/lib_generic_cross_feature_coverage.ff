@@ -1,5 +1,7 @@
 open module fcts_lib.test;
 
+import std.text;
+
 import std;
 import std.collections;
 import std.process;

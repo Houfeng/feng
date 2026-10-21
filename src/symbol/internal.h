@@ -31,10 +31,11 @@ typedef enum FengSymbolAttrKind {
     FENG_SYMBOL_ATTR_UNION_PROJECTION_COUNT = 13,
     FENG_SYMBOL_ATTR_SPEC_VIEW_COERCION_COUNT = 14,
     FENG_SYMBOL_ATTR_CONSTRAINT_PROJECTION_COUNT = 15,
-    FENG_SYMBOL_ATTR_BUILTIN_CONSTRAINT = 16,
+    FENG_SYMBOL_ATTR_RETIRED_THROW_CONSTRAINT = 16,
     FENG_SYMBOL_ATTR_FRIEND_TYPE = 17,
     FENG_SYMBOL_ATTR_RETIRED_TYPE_CHECK = 18,
-    FENG_SYMBOL_ATTR_FRIEND_FIT_ACCESS = 19
+    FENG_SYMBOL_ATTR_FRIEND_FIT_ACCESS = 19,
+    FENG_SYMBOL_ATTR_THROWABLE = 20
 } FengSymbolAttrKind;
 
 typedef struct FengSymbolParamView {
@@ -149,7 +150,9 @@ struct FengSymbolDeclView {
     bool is_iterable;
     bool is_iterator;
     bool is_mixable;
-    /* Generic declaration fact; builtin bounds have no value_type node. */
+    /* Definition fact for the library-declared exception root. */
+    bool is_throwable;
+    /* Generic declaration fact; spec constraints use the value_type node. */
     FengConstraintKind constraint_kind;
     /* Compile-time provider marker used only by package-public selection.
      * It is intentionally not serialized as an FT attribute. */
@@ -248,6 +251,8 @@ struct FengSymbolImportedModule {
     FengSymbolPackageIdentity *package_identity;
     FengSymbolFitView *fits;
     size_t fit_count;
+    /* Collected during ordinary declaration indexing, after profile selection. */
+    bool has_exception_root;
 };
 
 struct FengSymbolProvider {

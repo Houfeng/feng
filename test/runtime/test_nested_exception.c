@@ -40,6 +40,10 @@ static const FengTypeDescriptor nested_descriptor = {
     .finalizer = nested_finalize
 };
 
+/* Distinct opaque identities verify that nested records retain their witness. */
+static const unsigned char nested_witness_a = 'A';
+static const unsigned char nested_witness_b = 'B';
+
 /* Allocate the exact +1 reference transferred to feng_throw. */
 static NestedPayload *nested_payload(unsigned char code) {
     NestedPayload *payload = feng_object_new(&nested_descriptor);
@@ -94,7 +98,9 @@ cleanup:
 
 /* Transfer an already-owned subject without an additional retain. */
 static void nested_raise(void *argument) {
-    feng_throw(argument, &nested_descriptor);
+    NestedPayload *payload = argument;
+    feng_throw(argument, &nested_descriptor,
+        payload->code == 'A' ? &nested_witness_a : &nested_witness_b);
 }
 
 /* Keep observations outside the lexical catch that owns each record. */
@@ -113,6 +119,7 @@ static void nested_inner_handler(FengCatchContext *context, void *argument) {
     CHECK(context->previous == state->outer);
     CHECK(context->exception != state->original);
     CHECK(inner->code == 'B' && inner->header.refcount == 1U);
+    CHECK(feng_caught_witness() == &nested_witness_b);
     CHECK(state->subject->header.refcount == 1U);
     CHECK(nested_finalizations == 0);
 }
@@ -124,10 +131,12 @@ static void nested_outer_handler(FengCatchContext *context, void *argument) {
     state->original = context->exception;
     state->subject = feng_caught_value();
     CHECK(state->subject->code == 'A' && state->subject->header.refcount == 1U);
+    CHECK(feng_caught_witness() == &nested_witness_a);
     nested_native_try(nested_raise, nested_payload('B'), nested_inner_handler, state);
     CHECK(nested_finalizations == 1);
     CHECK(context->exception == state->original);
     CHECK(feng_caught_value() == state->subject);
+    CHECK(feng_caught_witness() == &nested_witness_a);
     CHECK(state->subject->header.refcount == 1U);
     CHECK(feng_caught_clause() == 0);
     if (state->rethrow) feng_rethrow();
@@ -143,6 +152,7 @@ static void nested_rethrow_handler(FengCatchContext *context, void *argument) {
     NestedRecordState *state = argument;
     CHECK(context->exception == state->original);
     CHECK(context->exception->desc == &nested_descriptor);
+    CHECK(feng_caught_witness() == &nested_witness_a);
     CHECK(feng_caught_value() == state->subject);
     CHECK(state->subject->header.refcount == 1U);
     CHECK(context->previous == NULL);
@@ -156,6 +166,7 @@ static void nested_record_identity(bool rethrow) {
     state.rethrow = rethrow;
     nested_finalizations = 0;
     CHECK(feng_caught_value() == NULL && feng_caught_clause() == -1);
+    CHECK(feng_caught_witness() == NULL);
     if (rethrow) {
         nested_native_try(nested_original_body, &state, nested_rethrow_handler, &state);
         CHECK(state.received);
@@ -164,6 +175,7 @@ static void nested_record_identity(bool rethrow) {
     }
     CHECK(nested_finalizations == 2);
     CHECK(feng_caught_value() == NULL && feng_caught_clause() == -1);
+    CHECK(feng_caught_witness() == NULL);
 }
 
 /* Each thread repeatedly exercises its own active catch and cleanup chain. */
@@ -179,7 +191,7 @@ static void *nested_thread_worker(void *argument) {
 static void nested_uncaught_handler(FengCatchContext *context, void *argument) {
     (void)context;
     if (argument != NULL) feng_rethrow();
-    feng_throw(nested_payload('B'), &nested_descriptor);
+    feng_throw(nested_payload('B'), &nested_descriptor, &nested_witness_b);
 }
 
 /* Uncaught throw/rethrow must clean all live catches before aborting. */

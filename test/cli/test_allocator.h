@@ -14,14 +14,15 @@ static void test_allocator_selection(void) {
 /* Heap selection must not change the DAP's source stops or logical values. */
 static void test_allocator_dap(void) {
     const char *fixture =
-        "module allocator_debug;\n"
+        "open module allocator_debug;\n"
         "type Item { let number: int; }\n"
         "func main(args: string[]) {\n"
         "  let values: int[] = [3, 7];\n"
         "  let item = Item { number: 17 };\n"
         "  let ready = values[0] + item.number;\n"
         "  if ready != 20 { throw \"allocator/debug\"; } // breakpoint: allocator_ready\n"
-        "}\n";
+        "}\n"
+        "@throwable open spec Throwable{}fit string:Throwable{}\n";
     /* ASan keeps system and the enclosing instrumentation. The ordinary phase
      * exercises both allocators; rejection of builtin + ASan is tested above. */
     unsigned allocator_count = 2U;

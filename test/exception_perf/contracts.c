@@ -58,7 +58,7 @@ void throwing(void *value, const FengTypeDescriptor *desc) {
     __llvm_c_eh_configure(__LLVM_C_EH_PROTOCOL_VERSION, __feng_personality_v0);
     if (__llvm_c_eh_region(1, 0, &&landing, 0)) goto landing;
     __llvm_c_eh_activate(1);
-    feng_throw(value, desc);
+    feng_throw(value, desc, NULL);
 landing:
     ++native_contract_cleanup_count;
     __llvm_c_eh_propagate(1);

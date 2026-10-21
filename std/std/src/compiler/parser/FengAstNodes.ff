@@ -136,11 +136,10 @@ open spec Binding: SimpleBinding | DestructureBinding;
 
 // 泛型参数 ---------------------------------------------------------------------
 
-/** 泛型约束种类；内建约束不创建伪类型引用。 */
+/** 泛型约束种类；有约束时保存普通 spec 类型引用。 */
 open enum GenericConstraintKind {
   None = 0,
-  Spec = 1,
-  Throw = 2
+  Spec = 1
 }
 
 /** 泛型参数节点；只有 Spec 约束使用 constraintTypeRef。 */

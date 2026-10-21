@@ -323,12 +323,8 @@ open type FengParser {
     var constraint: Option<TypeReference> = none;
     var constraintKind = GenericConstraintKind.None;
     if self.matchToken(FengTokenKind.PunctuationColon) {
-      if self.matchToken(FengTokenKind.KeywordThrow) {
-        constraintKind = GenericConstraintKind.Throw;
-      } else {
-        constraintKind = GenericConstraintKind.Spec;
-        constraint = self.parseTypeReference();
-      }
+      constraintKind = GenericConstraintKind.Spec;
+      constraint = self.parseTypeReference();
     }
     params.add(GenericParameter {
       location: nameToken.location,
@@ -342,12 +338,8 @@ open type FengParser {
       var paramConstraint: Option<TypeReference> = none;
       var paramConstraintKind = GenericConstraintKind.None;
       if self.matchToken(FengTokenKind.PunctuationColon) {
-        if self.matchToken(FengTokenKind.KeywordThrow) {
-          paramConstraintKind = GenericConstraintKind.Throw;
-        } else {
-          paramConstraintKind = GenericConstraintKind.Spec;
-          paramConstraint = self.parseTypeReference();
-        }
+        paramConstraintKind = GenericConstraintKind.Spec;
+        paramConstraint = self.parseTypeReference();
       }
       params.add(GenericParameter {
         location: paramToken.location,

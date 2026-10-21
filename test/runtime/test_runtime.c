@@ -1846,7 +1846,7 @@ static void throwing_finalizer(void *self) {
 
     (void)self;
     payload = (TestObject *)feng_object_new(&test_object_descriptor);
-    feng_throw(payload, &test_object_descriptor);
+    feng_throw(payload, &test_object_descriptor, NULL);
 }
 
 static const FengTypeDescriptor throwing_descriptor = {

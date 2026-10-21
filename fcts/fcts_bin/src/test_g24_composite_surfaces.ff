@@ -1,5 +1,7 @@
 module fcts_bin;
 
+import std.text;
+
 import std.test;
 
 /** One reference member has observable writable state. */

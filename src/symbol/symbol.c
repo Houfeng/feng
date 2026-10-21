@@ -1308,6 +1308,7 @@ void feng_symbol_internal_imported_module_free(FengSymbolImportedModule *module)
     free(module->fits);
     module->fits = NULL;
     module->fit_count = 0U;
+    module->has_exception_root = false;
     free(module->source_path);
     module->source_path = NULL;
     feng_symbol_internal_package_identity_release(module->package_identity);
@@ -1334,6 +1335,7 @@ bool feng_symbol_internal_imported_module_init_fit_views(FengSymbolImportedModul
     for (index = 0U; index < module->module->root_decl.member_count; ++index) {
         const FengSymbolDeclView *decl = module->module->root_decl.members[index];
 
+        module->has_exception_root |= decl->is_throwable;
         if (decl->kind == FENG_SYMBOL_DECL_KIND_FIT && decl->visibility == FENG_VISIBILITY_PUBLIC) {
             ++count;
         }

@@ -62,7 +62,7 @@ void test_value_literal_partial_cleanup_codegen(void (*compile_c)(const char *))
         "open func genericKnown<T>(ref:T):Generic<T>{return Generic<T>{ref:ref,n:quiet()};}"
         "open func trivial(){let value=Scalar{n:fail()};}"
         "open func genericUnknown<T>(ref:T,f:Getter):Generic<T>{return Generic<T>{ref:ref,n:f()};}";
-    ThrowConstraintUnit unit = throw_constraint_analyze(source, NULL, NULL);
+    ThrowConstraintUnit unit = throw_constraint_analyze_with_root(source, NULL, NULL, NULL);
     FengCodegenOutput output = {0};
     FengCodegenError error = {0};
     bool ok = feng_codegen_emit_program(unit.analysis, FENG_COMPILE_TARGET_LIB, NULL, &output, &error);

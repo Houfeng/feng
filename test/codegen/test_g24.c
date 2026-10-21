@@ -1,3 +1,4 @@
+#include "../throw_constraint_helpers.h"
 #include "test_g24.h"
 #include "codegen/codegen.h"
 #include "parser/parser.h"
@@ -272,7 +273,7 @@ static void g24_check_projection_predicates(const char *c) {
  * open paths to distinct static and dynamic probe combinations. */
 static void g24_projection_predicates(void (*compile_c)(const char *)) {
     g24_static_source(
-        "module g24.projections;\n"
+        "open module g24.projections;\n"
         "spec Inner: i32 | string; spec Outer: Inner | bool;\n"
         "func plain_match(v: i32): bool { let value: bool = match v { 0 { return true; } else { return false; } }; return value; }\n"
         "func plain_if(v: bool): string { let value: string = if v { return \"yes\"; } else { throw \"no\"; }; return value; }\n"
@@ -292,7 +293,8 @@ static void g24_projection_predicates(void (*compile_c)(const char *)) {
         " exits<i32>(73); exits<Inner>(child); exits<Outer>(whole);\n"
         " predicate<bool>(true); predicate<i32>(73); predicate<Inner>(child); predicate<Outer>(whole);\n"
         " let host = Host<i32>(73); host.method<string>(\"word\");\n"
-        " let cell = Cell<Inner>(child); return outer<Outer>(whole) && host.hit && cell.hit; }\n",
+        " let cell = Cell<Inner>(child); return outer<Outer>(whole) && host.hit && cell.hit; }\n"
+        THROW_TEST_ROOT,
         false, g24_check_projection_predicates, compile_c);
 }
 

@@ -1,3 +1,4 @@
+#include "../throw_constraint_helpers.h"
 #include "codegen/codegen.h"
 #include "parser/parser.h"
 #include "semantic/semantic.h"
@@ -86,14 +87,15 @@ static size_t nested_count_before(const char *body, const char *end, const char 
 /* Scope order, rather than global catch counts, determines exit operations. */
 static void nested_control_cleanup(void (*compile_c)(const char *)) {
     const char *source =
-        "module nested.cleanup; func fail(){throw 1;}\n"
+        "open module nested.cleanup; func fail(){throw 1;}\n"
         "func returnBoth():int{try fail() catch {try fail() catch {return 7;}}return 0;}\n"
         "func protectedReturn():int{try fail() catch {"
         "let value=try(if true{return 9;}else{0;}) catch {0;};return value;}return 0;}\n"
         "func breakBoth(){while true{try fail() catch {try fail() catch {break;}}}}\n"
         "func continueBoth(){while true{try fail() catch {try fail() catch {continue;}}}}\n"
         "func preserveOuter(){try fail() catch {while true{break;}throw;}}\n"
-        "func preserveContinue(){try fail() catch {var i=0;while i<2{i+=1;continue;}throw;}}\n";
+        "func preserveContinue(){try fail() catch {var i=0;while i<2{i+=1;continue;}throw;}}\n"
+        THROW_TEST_ROOT;
     char *generated = nested_emit(source, compile_c);
     CHECK(strstr(generated, "feng_release_unwind_exception") == NULL);
     /* Exceptional cleanups now name logical markers in native landing pads;
@@ -151,7 +153,7 @@ static void nested_control_cleanup(void (*compile_c)(const char *)) {
 /* Borrowed bindings add no ARC or allocation until a capture requires ownership. */
 static void nested_binding_ownership(void (*compile_c)(const char *)) {
     const char *source =
-        "module nested.bindings;type Ref{let n:int;}@value type Val{let ref:Ref;}"
+        "open module nested.bindings;type Ref{let n:int;}@value type Val{let ref:Ref;}"
         "type Pair(Ref,int);enum Status{Failed=7}spec Read():int;"
         "func failRef(){throw Ref{n:1};}func failVal(){throw Val{ref:Ref{n:2}};}"
         "func failPair(){let p:Pair=(Ref{n:3},4);throw p;}"
@@ -167,7 +169,9 @@ static void nested_binding_ownership(void (*compile_c)(const char *)) {
         "func capturedEnum():Read{try failRef() catch value:Status{return (){return (int)value;};}"
         "return (){return 0;};}"
         "func capturedString():Read{try failRef() catch value:string{return (){return if value==\"text\"{1;}else{0;};};}"
-        "return (){return 0;};}";
+        "return (){return 0;};}"
+        THROW_TEST_ROOT
+        "fit Ref:Throwable{}fit Val:Throwable{}fit Pair:Throwable{}fit Status:Throwable{}";
     char *generated = nested_emit(source, compile_c);
     char *borrowed = nested_body(generated, "__borrowed__from__");
     CHECK(strstr(borrowed, "feng_caught_value()") != NULL);

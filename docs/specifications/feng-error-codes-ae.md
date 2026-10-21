@@ -406,6 +406,14 @@ callable 仍有类型参数没有实参、receiver 或目标类型推导来源�
 | AE1405 | catch 结果分支循环控制转移边界 | AE0074 | break / continue cannot target a loop outside a try expression catch result branch |
 | AE1406 | catch 分支顺序约束 | AE0178 | catch clause matching any exception must be the last catch clause |
 | AE1407 | 无参数 throw 的匿名 catch 作用域约束 | — | bare throw is only valid inside an anonymous catch clause |
+| AE1408 | 异常根标注不合法 | — | @throwable requires a non-generic open object-form spec in an open module and no arguments / duplicate @throwable annotation |
+| AE1409 | 多个异常根冲突 | — | conflicting exception roots '%s' and '%s' |
+| AE1410 | throw 类型准入缺少异常根 | — | throw requires a registered exception root |
+| AE1411 | 声明主体不具备根载荷资格 | — | type '%s' cannot satisfy the exception root: %s |
+| AE1412 | 异常根参与交叉契约 | — | exception root cannot be an intersection spec member |
+
+throw 不满足根关系继续使用 AE0076；非法具体 catch 沿用既有诊断。
+根与匿名 catch 共用 AE1406 的兜底顺序检查，不为前置解析或声明错误增加重复诊断。
 
 ## 15 清理段新增诊断
 

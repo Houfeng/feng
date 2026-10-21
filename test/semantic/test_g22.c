@@ -1,3 +1,4 @@
+#include "../throw_constraint_helpers.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,7 +22,7 @@ static const char *g22_provider =
     "open spec Callback(): i32;\n"
     "open func run(): i32 { return 7; }\n"
     "open let fixed: i32 = 4;\n"
-    "open var state: i32 = 5;\n";
+    "open var state: i32 = 5;\n" THROW_TEST_ROOT;
 
 /* A single source expectation, including the exact source token rather than
  * just whether semantic analysis happened to fail. The marker is the final

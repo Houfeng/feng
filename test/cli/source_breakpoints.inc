@@ -310,7 +310,7 @@ static void dap_source_binding_values(DapTestSession *session, long frame,
 /* Check adopted/captured storage with the public Locals, hover and watch paths. */
 static void test_dap_source_binding_storage(void) {
     const char *source =
-        "module source_matrix;\n"
+        "open module source_matrix;\n"
         "spec Action():void;\n"
         "func consume(value:int):void{}\n"
         "func fail():int{throw 11;}\n"
@@ -326,7 +326,8 @@ static void test_dap_source_binding_storage(void) {
         "    consume(local); // breakpoint: captured_value\n"
         "  };\n"
         "  action();action();\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     const DapSourceBreakpointCase cases[] = {
         {"caught_value", 1U}, {"captured_value", 2U}
     };

@@ -871,6 +871,7 @@ typedef struct FengUnwindException {
 #endif
     void *value;
     const FengTypeDescriptor *desc;
+    const void *witness; /* Static root witness matching the owned subject. */
     int matched_clause;
 } FengUnwindException;
 
@@ -972,15 +973,17 @@ void feng_exception_catch_begin(FengCatchContext *context);
  * Unwind cleanup performs the same end action through the context's node. */
 void feng_exception_catch_end(void);
 
-/* Read the active catch's borrowed payload or selected clause. */
+/* Read the active catch's borrowed payload, static witness or selected clause. */
 void *feng_caught_value(void) FENG_RUNTIME_NOTHROW;
+const void *feng_caught_witness(void) FENG_RUNTIME_NOTHROW;
 int   feng_caught_clause(void) FENG_RUNTIME_NOTHROW;
 
 #if defined(__GNUC__) || defined(__clang__)
-void feng_throw(void *value, const FengTypeDescriptor *desc) __attribute__((noreturn));
+void feng_throw(void *value, const FengTypeDescriptor *desc,
+                const void *witness) __attribute__((noreturn));
 void feng_rethrow(void) __attribute__((noreturn));
 #else
-void feng_throw(void *value, const FengTypeDescriptor *desc);
+void feng_throw(void *value, const FengTypeDescriptor *desc, const void *witness);
 void feng_rethrow(void);
 #endif
 

@@ -84,3 +84,7 @@ open func peakCount(): u64 { return peak; }
 open func dropCount(): u64 { return destroyed; }
 /** Default member construction remains observable independently of business work. */
 open func defaultCount(): u64 { return defaults; }
+
+/** Exception declarations for this standalone regression fixture. */
+@throwable open spec Throwable {}
+open fit u64:Throwable {}

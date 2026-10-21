@@ -57,3 +57,8 @@ open func borrowRevive() { revive = true; }
 open func borrowSavedNumber(): int { return borrowRead(saved); }
 /** Releasing the final external root must nominate the group again. */
 open func borrowClearSaved() { saved = false; }
+
+/** Exception declarations for this standalone regression fixture. */
+@throwable open spec Throwable {}
+open fit i64:Throwable {}
+open fit string:Throwable {}

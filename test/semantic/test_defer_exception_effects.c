@@ -15,12 +15,13 @@ static void defer_effect_case(const DeferEffectCase *test) {
         "module effects;spec Action():void;func quiet(){}"
         "func text(){throw \"text\";}func flag(){throw true;}"
         "func value():i32{throw \"value\";}func relay(f:Action){f();}"
-        "func raise<T:throw>(x:T){throw x;}";
+        "func raise<T:Throwable>(x:T){throw x;}";
     size_t size = strlen(prelude) + strlen(test->source) + 1U;
     char *source = malloc(size);
     THROW_CHECK(source != NULL);
     snprintf(source, size, "%s%s", prelude, test->source);
-    FengProgram *program = throw_constraint_parse(source);
+    char *prepared = throw_constraint_source_with_root(source, NULL);
+    FengProgram *program = throw_constraint_parse(prepared);
     const FengProgram *programs[] = {program};
     FengSemanticAnalyzeOptions options = {.target = FENG_COMPILE_TARGET_LIB,
         .pointer_size = feng_get_host_pointer_size()};
@@ -57,6 +58,7 @@ static void defer_effect_case(const DeferEffectCase *test) {
     feng_semantic_errors_free(errors, count);
     feng_semantic_analysis_free(analysis);
     feng_program_free(program);
+    free(prepared);
     free(source);
 }
 
@@ -107,15 +109,15 @@ static void defer_effect_matrix(void) {
         {"safe cleanup inside lambda", "func run(){let f:Action=(){defer{try text() catch{}}};f();}", NULL, NULL},
         {"returned callback", "func make():Action{return text;}func run(){defer{make()();}}", "AE1507", "string"},
         {"closed generic", "func run(){defer{raise(true);}}", "AE1507", "bool"},
-        {"open generic", "func run<T:throw>(x:T){defer{raise(x);}}", "AE1507", "T"},
-        {"open generic caught", "func run<T:throw>(x:T){defer{try raise(x) catch{}}}", NULL, NULL},
-        {"open generic conditional", "func run<T:throw>(x:T){defer{try raise(x) catch e:string{}}}", "AE1507", "T"},
-        {"generic catch substitution", "func filter<T:throw>(x:T){try raise(x) catch e:string{}}func run(){defer{filter(\"x\");}}", NULL, NULL},
-        {"generic remaining", "func filter<T:throw>(x:T){try raise(x) catch e:string{}}func run(){defer{filter(true);}}", "AE1507", "bool"},
-        {"owner generic", "type Box<T:throw>{let x:T;func fail(){throw self.x;}}func run(x:Box<string>){defer{x.fail();}}", "AE1507", "string"},
-        {"method generic", "type Box<T>{func fail<U:throw>(x:U){throw x;}}func run(x:Box<string>){defer{x.fail(true);}}", "AE1507", "bool"},
-        {"owner cleanup", "type Box<T:throw>{let x:T;func run(){defer{try raise(self.x) catch{}}}}", NULL, NULL},
-        {"method cleanup open", "type Box<T>{func run<U:throw>(x:U){defer{raise(x);}}}", "AE1507", "U"},
+        {"open generic", "func run<T:Throwable>(x:T){defer{raise(x);}}", "AE1507", "T"},
+        {"open generic caught", "func run<T:Throwable>(x:T){defer{try raise(x) catch{}}}", NULL, NULL},
+        {"open generic conditional", "func run<T:Throwable>(x:T){defer{try raise(x) catch e:string{}}}", "AE1507", "T"},
+        {"generic catch substitution", "func filter<T:Throwable>(x:T){try raise(x) catch e:string{}}func run(){defer{filter(\"x\");}}", NULL, NULL},
+        {"generic remaining", "func filter<T:Throwable>(x:T){try raise(x) catch e:string{}}func run(){defer{filter(true);}}", "AE1507", "bool"},
+        {"owner generic", "type Box<T:Throwable>{let x:T;func fail(){throw self.x;}}func run(x:Box<string>){defer{x.fail();}}", "AE1507", "string"},
+        {"method generic", "type Box<T>{func fail<U:Throwable>(x:U){throw x;}}func run(x:Box<string>){defer{x.fail(true);}}", "AE1507", "bool"},
+        {"owner cleanup", "type Box<T:Throwable>{let x:T;func run(){defer{try raise(self.x) catch{}}}}", NULL, NULL},
+        {"method cleanup open", "type Box<T>{func run<U:Throwable>(x:U){defer{raise(x);}}}", "AE1507", "U"},
         {"dynamic spec", "spec Worker{func work():void;}func run(x:Worker){defer{x.work();}}", "AE1507", "unknown"},
         {"dynamic spec caught", "spec Worker{func work():void;}func run(x:Worker){defer{try x.work() catch{}}}", NULL, NULL},
         {"generic witness", "spec Worker{func work():void;}type W:Worker{func work():void{text();}}func work<T:Worker>(x:T){x.work();}func run(x:W){defer{work(x);}}", "AE1507", "string"},
@@ -141,8 +143,8 @@ static void defer_effect_matrix(void) {
         {"nested defer forbidden", "func run(){defer{defer{}}}", "AE1503", NULL},
         {"inner loop controls", "func run(){defer{for var i:i32=0;i<2;i+=1{if i==0{continue;}break;}}}", NULL, NULL},
         {"multiple independent boundaries", "func run(){defer{text();}defer{flag();}}", "AE1507", NULL},
-        {"N08", "type Error{let code:i32;}func fail(n:i32){throw Error{code:n};}func work():void{defer{fail(2);}fail(1);}func run(){try work() catch e:Error{}}", "AE1507", "effects.Error"},
-        {"landing replacement", "type Error{let code:i32;}func fail(n:i32){throw Error{code:n};}func run():i32{return try (if true{defer{fail(2);}throw Error{code:1};}else{0;}) catch original:Error{original.code;};}", "AE1507", "effects.Error"},
+        {"N08", "type Error{let code:i32;}fit Error:Throwable{}func fail(n:i32){throw Error{code:n};}func work():void{defer{fail(2);}fail(1);}func run(){try work() catch e:Error{}}", "AE1507", "effects.Error"},
+        {"landing replacement", "type Error{let code:i32;}fit Error:Throwable{}func fail(n:i32){throw Error{code:n};}func run():i32{return try (if true{defer{fail(2);}throw Error{code:1};}else{0;}) catch original:Error{original.code;};}", "AE1507", "effects.Error"},
     };
     for (size_t i = 0U; i < sizeof(cases) / sizeof(*cases); ++i)
         defer_effect_case(&cases[i]);
@@ -161,7 +163,8 @@ static void defer_effect_locations(void) {
         "  }\n"
         "  defer { text(); }\n"
         "}\n";
-    FengProgram *program = throw_constraint_parse(source);
+    char *prepared = throw_constraint_source_with_root(source, NULL);
+    FengProgram *program = throw_constraint_parse(prepared);
     const FengProgram *programs[] = {program};
     FengSemanticAnalyzeOptions options = {.target = FENG_COMPILE_TARGET_LIB,
         .pointer_size = feng_get_host_pointer_size()};
@@ -179,6 +182,7 @@ static void defer_effect_locations(void) {
     }
     feng_semantic_errors_free(errors, count);
     feng_program_free(program);
+    free(prepared);
 }
 
 /* Register the phase-two source and diagnostic contract suites. */

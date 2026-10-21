@@ -1,5 +1,7 @@
 module fcts_bin;
 
+import std.text;
+
 import std.test;
 import std.numeric;
 import fcts_lib.test;

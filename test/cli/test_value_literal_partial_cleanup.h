@@ -10,7 +10,7 @@ static void test_value_literal_partial_cleanup_package(void) {
     char *consumer = path_join(workspace, "consumer.ff");
     copy_file_or_die("test/cli/fixtures/value_literal_partial_cleanup/main.ff", consumer);
     for (int producer_release = 0; producer_release < 2; ++producer_release) {
-        copy_file_or_die("fcts/fcts_lib/src/test/lib_value_literal_partial_cleanup.ff", provider);
+        copy_file_or_die("test/cli/fixtures/value_literal_partial_cleanup/provider.ff", provider);
         char *out = path_join(workspace, producer_release ? "provider-release" : "provider-debug");
         native_exception_build(provider, out, "partial_value_provider", "lib", NULL, producer_release != 0);
         char *library = host_static_library_output_path(out, "partial_value_provider");

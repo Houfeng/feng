@@ -848,6 +848,16 @@ size_t feng_symbol_provider_module_count(const FengSymbolProvider *provider) {
     return provider != NULL ? provider->module_count : 0U;
 }
 
+/* Root discovery uses the index built while ordinary fit views are prepared. */
+bool feng_symbol_module_has_exception_root(const FengSymbolImportedModule *module) {
+    return module != NULL && module->has_exception_root;
+}
+
+/* Preserve the declaration fact for tools and cache comparison. */
+bool feng_symbol_decl_is_throwable(const FengSymbolDeclView *decl) {
+    return decl != NULL && decl->is_throwable;
+}
+
 const FengSymbolImportedModule *feng_symbol_provider_module_at(
     const FengSymbolProvider *provider,
     size_t index) {
@@ -1142,7 +1152,7 @@ bool feng_symbol_decl_is_value_type(const FengSymbolDeclView *decl) {
     return decl != NULL && decl->kind == FENG_SYMBOL_DECL_KIND_TYPE && decl->is_value;
 }
 
-/* Expose a parameter's independent builtin/spec constraint surface. */
+/* Expose a parameter's ordinary spec constraint, or no constraint. */
 FengConstraintKind feng_symbol_decl_constraint_kind(const FengSymbolDeclView *decl) {
     if (decl == NULL || decl->kind != FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
         return FENG_CONSTRAINT_NONE;

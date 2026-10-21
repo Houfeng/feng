@@ -1,5 +1,7 @@
 open module std.tui.widgets;
 
+import std.text;
+
 import std;
 import std.collections;
 import std.tui.common;

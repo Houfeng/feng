@@ -1,4 +1,4 @@
-module cycle_graph_consumer;
+open module cycle_graph_consumer;
 import cycle_graph_provider;
 
 var graphDrops: int = 0;
@@ -160,3 +160,7 @@ func main(args: string[]) {
     }
     require(graphDrops == 7);
 }
+
+/** Exception declarations for this standalone regression fixture. */
+@throwable open spec Throwable {}
+open fit string:Throwable {}

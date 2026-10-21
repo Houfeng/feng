@@ -2231,6 +2231,7 @@ static bool apply_decl_annotations(FengSymbolDeclView *decl,
     decl->is_iterable = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_ITERABLE);
     decl->is_iterator = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_ITERATOR);
     decl->is_mixable = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_MIXABLE);
+    decl->is_throwable = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_THROWABLE);
     if (callconv != NULL) {
         decl->calling_convention = callconv->builtin_kind;
         if (allow_library && callconv->arg_count > 0U) {

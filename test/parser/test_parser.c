@@ -6486,7 +6486,7 @@ void test_structural_type_target_parser(void);
 /* Both array owner forms preserve every nested type layer. */
 void test_array_static_parity_parser(void);
 
-/* Additional builtin-constraint coverage; existing cases remain unchanged. */
+/* Root constraints use ordinary spec references in every generic declaration. */
 void test_throw_constraint_parser(void);
 
 /* Sibling bounds retain both parameter orders in the source AST. */

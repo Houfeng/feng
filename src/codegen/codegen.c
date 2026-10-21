@@ -25,7 +25,7 @@
 #include "parser/parser.h"
 
 /* Compiler-only bound surface. A one-based spec identity survives table growth
- * and inactive context copies; zero denotes no spec, including builtin bounds. */
+ * and inactive context copies; zero denotes an unconstrained parameter. */
 typedef struct CGGenericConstraint {
     FengConstraintKind kind;
     size_t spec_id;
@@ -2668,7 +2668,7 @@ static bool cg_ensure_callable_function_value(CG *cg, const UserSpec *spec,
 static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
                                        const UserSpec *constraint_spec,
                                        const FengToken *tok, char **out);
-/* Build the descriptor for either a spec or builtin bound. */
+/* Build the descriptor for an ordinary spec constraint. */
 static bool cg_constraint_descriptor_expr(CG *cg, const CGType *type,
     CGGenericConstraint constraint, const FengToken *token, char **out);
 /* Materialize one closed array in the common static type-dependency graph. */
@@ -2700,7 +2700,7 @@ static bool cg_finish_member_generic_call(CG *cg, Buf *out,
 static bool cg_open_generic_argument_expr(CG *cg, const CGType *actual,
     const UserSpec *constraint, FengToken blame, char **out);
 static void cg_free_generic_arguments(CG *cg);
-/* Bind a spec or builtin constraint at non-expression descriptor entrances. */
+/* Bind a spec constraint at non-expression descriptor entrances. */
 static bool cg_instantiated_generic_descriptor(
     CG *cg, const CGType *actual, CGGenericConstraint open_constraint,
     const FengTypeRef *constraint_ref, const FengTypeParam *params,
@@ -35276,7 +35276,25 @@ static bool cg_emit_match_op(CG *cg, const FengExpr *e, ExprResult *out) {
     return out->c_expr != NULL && out->type != NULL;
 }
 
-/* Materialize the immutable binding of a catch with a concrete payload type. */
+/* Recognize the registered declaration, independently of its library name. */
+static bool cg_type_is_exception_root(const CG *cg, const CGType *type) {
+    return cg->analysis->exception_root != NULL && type != NULL &&
+           type->kind == CG_TYPE_SPEC && type->user_spec != NULL &&
+           type->user_spec->decl == cg->analysis->exception_root;
+}
+
+/* A root catch uses the existing catch-all selector; concrete catches retain
+ * their precise descriptor identity and ordinary payload extraction. */
+static bool cg_catch_descriptor_expr(CG *cg, const CGType *type,
+                                     FengToken blame, char **out) {
+    if (cg_type_is_exception_root(cg, type)) {
+        *out = strdup("NULL");
+        return *out != NULL || cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    return cg_exception_descriptor_expr_for_type(cg, type, blame, out);
+}
+
+/* Materialize a catch binding with its ordinary concrete or root-spec type. */
 static bool cg_emit_try_expr_catch_binding(CG *cg,
                                            const FengTryCatchClause *clause,
                                            const CGType *catch_type,
@@ -35297,6 +35315,23 @@ static bool cg_emit_try_expr_catch_binding(CG *cg,
         free(c_name);
         free(feng_name);
         return cg_fail(cg, err_token, "CE0213", "codegen: missing catch binding type");
+    }
+    if (cg_type_is_exception_root(cg, catch_type)) {
+        buf_append_fmt(cg->cur_body,
+            "        %sstruct %s %s = { .subject = feng_caught_value(), "
+            ".witness = (const struct %s *)feng_caught_witness() };\n"
+            "        feng_retain(%s.subject);\n",
+            cg_debug_local_attribute(cg, c_name),
+            catch_type->user_spec->c_value_struct_name, c_name,
+            catch_type->user_spec->c_witness_struct_name, c_name);
+        bool ok = scope_add(cg->cur_scope, feng_name, c_name,
+                             cgtype_clone(catch_type), false) &&
+                  cg_debug_add_variable_record_slice_cgtype(cg, c_name, clause->name,
+                    NULL, catch_type, FENG_CODEGEN_MAPING_VARIABLE_BINDING, err_token);
+        if (ok) cg_emit_cleanup_push_for_aggregate_local(cg, c_name, catch_type);
+        free(c_name);
+        free(feng_name);
+        return ok || cg_fail(cg, err_token, "IE0001", "codegen: out of memory");
     }
     /* Scalars, enums, tuples, and @value types all extract from their
      * statically known ValueBox<T>. Aggregate values retain managed fields
@@ -35613,7 +35648,7 @@ static bool cg_emit_try_expr(CG *cg,
                 cgtype_free(result_type);
                 return false;
             }
-            if (!cg_exception_descriptor_expr_for_type(cg,
+            if (!cg_catch_descriptor_expr(cg,
                                                        catch_type,
                                                        clause->token,
                                                        &desc_expr)) {
@@ -35699,7 +35734,7 @@ static bool cg_emit_try_expr(CG *cg,
 
         if (!is_anonymous) {
             if (!cg_resolve_type(cg, clause->type, &clause->token, &catch_type) ||
-                !cg_exception_descriptor_expr_for_type(cg, catch_type, clause->token, &desc_expr)) {
+                !cg_catch_descriptor_expr(cg, catch_type, clause->token, &desc_expr)) {
                 cgtype_free(catch_type);
                 free(slot_name);
                 free(marker_name);
@@ -44116,34 +44151,78 @@ static bool cg_exception_descriptor_expr_for_type(CG *cg,
     }
 }
 
-/* Form an exception with the existing erased-value ABI and exact concrete
- * box identity. The builtin witness is static data, never a runtime query. */
-static bool cg_emit_generic_throw(CG *cg, ExprResult *value, FengToken blame) {
+/* Consume a throw-local static formation dependency with the existing erased
+ * value copy protocol. The constraint witness remains reserved for dispatch;
+ * the formation witness describes the managed exception subject. */
+static bool cg_emit_generic_throw(CG *cg, ExprResult *value,
+    const FengSpecCoercionSite *site, FengToken blame) {
     size_t index = value->type->generic_param_index;
-    const char *descriptor = cg_generic_param_desc_name(cg, index);
-    if (descriptor == NULL || cg->generic_fn_type_param_constraints == NULL ||
-        index >= cg->generic_fn_type_param_count ||
-        cg->generic_fn_type_param_constraints[index].kind != FENG_CONSTRAINT_THROW) {
-        return cg_fail(cg, blame, "IE0002", "codegen: generic throw lacks a proven throw constraint");
+    const char *descriptor = value->uses_erased_generic_storage
+        ? value->erased_generic_descriptor_c_name : cg_generic_param_desc_name(cg, index);
+    size_t slot = site != NULL && site->form == FENG_SPEC_COERCION_FORM_THROW_ROOT
+        ? feng_semantic_spec_view_coercion_slot(cg->generic_reified_use_deps,
+                                               &site->view_coercion) : SIZE_MAX;
+    if (descriptor == NULL || slot == SIZE_MAX) {
+        return cg_fail(cg, blame, "IE0002",
+            "codegen: generic throw lacks its exception root preparation dependency");
+    }
+    CGType *root = NULL;
+    if (!cg_resolve_type(cg, site->view_coercion.target_type_ref, &blame, &root)) return false;
+    if (!cg_type_is_exception_root(cg, root)) {
+        cgtype_free(root);
+        return cg_fail(cg, blame, "IE0002", "codegen: generic throw has no exception root type");
     }
     char *source = cg_fresh_temp(cg, "_throw_source");
     char *payload = cg_fresh_temp(cg, "_throw_payload");
     char *exception_descriptor = cg_fresh_temp(cg, "_throw_descriptor");
+    char *formation = cg_fresh_temp(cg, "_throw_formation");
+    char *witness = cg_fresh_temp(cg, "_throw_witness");
+    char *root_value = cg_fresh_temp(cg, "_throw_root");
     Buf target;
     buf_init(&target);
-    bool ok = source != NULL && payload != NULL && exception_descriptor != NULL;
+    bool ok = source != NULL && payload != NULL && exception_descriptor != NULL &&
+              formation != NULL && witness != NULL && root_value != NULL;
     if (!ok) goto cleanup;
+    buf_append_fmt(cg->cur_body,
+        "    %sconst FengSpecCoercionDescriptor *%s = &%s->reified_spec_view_coercions[%zu];\n",
+        cg_debug_local_attribute(cg, formation), formation,
+        cg->generic_callable_dep_via_desc ? "_desc" : "_td", slot);
     buf_append_fmt(cg->cur_body,
         "    %sconst void *%s = %s;\n"
         "    %svoid *%s = NULL;\n"
         "    %sconst FengTypeDescriptor *%s = NULL;\n"
+        "    %sconst void *%s = %s->witness;\n"
         "    switch (%s->kind) {\n",
         cg_debug_local_attribute(cg, source),
-        source, value->c_expr, cg_debug_local_attribute(cg, payload), payload, cg_debug_local_attribute(cg, exception_descriptor), exception_descriptor, descriptor);
+        source, value->c_expr, cg_debug_local_attribute(cg, payload), payload,
+        cg_debug_local_attribute(cg, exception_descriptor), exception_descriptor,
+        cg_debug_local_attribute(cg, witness), witness, formation, descriptor);
     const char *kinds[] = {"FENG_VALUE_TRIVIAL", "FENG_VALUE_MANAGED_POINTER",
                           "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS"};
     for (size_t kind = 0U; kind < sizeof(kinds) / sizeof(kinds[0]); ++kind) {
         buf_append_fmt(cg->cur_body, "        case %s: {\n", kinds[kind]);
+        if (kind == CG_VK_AGGREGATE) {
+            /* Only the registered root can be a spec actual. Its ordinary
+             * aggregate descriptor identifies the complete, unmodified value;
+             * the constraint's spec-slot witness remains reserved for calls. */
+            buf_append_fmt(cg->cur_body,
+                "            if (%s->descriptor == &%s) {\n"
+                "                struct %s %s = {0};\n",
+                descriptor, root->user_spec->c_aggregate_desc_name,
+                root->user_spec->c_value_struct_name, root_value);
+            buf_append_fmt(&target, "(&%s)", root_value);
+            if (target.data == NULL) { ok = false; goto cleanup; }
+            cg_emit_generic_value_store_kind(cg, CG_VK_AGGREGATE, target.data,
+                source, descriptor, value->owns_ref, false);
+            buf_free(&target);
+            buf_append_fmt(cg->cur_body,
+                "                %s = %s.subject;\n"
+                "                %s = ((const FengManagedHeader *)%s)->desc;\n"
+                "                %s = %s.witness;\n"
+                "                break;\n"
+                "            }\n",
+                payload, root_value, exception_descriptor, payload, witness, root_value);
+        }
         if (kind == CG_VK_MANAGED_POINTER) {
             buf_append_fmt(cg->cur_body,
                 "            %s = (const FengTypeDescriptor *)%s->descriptor;\n",
@@ -44151,13 +44230,11 @@ static bool cg_emit_generic_throw(CG *cg, ExprResult *value, FengToken blame) {
             buf_append_fmt(&target, "(&%s)", payload);
         } else {
             buf_append_fmt(cg->cur_body,
-                "            %sconst FengSpecCoercionDescriptor *_formation = "
-                "(const FengSpecCoercionDescriptor *)%s->witness;\n"
-                "            %s = _formation->box_descriptor;\n"
+                "            %s = %s->box_descriptor;\n"
                 "            %s = feng_object_new(%s);\n",
-                cg_debug_local_attribute(cg, "_formation"),
-                descriptor, exception_descriptor, payload, exception_descriptor);
-            buf_append_fmt(&target, "((unsigned char *)%s + _formation->payload_offset)", payload);
+                exception_descriptor, formation, payload, exception_descriptor);
+            buf_append_fmt(&target, "((unsigned char *)%s + %s->payload_offset)",
+                           payload, formation);
         }
         if (target.data == NULL) { ok = false; goto cleanup; }
         cg_emit_generic_value_store_kind(cg, (CGValueKind)kind, target.data,
@@ -44165,12 +44242,16 @@ static bool cg_emit_generic_throw(CG *cg, ExprResult *value, FengToken blame) {
         buf_free(&target);
         buf_append_cstr(cg->cur_body, "            break;\n        }\n");
     }
-    buf_append_fmt(cg->cur_body, "    }\n    feng_throw(%s, %s);\n",
-        payload, exception_descriptor);
+    buf_append_fmt(cg->cur_body, "    }\n    feng_throw(%s, %s, %s);\n",
+        payload, exception_descriptor, witness);
 cleanup:
+    cgtype_free(root);
     free(source);
     free(payload);
     free(exception_descriptor);
+    free(formation);
+    free(witness);
+    free(root_value);
     buf_free(&target);
     if (!ok) return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     return true;
@@ -44188,81 +44269,39 @@ static bool cg_emit_throw(CG *cg, const FengStmt *stmt) {
     ExprResult r;
     if (!cg_emit_expr(cg, stmt->as.throw_value, &r)) return false;
 
-    /* Semantic rejects every spec form. Keep this guard so malformed analysis
-     * input cannot reach representation-specific subject extraction. */
+    /* Semantic prepares an ordinary root view for concrete payloads.
+     * Keep the original managed subject and its exact identity;
+     * the view itself is only a pair of pointers, never a new payload box. */
     if (r.type->kind == CG_TYPE_SPEC) {
+        if (!cg_type_is_exception_root(cg, r.type)) {
+            er_free(&r);
+            return cg_fail(cg, stmt->token, "IE0002",
+                           "codegen: throw spec value lacks a prepared root view");
+        }
+        bool ok = cg_materialize_ownership_alias(cg, &r, "_throw_view");
+        if (ok) {
+            if (!r.owns_ref) {
+                buf_append_fmt(cg->cur_body, "    feng_retain(%s.subject);\n", r.c_expr);
+            }
+            buf_append_fmt(cg->cur_body,
+                "    feng_throw(%s.subject, ((const FengManagedHeader *)%s.subject)->desc, "
+                "%s.witness);\n", r.c_expr, r.c_expr, r.c_expr);
+        }
         er_free(&r);
-        return cg_fail(cg, stmt->token,
-                       "CE0284", "codegen: spec is not a supported exception payload type");
+        return ok || cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     }
 
     if (r.type->kind == CG_TYPE_GENERIC_PARAM) {
-        bool ok = cg_emit_generic_throw(cg, &r, stmt->token);
+        const FengSpecCoercionSite *site = feng_semantic_lookup_spec_coercion_site(
+            cg->analysis, stmt->as.throw_value);
+        bool ok = cg_emit_generic_throw(cg, &r, site, stmt->token);
         er_free(&r);
         return ok;
     }
 
-    if (cg_type_has_value_box(r.type)) {
-        char *box_tmp = NULL;
-        char *desc_expr = NULL;
-
-        if (!cg_exception_descriptor_expr_for_type(cg,
-                                                   r.type,
-                                                   stmt->token,
-                                                   &desc_expr) ||
-            !cg_emit_value_box_subject(cg,
-                                       &r,
-                                       stmt->token,
-                                       &box_tmp)) {
-            free(box_tmp);
-            free(desc_expr);
-            er_free(&r);
-            return false;
-        }
-        buf_append_fmt(cg->cur_body,
-                       "    feng_throw((void *)%s, %s);\n",
-                       box_tmp,
-                       desc_expr);
-        free(box_tmp);
-        free(desc_expr);
-        er_free(&r);
-        return true;
-    }
-
-    char *desc_expr = NULL;
-    if (!cg_exception_descriptor_expr_for_type(cg, r.type, stmt->token, &desc_expr)) {
-        er_free(&r);
-        return false;
-    }
-    char *tmp = cg_fresh_temp(cg, "_thr");
-    if (tmp == NULL) {
-        free(desc_expr);
-        er_free(&r);
-        return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
-    }
-    {
-        char *cty = cg_ctype_dup(r.type);
-        if (cty == NULL) {
-            free(tmp);
-            free(desc_expr);
-            er_free(&r);
-            return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
-        }
-        if (r.owns_ref) {
-            cg_emit_local_storage(cg, cty, tmp, r.c_expr);
-        } else {
-            buf_append_fmt(cg->cur_body, "    %s%s %s = %s; feng_retain(%s);\n",
-                           cg_debug_local_attribute(cg, tmp),
-                           cty, tmp, r.c_expr, tmp);
-        }
-        free(cty);
-    }
     er_free(&r);
-    buf_append_fmt(cg->cur_body,
-                   "    feng_throw((void *)%s, %s);\n", tmp, desc_expr);
-    free(tmp);
-    free(desc_expr);
-    return true;
+    return cg_fail(cg, stmt->token, "IE0002",
+                   "codegen: throw payload lacks exception root preparation");
 }
 
 static bool cg_emit_stmt(CG *cg, const FengStmt *stmt) {
@@ -47824,6 +47863,16 @@ static bool cg_emit_closed_spec_view_coercion(CG *cg, Buf *entries,
         (void)cg_fail(cg, blame, "IE0002", "codegen: invalid closed spec view target");
         goto cleanup;
     }
+    /* An existing root view already owns its per-value witness. The throw
+     * consumer recognizes its ordinary aggregate descriptor and reads that
+     * value directly; no box or static replacement witness is formed. */
+    if (cg_type_is_exception_root(cg, source) &&
+        cg_type_is_exception_root(cg, target)) {
+        buf_append_cstr(entries,
+            "    { .box_descriptor = NULL, .payload_offset = 0U, .witness = NULL },\n");
+        ok = true;
+        goto cleanup;
+    }
     if (source->kind == CG_TYPE_OBJECT && source->user != NULL) {
         if (cg_type_has_value_box(source)) {
             if (!cg_ensure_value_box_witness_instance(cg, source->user,
@@ -51004,38 +51053,11 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *type,
     return cg_generic_descriptor_with_witness(cg, type, constraint, NULL, token, out);
 }
 
-/* Bind a builtin surface at the closed call site. The compound literal is
- * emitted only inside an interned file-scope descriptor initializer, so it
- * has static storage and never creates per-call metadata. */
+/* Resolve the existing ordinary spec surface at the closed call site. */
 static bool cg_constraint_descriptor_expr(CG *cg, const CGType *type,
     CGGenericConstraint constraint, const FengToken *token, char **out) {
-    if (constraint.kind != FENG_CONSTRAINT_THROW) {
-        return cg_generic_descriptor_expr(cg, type,
-            cg_user_spec_by_index(cg, constraint.spec_id - 1U), token, out);
-    }
-    if (type != NULL && type->kind == CG_TYPE_GENERIC_PARAM) {
-        return cg_generic_descriptor_expr(cg, type, NULL, token, out);
-    }
-    if (!cg_type_descriptor_is_statically_closed(type)) {
-        return cg_fail(cg, *token, "IE0002", "codegen: throw constraint requires a closed actual or direct parameter");
-    }
-    if (!cg_type_has_value_box(type)) {
-        return cg_generic_descriptor_expr(cg, type, NULL, token, out);
-    }
-    CGValueBoxInfo box = {0};
-    Buf formation;
-    buf_init(&formation);
-    if (!cg_value_box_info_for_type(cg, type, *token, &box)) return false;
-    buf_append_fmt(&formation,
-        "&(const FengSpecCoercionDescriptor){.box_descriptor = &%s, "
-        ".payload_offset = offsetof(struct %s, value), .witness = NULL}",
-        box.descriptor_name, box.struct_name);
-    bool ok = formation.data != NULL && cg_generic_descriptor_with_witness(
-        cg, type, NULL, formation.data, token, out);
-    cg_value_box_info_dispose(&box);
-    buf_free(&formation);
-    if (!ok && !cg->failed) return cg_fail(cg, *token, "IE0001", "codegen: out of memory");
-    return ok;
+    return cg_generic_descriptor_expr(cg, type,
+        cg_user_spec_by_index(cg, constraint.spec_id - 1U), token, out);
 }
 
 /* Emit the return statement body when inside a generic function.

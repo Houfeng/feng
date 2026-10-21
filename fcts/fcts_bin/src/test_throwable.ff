@@ -1,0 +1,320 @@
+module fcts_bin;
+
+import std;
+import std.numeric;
+import std.text;
+import std.test;
+import fcts_lib.test;
+
+var rootPayloadDrops: int = 0;
+
+/** An unrelated contract can coexist on an exception entity. */
+spec RootMarker { func marker(): int; }
+
+/** Keep the original reference identity and observable lifetime. */
+type RootPayload: Throwable, RootMarker {
+  let text: string;
+  let tracked: bool;
+  /** Return the concrete payload's text through the inherited root member. */
+  func toString(): string { return self.text; }
+  /** Exercise independent nominal conformance without an intersection spec. */
+  func marker(): int { return 17; }
+  /** Count only explicitly tracked payloads. */
+  func ~RootPayload() { if self.tracked { rootPayloadDrops += 1; } }
+}
+
+/** Managed fields must remain owned after the exception record is released. */
+@value type RootValue: Throwable {
+  let resource: RootPayload;
+  let text: string;
+  /** A distinct implementation proves the real per-value witness is retained. */
+  func toString(): string { return self.text; }
+}
+
+/** Throw the unchanged generic actual value. */
+func rootRaise<E: Throwable>(value: E): void { throw value; }
+
+/** Preserve descriptors across another shared generic body. */
+func rootForward<E: Throwable>(value: E): void { rootRaise<E>(value); }
+
+/** Produce an owned erased result through the existing generic return protocol. */
+func rootKeep<E>(value: E): E { return value; }
+
+/** Consume an owned result as the exception payload. */
+func rootRaiseOwned<E: Throwable>(value: E): void { throw rootKeep<E>(value); }
+
+/** Return a root binding beyond the lifetime of its exception record. */
+func rootSave(value: Throwable): Throwable {
+  try rootForward<Throwable>(value) catch error: Throwable { return error; }
+  return value;
+}
+
+/** Keep root values in an ordinary object field. */
+type RootHolder { let value: Throwable; }
+
+/** Callable capture retains the original root value after its creator returns. */
+spec RootAction(): void;
+
+/** Capture a constrained actual without changing the shared closure protocol. */
+func rootCapture<E: Throwable>(value: E): RootAction {
+  return () { throw value; };
+}
+
+/** Return a binding formed after throwing a concrete generic actual. */
+func rootSaveConcrete<E: Throwable>(value: E): Throwable {
+  try rootRaiseOwned<E>(value) catch error: Throwable { return error; }
+  throw value;
+}
+
+/** Local shared functions also consume named payloads restored from the FB. */
+func rootRaiseOpenReference<T>(value: LibRootError<T>): void { throw value; }
+
+/** Keep the named aggregate open until the local function is instantiated. */
+func rootRaiseOpenValue<T>(value: LibRootValue<T>): void { throw value; }
+
+/** Local owner and method bodies must retain the same closed payload identity. */
+type RootOpenOwner<T> {
+  let reference: LibRootError<T>;
+  let value: LibRootValue<T>;
+  /** Throw a named reference using the owner parameter. */
+  func raiseReference(): void { throw self.reference; }
+  /** Throw a named aggregate using the owner parameter. */
+  func raiseValue(): void { throw self.value; }
+  /** Keep the method parameter separate from the owner parameter. */
+  func raiseMethod<U>(value: LibRootValue<U>): void { throw value; }
+}
+
+/** Exercise concrete and root catches locally and across persisted packages. */
+open func test_throwable(): void {
+  describe("exception root", () {
+    test("concrete generic references retain the real root witness and identity", () {
+      rootPayloadDrops = 0;
+      {
+        let payload = RootPayload { text: "concrete reference", tracked: true };
+        let saved = rootSaveConcrete<RootPayload>(payload);
+        assert(saved.toString() == "concrete reference", "root witness reads the reference field");
+        assert(saved == (Throwable)payload, "root escape preserves reference identity");
+        var caught = 0;
+        try libForwardConstrained<RootPayload>(payload) catch error: Throwable {
+          assert(error.toString() == payload.text, "provider concrete reference witness");
+          caught += 1;
+        }
+        try rootRaise<Throwable>(saved) catch error: RootPayload {
+          assert(error == payload, "precise catch after root escape");
+          caught += 1;
+        }
+        assert(caught == 2 && rootPayloadDrops == 0, "all live owners retain the reference");
+      }
+      assert(rootPayloadDrops == 1, "concrete reference is destroyed once");
+    });
+    test("concrete generic values escape root catch with a box-owner witness", () {
+      rootPayloadDrops = 0;
+      {
+        let saved = rootSaveConcrete<RootValue>(RootValue {
+          resource: RootPayload { text: "concrete child", tracked: true }, text: "concrete value"
+        });
+        assert(saved.toString() == "concrete value" && rootPayloadDrops == 0,
+          "owned generic result remains live after root catch returns");
+        let holder = RootHolder { value: saved };
+        let stored: Throwable[] = [holder.value];
+        var caught = 0;
+        try rootRaise<Throwable>(stored[0]) catch error: RootValue {
+          assert(error.resource.text == "concrete child", "original managed field is recoverable");
+          try libForwardConstrained<RootValue>(error) catch root: Throwable {
+            assert(root.toString() == "concrete value", "borrowed aggregate uses its box-owner witness");
+            caught += 1;
+          }
+          caught += 1;
+        }
+        assert(caught == 2 && rootPayloadDrops == 0, "nested catches preserve escaped owners");
+      }
+      assert(rootPayloadDrops == 1, "managed child is destroyed once after all root owners");
+    });
+    test("concrete generic scalars use the boxed root member implementation", () {
+      var caught = 0;
+      try rootRaiseOwned<i32>(41) catch error: Throwable {
+        assert(error.toString() == "41", "owned scalar witness reads its box");
+        caught += 1;
+      }
+      try libForwardConstrained<i32>(43) catch error: Throwable {
+        assert(error.toString() == "43", "provider scalar witness reads its box");
+        caught += 1;
+      }
+      assert(caught == 2, "both scalar preparation paths are exercised");
+    });
+    test("open named payloads retain identity in function owner and method bodies", () {
+      rootPayloadDrops = 0;
+      {
+        let child = RootPayload { text: "open child", tracked: true };
+        let reference = LibRootError<RootPayload> { value: child, text: "open reference" };
+        let value = LibRootValue<RootPayload> { value: child, text: "open value" };
+        let local = RootOpenOwner<RootPayload> { reference: reference, value: value };
+        let remote = LibRootOwner<RootPayload> { reference: reference, value: value };
+        let aggregate = LibRootValueOwner<RootPayload> { value: value };
+        var caught = 0;
+        try rootRaiseOpenReference(reference) catch error: LibRootError<RootPayload> {
+          assert(error == reference && error.value == child, "local open reference identity"); caught += 1;
+        }
+        try libRaiseRootError(reference) catch error: Throwable {
+          assert(error.toString() == "open reference", "provider function reference witness"); caught += 1;
+        }
+        try rootRaiseOpenValue(value) catch error: Throwable {
+          assert(error.toString() == "open value", "local function aggregate witness"); caught += 1;
+        }
+        try libRaiseRootValue(value) catch error: LibRootValue<RootPayload> {
+          assert(error.value == child, "provider function aggregate field"); caught += 1;
+        }
+        try local.raiseReference() catch error: Throwable {
+          assert(error.toString() == "open reference", "local owner reference witness"); caught += 1;
+        }
+        try local.raiseValue() catch error: LibRootValue<RootPayload> {
+          assert(error.value == child, "local owner aggregate identity"); caught += 1;
+        }
+        try local.raiseMethod<string>(LibRootValue<string> { value: "method", text: "local method" })
+          catch error: LibRootValue<string> {
+            assert(error.value == "method", "local method uses its own parameter"); caught += 1;
+          }
+        try remote.raiseReference() catch error: LibRootError<RootPayload> {
+          assert(error == reference, "provider owner reference identity"); caught += 1;
+        }
+        try remote.raiseValue() catch error: Throwable {
+          assert(error.toString() == "open value", "provider owner aggregate witness"); caught += 1;
+        }
+        try remote.raiseMethod<string>(LibRootValue<string> { value: "method", text: "remote method" })
+          catch error: Throwable {
+            assert(error.toString() == "remote method", "provider method has an independent witness"); caught += 1;
+          }
+        try aggregate.raiseValue() catch error: LibRootValue<RootPayload> {
+          assert(error.value == child && error.text == "open value", "value owner aggregate identity"); caught += 1;
+        }
+        assert(caught == 11 && rootPayloadDrops == 0, "all shared-body entrances retain the child");
+      }
+      assert(rootPayloadDrops == 1, "named open payloads release their managed field exactly once");
+    });
+    test("nested named payloads and nonthrowable field arguments retain closed identities", () {
+      var caught = 0;
+      let nested = LibRootError<LibRootValue<string>> {
+        value: LibRootValue<string> { value: "nested field", text: "inner" }, text: "outer"
+      };
+      try (try libRaiseRootError(nested) catch error: Throwable {
+        assert(error.toString() == "outer", "nested root witness reads the outer payload");
+        throw error;
+      }) catch error: LibRootError<string> {
+        assert(false, "different closed arguments must not match");
+      } catch error: LibRootError<LibRootValue<string>> {
+        assert(error == nested && error.value.value == "nested field", "nested closed identity survives rethrow");
+        caught += 1;
+      }
+      try libRaiseRootValue(LibRootValue<i32[]> { value: [7, 9], text: "array field" })
+        catch error: LibRootValue<i32[]> {
+          assert(error.value[1] == 9, "payload fields need no root constraint"); caught += 1;
+        }
+      assert(caught == 2, "nested and nonthrowable arguments are both exercised");
+    });
+    test("generic root actual preserves concrete reference identity", () {
+      let payload = RootPayload { text: "reference", tracked: false };
+      let view: Throwable = payload;
+      var caught = 0;
+      try rootForward<Throwable>(view) catch error: RootPayload {
+        assert(error == payload && error.marker() == 17, "original reference and other contract");
+        caught += 1;
+      }
+      try libRaiseConstrained<Throwable>(view) catch error: RootPayload {
+        assert(error == payload, "provider shared body retains original identity");
+        caught += 1;
+      }
+      try rootRaiseOwned<Throwable>(view) catch error: Throwable {
+        assert(error.toString() == "reference", "owned root uses real witness");
+        let parent = (Display)error;
+        assert(parent.toString() == "reference", "ordinary root-to-parent conversion");
+        caught += 1;
+      }
+      assert(caught == 3, "all root throws are caught");
+    });
+    test("root actual uses its original value box and member implementation", () {
+      let payload = RootValue {
+        resource: RootPayload { text: "child", tracked: false }, text: "value"
+      };
+      let view: Throwable = payload;
+      var caught = 0;
+      try rootRaise<Throwable>(view) catch error: RootValue {
+        assert(error.text == "value" && error.resource.text == "child", "value and managed child");
+        caught += 1;
+      }
+      try libForwardConstrained<Throwable>(view) catch error: Throwable {
+        assert(error.toString() == "value", "provider uses the value's witness");
+        caught += 1;
+      }
+      let refOwner = LibThrowOwner<Throwable> { error: view };
+      let valOwner = LibThrowValueOwner<Throwable> { error: view };
+      try refOwner.raise() catch error: RootValue { caught += 1; }
+      try valOwner.raise() catch error: RootValue { caught += 1; }
+      try refOwner.method<Throwable>(view) catch error: RootValue { caught += 1; }
+      let action = rootCapture<Throwable>(view);
+      try action() catch error: Throwable {
+        assert(error.toString() == "value", "captured root keeps the value witness");
+        caught += 1;
+      }
+      assert(caught == 6, "method and type parameter descriptor paths");
+    });
+    test("root catch survives return, field and container storage and rethrow", () {
+      let payload = RootPayload { text: "saved", tracked: false };
+      let saved = rootSave(payload);
+      let holder = RootHolder { value: saved };
+      let values: Throwable[] = [holder.value];
+      assert(saved == (Throwable)payload, "root equality retains original subject");
+      var caught = false;
+      try (try rootRaise(values[0]) catch error: Throwable { throw error; })
+        catch error: RootPayload {
+          assert(error == payload, "named root rethrow preserves exact payload");
+          caught = true;
+        }
+      assert(caught, "stored root is still throwable");
+    });
+    test("nested catches restore the outer witness for anonymous rethrow", () {
+      let outer: Throwable = RootPayload { text: "outer", tracked: false };
+      let inner: Throwable = RootValue {
+        resource: RootPayload { text: "child", tracked: false }, text: "inner"
+      };
+      var caught = false;
+      try (try rootRaise(outer) catch {
+        try rootRaise(inner) catch error: Throwable {
+          assert(error.toString() == "inner", "inner witness");
+        }
+        throw;
+      }) catch error: Throwable {
+        assert(error.toString() == "outer", "restored outer witness");
+        caught = true;
+      }
+      assert(caught, "anonymous rethrow reaches root catch");
+    });
+    test("scalar and default root values keep their existing representations", () {
+      let scalar: Throwable = (i32)23;
+      var caught = 0;
+      try libRaiseConstrained<Throwable>(scalar) catch error: i32 {
+        assert(error == 23, "exact scalar identity behind the root");
+        caught += 1;
+      }
+      let empty: Throwable;
+      try rootRaiseOwned<Throwable>(empty) catch error: Throwable {
+        assert(error.toString() == "", "ordinary default root witness");
+        caught += 1;
+      }
+      assert(caught == 2, "scalar and default roots are caught");
+    });
+    test("escaped root bindings release their original payload exactly once", () {
+      rootPayloadDrops = 0;
+      {
+        let saved = rootSave(RootValue {
+          resource: RootPayload { text: "owned child", tracked: true }, text: "escaped"
+        });
+        assert(saved.toString() == "escaped" && rootPayloadDrops == 0, "returned root owns its child");
+        try rootRaiseOwned<Throwable>(saved) catch error: RootValue {
+          assert(error.resource.text == "owned child", "original aggregate is recoverable");
+        }
+        assert(rootPayloadDrops == 0, "source root retains its ownership after catch");
+      }
+      assert(rootPayloadDrops == 1, "one final release after all roots leave scope");
+    });
+  });
+}

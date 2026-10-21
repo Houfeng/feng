@@ -50,7 +50,7 @@ void test_native_exception_codegen(void (*compile_c)(const char *)) {
         "open func nested(n:int):int{return try(try clean(n) catch e:int{e;})"
         "catch e:string{n+7;};}"
         "open func indirect(f:Action,n:int):int{return try f(n) catch e:string{n;};}"
-        "open func generic<T:throw>(value:T):void{throw value;}"
+        "open func generic<T:Throwable>(value:T):void{throw value;}"
         "open func typed(n:int):int{try generic<int>(n) catch e:int{return e;}return 0;}"
         "open type Resource{func ~Resource(){try fail(0) catch{}}}"
         "open spec Named{func text():string;}"
@@ -66,7 +66,7 @@ void test_native_exception_codegen(void (*compile_c)(const char *)) {
         "if j==2{continue;}}for let item in [1,2,3]{if item==n{return item;}}return i;}"
         "open func add(n:int):int{return n+1;}"
         "open func destructure(n:int):int{let (a,_,b)=(n,n+1,n+2);return a+b;}";
-    ThrowConstraintUnit unit = throw_constraint_analyze(source, NULL, NULL);
+    ThrowConstraintUnit unit = throw_constraint_analyze_with_root(source, NULL, NULL, NULL);
     FengCodegenOutput output = {0};
     FengCodegenError error = {0};
     THROW_CHECK(feng_codegen_emit_program(unit.analysis, FENG_COMPILE_TARGET_LIB,

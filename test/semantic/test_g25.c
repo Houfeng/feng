@@ -1,3 +1,4 @@
+#include "../throw_constraint_helpers.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -259,9 +260,9 @@ static void g25_open_pointer_diagnostics(void) {
     size_t failures = 0U, count = 0U;
     for (size_t i = 0U; i < sizeof(shapes) / sizeof(shapes[0]); ++i) {
         for (size_t j = 0U; j < sizeof(surfaces) / sizeof(surfaces[0]); ++j) {
-            char body[512], source[1024], id[96];
+            char body[512], source[2048], id[96];
             int a = snprintf(body, sizeof(body), surfaces[j].source, shapes[i].shape);
-            int b = snprintf(source, sizeof(source), "module g25;\ntype Box<T> {}\n%s", body);
+            int b = snprintf(source, sizeof(source), "open module g25;\ntype Box<T> {}\n%s" THROW_TEST_ROOT, body);
             int c = snprintf(id, sizeof(id), "open-pointer-%zu-%s", i, surfaces[j].id);
             if (a < 0 || (size_t)a >= sizeof(body) || b < 0 || (size_t)b >= sizeof(source) ||
                 c < 0 || (size_t)c >= sizeof(id)) {

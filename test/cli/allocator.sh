@@ -217,7 +217,9 @@ fi
 "${sanitizer_cc}" "${FLAGS[@]}" -O1 -fsanitize=undefined -fno-sanitize-recover=all \
   -c "${FIXTURE}/ubsan.c" -o "${WORK}/ubsan.o"
 cat >"${WORK}/ubsan.ff" <<'FF'
-module allocator_ubsan;
+open module allocator_ubsan;
+@throwable open spec Throwable {}
+fit string:Throwable {}
 @cdecl("libc", "allocator_ubsan_check")
 extern func check(fail: i32): i32;
 func main(args: string[]) {

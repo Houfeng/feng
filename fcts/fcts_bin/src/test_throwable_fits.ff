@@ -1,0 +1,177 @@
+module fcts_bin;
+
+import std;
+
+/** Preserve the existing ExAppError exception payload and identity. */
+fit ExAppError: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ExAppError"; }
+}
+
+/** Preserve the existing ExTuplePoint exception payload and identity. */
+fit ExTuplePoint: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ExTuplePoint"; }
+}
+
+/** Preserve the existing ExValuePoint exception payload and identity. */
+fit ExValuePoint: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ExValuePoint"; }
+}
+
+/** Preserve the existing ExValueError exception payload and identity. */
+fit ExValueError: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ExValueError"; }
+}
+
+/** Preserve the existing ArcResource exception payload and identity. */
+fit ArcResource: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ArcResource"; }
+}
+
+/** Preserve the existing ExceptionPayloadStatusA exception payload and identity. */
+fit ExceptionPayloadStatusA: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ExceptionPayloadStatusA"; }
+}
+
+/** Preserve the existing ExceptionPayloadTupleA exception payload and identity. */
+fit ExceptionPayloadTupleA: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ExceptionPayloadTupleA"; }
+}
+
+/** Preserve the existing ExceptionPayloadValueA exception payload and identity. */
+fit ExceptionPayloadValueA: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ExceptionPayloadValueA"; }
+}
+
+/** Preserve the existing ExceptionPayloadEntity exception payload and identity. */
+fit ExceptionPayloadEntity: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ExceptionPayloadEntity"; }
+}
+
+/** Preserve the existing ExceptionPayloadGenericEntity exception payload and identity. */
+fit ExceptionPayloadGenericEntity<T>: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ExceptionPayloadGenericEntity"; }
+}
+
+/** Preserve the existing ExceptionPayloadGenericValue exception payload and identity. */
+fit ExceptionPayloadGenericValue<T>: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ExceptionPayloadGenericValue"; }
+}
+
+/** Preserve the existing ExceptionPayloadAbiEntityA exception payload and identity. */
+fit ExceptionPayloadAbiEntityA: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ExceptionPayloadAbiEntityA"; }
+}
+
+/** Preserve the existing ExceptionPayloadAbiValueA exception payload and identity. */
+fit ExceptionPayloadAbiValueA: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ExceptionPayloadAbiValueA"; }
+}
+
+/** Preserve the existing ExceptionPayloadAggregate exception payload and identity. */
+fit ExceptionPayloadAggregate: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ExceptionPayloadAggregate"; }
+}
+
+/** Preserve the existing NestedExceptionResource exception payload and identity. */
+fit NestedExceptionResource: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "NestedExceptionResource"; }
+}
+
+/** Preserve the existing NestedExceptionValue exception payload and identity. */
+fit NestedExceptionValue: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "NestedExceptionValue"; }
+}
+
+/** Preserve the existing NestedExceptionTuple exception payload and identity. */
+fit NestedExceptionTuple: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "NestedExceptionTuple"; }
+}
+
+/** Preserve the existing NestedExceptionStatus exception payload and identity. */
+fit NestedExceptionStatus: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "NestedExceptionStatus"; }
+}
+
+/** Preserve the existing NestedExceptionBox exception payload and identity. */
+fit NestedExceptionBox<T>: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "NestedExceptionBox"; }
+}
+
+/** Preserve the existing ThrowStatusA exception payload and identity. */
+fit ThrowStatusA: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ThrowStatusA"; }
+}
+
+/** Preserve the existing ThrowPair exception payload and identity. */
+fit ThrowPair: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ThrowPair"; }
+}
+
+/** Preserve the existing ThrowNumbers exception payload and identity. */
+fit ThrowNumbers: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ThrowNumbers"; }
+}
+
+/** Preserve the existing ThrowReference exception payload and identity. */
+fit ThrowReference<T>: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ThrowReference"; }
+}
+
+/** Preserve the existing ThrowValue exception payload and identity. */
+fit ThrowValue<T>: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ThrowValue"; }
+}
+
+/** Preserve the existing ThrowAbiReference exception payload and identity. */
+fit ThrowAbiReference: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ThrowAbiReference"; }
+}
+
+/** Preserve the existing ThrowAbiValue exception payload and identity. */
+fit ThrowAbiValue: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ThrowAbiValue"; }
+}
+
+/** Preserve the existing ThrowTracker exception payload and identity. */
+fit ThrowTracker: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ThrowTracker"; }
+}
+
+/** Preserve the existing ThrowTrackedValue exception payload and identity. */
+fit ThrowTrackedValue: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "ThrowTrackedValue"; }
+}
+
+/** Preserve the existing DeferBoundaryError exception payload and identity. */
+fit DeferBoundaryError: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "DeferBoundaryError"; }
+}

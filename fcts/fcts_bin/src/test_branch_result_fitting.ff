@@ -1,5 +1,7 @@
 module fcts_bin;
 
+import std.text;
+
 import std.test;
 
 /** 用于验证分支结果分别贴合完整 union-form 目标。 */

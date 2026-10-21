@@ -18,7 +18,7 @@ static const FengDecl *effects_function(const FengProgram *program, const char *
 static void effects_expect(const char *body, const char *name, const char *expected) {
     char source[16384];
     snprintf(source, sizeof source, "module effects;%s", body);
-    ThrowConstraintUnit unit = throw_constraint_analyze(source, NULL, NULL);
+    ThrowConstraintUnit unit = throw_constraint_analyze_with_root(source, NULL, NULL, NULL);
     const FengDecl *decl = effects_function(unit.program, name);
     THROW_CHECK(decl != NULL);
     const FengExceptionTemplate *summary = feng_semantic_exception_template(unit.analysis, decl);
@@ -52,8 +52,8 @@ static void effects_control_flow(void) {
     effects_expect("func fail(){throw \"x\";}func run(){try fail() catch ex:string{} fail();}", "run",
                    "string");
     /* Phase two rejects the original escaping cleanup at its own boundary. */
-    ThrowConstraintUnit defer_rejected = throw_constraint_analyze(
-        "module effects;func fail(){throw \"x\";}func run(){defer{fail();}}", NULL, "AE1507");
+    ThrowConstraintUnit defer_rejected = throw_constraint_analyze_with_root(
+        "module effects;func fail(){throw \"x\";}func run(){defer{fail();}}", NULL, NULL, "AE1507");
     throw_constraint_dispose(&defer_rejected);
     effects_expect("func run(){if false{throw \"x\";}else{throw true;}throw \"duplicate\";}", "run",
                    "bool, string");
@@ -78,43 +78,43 @@ static void effects_control_flow(void) {
 
 /* Rebind open templates per call, keeping catches symbolic until substitution. */
 static void effects_generic_domains(void) {
-    const char *prefix = "func fail<T:throw>(x:T){throw x;}";
+    const char *prefix = "func fail<T:Throwable>(x:T){throw x;}";
     char source[8192];
-    snprintf(source, sizeof source, "%sfunc run<T:throw>(x:T){fail(x);}", prefix);
+    snprintf(source, sizeof source, "%sfunc run<T:Throwable>(x:T){fail(x);}", prefix);
     effects_expect(source, "run", "T");
-    snprintf(source, sizeof source, "%sfunc pass<T:throw>(x:T){fail<T>(x);}func run(){pass(\"x\");}", prefix);
+    snprintf(source, sizeof source, "%sfunc pass<T:Throwable>(x:T){fail<T>(x);}func run(){pass(\"x\");}", prefix);
     effects_expect(source, "run", "string");
     snprintf(source, sizeof source,
-             "%sfunc pass<T:throw>(x:T){try fail(x) catch e:string{}}func run(){pass(\"x\");}", prefix);
+             "%sfunc pass<T:Throwable>(x:T){try fail(x) catch e:string{}}func run(){pass(\"x\");}", prefix);
     effects_expect(source, "run", "none");
     snprintf(source, sizeof source,
-             "%sfunc pass<T:throw>(x:T){try fail(x) catch e:string{}}func run(){pass(1);}", prefix);
+             "%sfunc pass<T:Throwable>(x:T){try fail(x) catch e:string{}}func run(){pass(1);}", prefix);
     effects_expect(source, "run", "i64");
     snprintf(source, sizeof source,
-             "%sfunc pass<T:throw>(x:T){try fail(x) catch e:string{throw 1;}}func run(){pass(\"x\");}",
+             "%sfunc pass<T:Throwable>(x:T){try fail(x) catch e:string{throw 1;}}func run(){pass(\"x\");}",
              prefix);
     effects_expect(source, "run", "i64");
     snprintf(source, sizeof source,
-             "%sfunc pass<T:throw>(x:T){try fail(x) catch e:string{throw 1;}}func run(){pass(true);}",
+             "%sfunc pass<T:Throwable>(x:T){try fail(x) catch e:string{throw 1;}}func run(){pass(true);}",
              prefix);
     effects_expect(source, "run", "bool");
-    effects_expect("type Box<T:throw>{let value:T;func fail(){throw self.value;}}"
+    effects_expect("type Box<T:Throwable>{let value:T;func fail(){throw self.value;}}"
                    "func run(x:Box<string>){x.fail();}",
                    "run", "string");
-    effects_expect("type Box<T:throw>{func fail<U:throw>(x:U){throw x;}}"
+    effects_expect("type Box<T:Throwable>{func fail<U:Throwable>(x:U){throw x;}}"
                    "func run(x:Box<string>){x.fail(true);}",
                    "run", "bool");
-    effects_expect("type Box<T:throw>{let value:T;}fit Box<T>{func fail(){throw self.value;}}"
+    effects_expect("type Box<T:Throwable>{let value:T;}fit Box<T>{func fail(){throw self.value;}}"
                    "func run(x:Box<string>){x.fail();}",
                    "run", "string");
-    effects_expect("type Box<T:throw>{let value:T;func fail<U:throw>(x:U){"
+    effects_expect("type Box<T:Throwable>{let value:T;func fail<U:Throwable>(x:U){"
                    "if false{throw self.value;}throw x;}}func run(x:Box<string>){x.fail(true);}",
                    "run", "bool, string");
-    effects_expect("type Box<T:throw>{let value:T;func fail<U:throw>(x:U){"
+    effects_expect("type Box<T:Throwable>{let value:T;func fail<U:Throwable>(x:U){"
                    "if false{throw self.value;}throw x;}}func run(x:Box<bool>){"
                    "try x.fail(\"x\") catch e:bool{}}",
                    "run", "string");
-    effects_expect("func first<T:throw>(x:T){throw x;}func second<T:throw>(x:T){throw x;}"
+    effects_expect("func first<T:Throwable>(x:T){throw x;}func second<T:Throwable>(x:T){throw x;}"
                    "func run(){try first(\"x\") catch{} second(true);}",
                    "run", "bool");
     const char *orders[] = {"func before(){fail(true);}func after(){try fail(\"x\") catch e:string{}}",
@@ -125,17 +125,17 @@ static void effects_generic_domains(void) {
         effects_expect(source, "after", "none");
         effects_expect(source, "fail", "T");
     }
-    effects_expect("func raise<T:throw>(x:T){throw x;}"
-                   "func a<T:throw>(x:T){try raise(x) catch e:string{} catch{throw;}}"
-                   "func b<U:throw>(x:U){a<U>(x);}func run(){b(true);}",
+    effects_expect("func raise<T:Throwable>(x:T){throw x;}"
+                   "func a<T:Throwable>(x:T){try raise(x) catch e:string{} catch{throw;}}"
+                   "func b<U:Throwable>(x:U){a<U>(x);}func run(){b(true);}",
                    "run", "bool");
-    effects_expect("func raise<T:throw>(x:T){throw x;}"
-                   "func a<T:throw>(x:T){try raise(x) catch e:string{} catch{throw;}}"
-                   "func b<U:throw>(x:U){a<U>(x);}func run(){b(\"x\");}",
+    effects_expect("func raise<T:Throwable>(x:T){throw x;}"
+                   "func a<T:Throwable>(x:T){try raise(x) catch e:string{} catch{throw;}}"
+                   "func b<U:Throwable>(x:U){a<U>(x);}func run(){b(\"x\");}",
                    "run", "none");
     /* Stage one does not relax the existing open nominal payload restriction. */
-    ThrowConstraintUnit rejected = throw_constraint_analyze(
-        "module effects;type Error<T>{let value:T;}func make<T>(x:Error<T>){throw x;}", NULL, "AE0076");
+    ThrowConstraintUnit rejected = throw_constraint_analyze_with_root(
+        "module effects;type Error<T>{let value:T;}func make<T>(x:Error<T>){throw x;}", NULL, NULL, "AE0076");
     throw_constraint_dispose(&rejected);
 }
 
@@ -152,7 +152,7 @@ static void effects_callable_values(void) {
     effects_expect(
         "spec Action():void;func make():Action{return (){throw \"x\";};}func run(){let f=make();f();}", "run",
         "string");
-    effects_expect("spec Action():void;func make<T:throw>(x:T):Action{return (){throw x;};}func run(){let "
+    effects_expect("spec Action():void;func make<T:Throwable>(x:T):Action{return (){throw x;};}func run(){let "
                    "f=make(\"x\");f();}",
                    "run", "string");
     effects_expect("func a(n:i32){if n==0{throw \"x\";}b(n-1);}func b(n:i32){a(n);}func run(){b(2);}", "run",
@@ -167,14 +167,14 @@ static void effects_callable_values(void) {
     effects_expect("spec Action():void;func factory():Action{let prior=factory();return (){prior();};}"
                    "func run(){factory()();}",
                    "run", "unknown");
-    effects_expect("spec Action():void;func fail(){throw true;}func make<T:throw>(x:T):Action{"
+    effects_expect("spec Action():void;func fail(){throw true;}func make<T:Throwable>(x:T):Action{"
                    "try fail() catch e:string{return (){throw x;};} catch{} return (){};}"
                    "func run(){make(\"x\")();}",
                    "run", "none");
     effects_expect("spec Action():void;type W{static func fail(){throw \"x\";}}"
                    "func run(){let f:Action=W.fail;f();}",
                    "run", "string");
-    effects_expect("spec Action():void;type W<T:throw>{let value:T;func fail(){throw self.value;}}"
+    effects_expect("spec Action():void;type W<T:Throwable>{let value:T;func fail(){throw self.value;}}"
                    "func run(x:W<string>){let f:Action=x.fail;f();}",
                    "run", "string");
     effects_expect("spec Action():void;type W{var f:Action;}func run(x:W){x.f();}", "run",
@@ -207,7 +207,7 @@ static void effects_implicit_calls(void) {
     effects_expect("type Base{let x:i32;func Base(){throw \"x\";}}type Mixed{...:Base=Base();}"
                    "func run(){let x=Mixed();}",
                    "run", "string");
-    effects_expect("type Owner<T:throw>{func Owner(x:T){throw x;}}func run(){let x=Owner<string>(\"x\");}",
+    effects_expect("type Owner<T:Throwable>{func Owner(x:T){throw x;}}func run(){let x=Owner<string>(\"x\");}",
                    "run", "string");
     effects_expect("func argument():i32{throw true;}func take(x:i32){}func run(){take(argument());}", "run",
                    "bool");
@@ -223,9 +223,9 @@ static void effects_implicit_calls(void) {
 
 /* Lazy storage initialization participates in reads, writes and witness dispatch. */
 static void effects_lazy_initializers(void) {
-    const char *prelude = "func initial<T:throw>():i32{let value:T;throw value;}"
+    const char *prelude = "func initial<T:Throwable>():i32{let value:T;throw value;}"
                           "let fixed:i32=initial<string>();var changing:i32=initial<bool>();"
-                          "type Lazy<T:throw>{open static let value:i32=initial<T>();"
+                          "type Lazy<T:Throwable>{open static let value:i32=initial<T>();"
                           "open static var current:i32=initial<T>();}"
                           "spec Stored{static var value:i32;}"
                           "type Store:Stored{static var value:i32=initial<bool>();}"
@@ -251,9 +251,9 @@ static void effects_lazy_initializers(void) {
         snprintf(source, sizeof source, "%sfunc run(){%s}", prelude, bodies[i]);
         effects_expect(source, "run", expected[i]);
     }
-    effects_expect("func initial<T:throw>():i32{let x:T;throw x;}"
-                   "type Lazy<T:throw>{open static let value=initial<T>();}"
-                   "func relay<U:throw>():i32{return Lazy<U>.value;}func run(){relay<string>();}",
+    effects_expect("func initial<T:Throwable>():i32{let x:T;throw x;}"
+                   "type Lazy<T:Throwable>{open static let value=initial<T>();}"
+                   "func relay<U:Throwable>():i32{return Lazy<U>.value;}func run(){relay<string>();}",
                    "run", "string");
     effects_expect("spec Action():void;func create():Action{return (){throw true;};}"
                    "let action:Action=create();func run(){let f=action;}",
@@ -277,7 +277,9 @@ static void effects_payload_matrix(void) {
     const char *prelude =
         "enum State{Failed}type Pair(i32,string);type Ref{let code:i32;}"
         "@value type Val{let code:i32;}@abi type AbiRef{let code:i32;}@value @abi type AbiVal{let code:i32;}"
-        "type Box<T>{let value:T;}@value type ValueBox<T>{let value:T;}func raise<T:throw>(x:T){throw x;}";
+        "type Box<T>{let value:T;}@value type ValueBox<T>{let value:T;}func raise<T:Throwable>(x:T){throw x;}"
+        "fit State:Throwable{}fit Pair:Throwable{}fit Ref:Throwable{}fit Val:Throwable{}"
+        "fit AbiRef:Throwable{}fit AbiVal:Throwable{}fit Box<T>:Throwable{}fit ValueBox<T>:Throwable{}";
     for (size_t i = 0U; i < sizeof types / sizeof *types; ++i) {
         char source[4096], expected[256];
         snprintf(source, sizeof source, "%sfunc run(x:%s){raise(x);}", prelude, types[i]);
@@ -287,10 +289,10 @@ static void effects_payload_matrix(void) {
                  types[i], types[i]);
         effects_expect(source, "run", "none");
     }
-    effects_expect("type A(i32,i32);type B(i32,i32);func raise<T:throw>(x:T){throw x;}func run(x:A){try "
+    effects_expect("type A(i32,i32);type B(i32,i32);fit A:Throwable{}func raise<T:Throwable>(x:T){throw x;}func run(x:A){try "
                    "raise(x) catch e:B{}}",
                    "run", "effects.A");
-    effects_expect("type Box<T>{let value:T;}func raise<T:throw>(x:T){throw x;}func run(x:Box<i32>){try "
+    effects_expect("type Box<T>{let value:T;}fit Box<T>:Throwable{}func raise<T:Throwable>(x:T){throw x;}func run(x:Box<i32>){try "
                    "raise(x) catch e:Box<string>{}}",
                    "run", "effects.Box<i32>");
     effects_expect("spec Action():void;var f:Action=(){};func run(){f();}", "run",
@@ -351,7 +353,7 @@ static void effects_abi_boundaries(void) {
     for (size_t i = 0; i < sizeof bad / sizeof *bad; ++i) {
         char source[4096];
         snprintf(source, sizeof source, "module boundary;%s", bad[i]);
-        ThrowConstraintUnit unit = throw_constraint_analyze(source, NULL, "AE1313");
+        ThrowConstraintUnit unit = throw_constraint_analyze_with_root(source, NULL, NULL, "AE1313");
         throw_constraint_dispose(&unit);
     }
     effects_expect(
@@ -366,10 +368,10 @@ static void effects_abi_boundaries(void) {
 /* Core facts preserve each argument's capture filter without emitting infos. */
 static void effects_call_facts(void) {
     ThrowConstraintUnit unit =
-        throw_constraint_analyze("module effects;func text():i32{throw \"x\";}func flag():i32{throw true;}"
+        throw_constraint_analyze_with_root("module effects;func text():i32{throw \"x\";}func flag():i32{throw true;}"
                                  "func add(x:i32,y:i32):i32{return x+y;}"
                                  "func run(){try add(text(),flag()) catch e:string{}}",
-                                 NULL, NULL);
+                                 NULL, NULL, NULL);
     THROW_CHECK(unit.analysis->info_count == 0U);
     size_t count = feng_semantic_exception_call_count(unit.analysis);
     THROW_CHECK(count == 3U);
@@ -411,8 +413,8 @@ static void effects_call_facts(void) {
  * when its value is discarded and factories return multiple callable layers. */
 static void effects_caught_call_queries(void) {
     const char *factories[] = {
-        "spec Action():void;func create<T:throw>():Action{return (){let x:T;throw x;};}",
-        "spec Action():void;spec Factory():Action;func create<T:throw>():Factory{"
+        "spec Action():void;func create<T:Throwable>():Action{return (){let x:T;throw x;};}",
+        "spec Action():void;spec Factory():Action;func create<T:Throwable>():Factory{"
         "return (){let action:Action=(){let x:T;throw x;};return action;};}"};
     const char *types[] = {"bool", "string"};
     for (size_t f = 0U; f < sizeof factories / sizeof *factories; ++f) {
@@ -421,7 +423,7 @@ static void effects_caught_call_queries(void) {
             snprintf(source, sizeof source,
                      "module effects;%sfunc run(){try create<%s>()()%s catch{} let unused=0;}", factories[f],
                      types[t], f == 0U ? "" : "()");
-            ThrowConstraintUnit unit = throw_constraint_analyze(source, NULL, NULL);
+            ThrowConstraintUnit unit = throw_constraint_analyze_with_root(source, NULL, NULL, NULL);
             const FengDecl *run = effects_function(unit.program, "run");
             const FengExpr *call = run->as.function_decl.body->statements[0]->as.expr->as.try_expr.body;
             FengExceptionCallFacts facts;
@@ -438,8 +440,8 @@ static void effects_caught_call_queries(void) {
 
 /* All consumers receive type sets, irrespective of internal proof details. */
 static void effects_type_summary(void) {
-    effects_expect("func fail<T:throw>(x:T){throw x;}"
-                   "func run<T:throw>(x:T){try fail(x) catch e:string{throw true;}}",
+    effects_expect("func fail<T:Throwable>(x:T){throw x;}"
+                   "func run<T:Throwable>(x:T){try fail(x) catch e:string{throw true;}}",
                    "run", "T, bool");
     effects_expect("spec Action():void;spec Worker{func work():void;}"
                    "func run(f:Action,w:Worker){f();w.work();throw \"x\";}",

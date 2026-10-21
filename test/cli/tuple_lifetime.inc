@@ -2,7 +2,7 @@
  * independent of the concrete representation selected by its descriptor. */
 static void test_tuple_initializer_lifetime(void) {
     static const char source[] =
-        "module tuple_lifetime;\n"
+        "open module tuple_lifetime;\n"
         "var created=0;var destroyed=0;\n"
         "func require(ok:bool):void{if !ok{throw 99;}}\n"
         "spec View{let n:int;}spec Callback():int;\n"
@@ -42,7 +42,8 @@ static void test_tuple_initializer_lifetime(void) {
         "let cursor=Cursor<Ref>{value:ref};let next=cursor.next();require(next.item2.n==3);\n"
         "for var i=0;i<3;i+=1{let result=pair<Ref>(make(i+4));require(result.item2.n==i+4);}}\n"
         "func main(args:string[]):void{normal();require(created==destroyed);"
-        "exceptions();require(created==destroyed);}\n";
+        "exceptions();require(created==destroyed);}\n"
+        THROW_TEST_ROOT;
     char workspace[] = "temp/tuple-lifetime-XXXXXX";
     ASSERT(mkdtemp(workspace) != NULL);
     char *path = path_join(workspace, "main.ff");

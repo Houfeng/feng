@@ -1,4 +1,4 @@
-module union_slot_consumer;
+open module union_slot_consumer;
 
 import fcts_lib.test.union_slots;
 
@@ -88,3 +88,7 @@ func main(args: string[]) {
     cycles();
     require(dropped == 7);
 }
+
+/** Exception declarations for this standalone regression fixture. */
+@throwable open spec Throwable {}
+open fit string:Throwable {}

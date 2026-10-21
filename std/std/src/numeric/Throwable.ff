@@ -1,0 +1,24 @@
+open module std.numeric;
+
+import std;
+
+/** 数值异常复用各标量的 Display 实现，保持精确类型身份。 */
+open fit i8: std.Throwable {}
+/** 16 位有符号整数的异常契约。 */
+open fit i16: std.Throwable {}
+/** 32 位有符号整数的异常契约。 */
+open fit i32: std.Throwable {}
+/** 64 位有符号整数的异常契约。 */
+open fit i64: std.Throwable {}
+/** 8 位无符号整数的异常契约。 */
+open fit u8: std.Throwable {}
+/** 16 位无符号整数的异常契约。 */
+open fit u16: std.Throwable {}
+/** 32 位无符号整数的异常契约。 */
+open fit u32: std.Throwable {}
+/** 64 位无符号整数的异常契约。 */
+open fit u64: std.Throwable {}
+/** 单精度浮点数的异常契约。 */
+open fit f32: std.Throwable {}
+/** 双精度浮点数的异常契约。 */
+open fit f64: std.Throwable {}

@@ -1,5 +1,7 @@
 open module std.thread;
 
+import std.text;
+
 open spec ThreadFn(): void;
 
 @runtime

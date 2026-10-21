@@ -1,0 +1,24 @@
+open module fcts_lib.test.partial_value;
+
+/** Standalone CLI fixtures provide their own exception root. */
+@throwable open spec Throwable {}
+open fit string: Throwable {}
+
+/** A generic partial value must release every field acquired before a throw. */
+@value open type PartialPair<T> { open let first: T; open let second: T; }
+/** Supply a possibly throwing second initializer from a separate package. */
+open spec PartialFactory<T>(): T;
+/** Descriptor-sized value construction uses the same unwind ownership rule. */
+open func makePartialPair<T>(first: T, second: PartialFactory<T>): PartialPair<T> {
+    return PartialPair<T> { first: first, second: second() };
+}
+
+/** Both field expressions are non-throwing even in the shared generic body. */
+open func makeQuietPartialPair<T>(value: T): PartialPair<T> {
+    return PartialPair<T> { first: value, second: value };
+}
+
+/** Source-hidden callers can prove this initializer does not throw. */
+open func partialQuietNumber(): int { return 4; }
+/** Source-hidden callers must retain a guard for this initializer. */
+open func partialThrowNumber(): int { throw "partial-number"; }

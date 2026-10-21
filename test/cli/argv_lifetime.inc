@@ -5,12 +5,13 @@ static void test_main_argv_lifetime(void) {
         ASSERT(mkdtemp(workspace) != NULL);
         char *path = path_join(workspace, "main.ff");
         char *source = dup_printf(
-            "module argv_lifetime;\n"
+            "open module argv_lifetime;\n"
             "func main(args:string[])%s{\n"
             "if args[0]==\"\"||args[1]!=\"\"||args[2]!=\"plain\"{throw \"argv mismatch\";}\n"
             "var value=args[3];let saved=value;value=\"replacement\";\n"
             "if saved!=\"中文🌍\"||args[3]!=saved||value!=\"replacement\"{throw \"argv lifetime\";}\n"
-            "}\n", explicit_void ? ":void" : "");
+            "}\n"
+        THROW_TEST_ROOT, explicit_void ? ":void" : "");
         write_text_file(path, source);
         for (int release = 0; release < 2; ++release) {
             char *out = path_join(workspace, release ? "release" : "default");

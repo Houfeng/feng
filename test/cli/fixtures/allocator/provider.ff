@@ -33,3 +33,7 @@ open func allocatorLifetimes() {
     }
     if drops != 3 { quit(53); }
 }
+
+/** Exception declarations for this standalone regression fixture. */
+@throwable open spec Throwable {}
+open fit string:Throwable {}

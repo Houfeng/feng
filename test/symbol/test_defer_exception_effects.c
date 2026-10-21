@@ -14,17 +14,17 @@ typedef struct DeferImportCase {
 /* Run both FT profiles after destroying all producer source and analysis. */
 void test_defer_exception_effects_ft(void) {
     const char *source = "open module cleanup.api;"
-        "func hidden<T:throw>(x:T){throw x;}"
-        "open func raise<T:throw>(x:T){hidden(x);}"
-        "open func filtered<T:throw>(x:T){try hidden(x) catch e:string{}}"
+        "func hidden<T:Throwable>(x:T){throw x;}"
+        "open func raise<T:Throwable>(x:T){hidden(x);}"
+        "open func filtered<T:Throwable>(x:T){try hidden(x) catch e:string{}}"
         "open spec Action():void;open func invoke(f:Action){f();}"
-        "open func make<T:throw>(x:T):Action{return (){hidden(x);};}"
+        "open func make<T:Throwable>(x:T):Action{return (){hidden(x);};}"
         "open func quiet(){}"
-        "open func safe<T:throw>(x:T){defer{try hidden(x) catch{}}}"
+        "open func safe<T:Throwable>(x:T){defer{try hidden(x) catch{}}}"
         "open func again(){try hidden(\"x\") catch{throw;}}"
-        "open func recursive<T:throw>(x:T,n:i32){if n>0{recursive(x,n-1);}else{hidden(x);}}"
-        "open type Box<T:throw>{open let value:T;open func fail(){hidden(self.value);}"
-        "open func both<U:throw>(x:U){hidden(self.value);hidden(x);}}"
+        "open func recursive<T:Throwable>(x:T,n:i32){if n>0{recursive(x,n-1);}else{hidden(x);}}"
+        "open type Box<T:Throwable>{open let value:T;open func fail(){hidden(self.value);}"
+        "open func both<U:Throwable>(x:U){hidden(self.value);hidden(x);}}"
         "open spec Worker{func work():void;}"
         "open type NoFail:Worker{open func work():void{}}"
         "open type Fail:Worker{open func work():void{hidden(true);}}"
@@ -36,7 +36,7 @@ void test_defer_exception_effects_ft(void) {
         "open func initial():i32{throw \"init\";}"
         "open let lazy=initial();"
         "open type Item{open let n=initial();}";
-    ThrowConstraintUnit producer = throw_constraint_analyze(source, NULL, NULL);
+    ThrowConstraintUnit producer = throw_constraint_analyze_with_root(source, NULL, NULL, NULL);
     FengSymbolGraph *graph = NULL;
     FengSymbolError error = {0};
     THROW_CHECK(feng_symbol_build_graph(producer.analysis, &graph, &error));
@@ -55,8 +55,8 @@ void test_defer_exception_effects_ft(void) {
         {"func run(){defer{raise(\"x\");}}", false},
         {"func run(){defer{try raise(\"x\") catch e:string{}}}", true},
         {"func run(){defer{try raise(true) catch e:string{}}}", false},
-        {"func run<T:throw>(x:T){defer{raise(x);}}", false},
-        {"func run<T:throw>(x:T){defer{try raise(x) catch{}}}", true},
+        {"func run<T:Throwable>(x:T){defer{raise(x);}}", false},
+        {"func run<T:Throwable>(x:T){defer{try raise(x) catch{}}}", true},
         {"func run(){defer{filtered(\"x\");}}", true},
         {"func run(){defer{filtered(true);}}", false},
         {"func run(){defer{invoke(quiet);}}", true},

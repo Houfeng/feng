@@ -1,5 +1,7 @@
 open module fcts_lib.test.partial_value;
 
+import std.text;
+
 /** A generic partial value must release every field acquired before a throw. */
 @value open type PartialPair<T> { open let first: T; open let second: T; }
 /** Supply a possibly throwing second initializer from a separate package. */

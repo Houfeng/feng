@@ -8,29 +8,28 @@
 #include <unistd.h>
 
 /* Recursively inspect the independent bound fact in the exported graph. */
-static void throw_constraint_check_decl(const FengSymbolDeclView *decl, size_t counts[3]) {
+static void throw_constraint_check_decl(const FengSymbolDeclView *decl, size_t counts[2]) {
     if (feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
         FengSlice name = feng_symbol_decl_name(decl);
         FengConstraintKind kind = feng_symbol_decl_constraint_kind(decl);
-        THROW_CHECK((unsigned)kind < 3U);
+        THROW_CHECK((unsigned)kind < 2U);
         ++counts[kind];
         if (name.length == 1U && name.data[0] == 'S') THROW_CHECK(kind == FENG_CONSTRAINT_SPEC);
         else if (name.length == 1U && name.data[0] == 'A') THROW_CHECK(kind == FENG_CONSTRAINT_NONE);
-        else THROW_CHECK(kind == FENG_CONSTRAINT_THROW);
+        else THROW_CHECK(kind == FENG_CONSTRAINT_SPEC);
     }
     for (size_t i = 0U; i < feng_symbol_decl_member_count(decl); ++i)
         throw_constraint_check_decl(feng_symbol_decl_member_at(decl, i), counts);
 }
 
-/* No-bound and spec-bound declarations coexist with independent builtin facts. */
+/* No-bound and spec-bound declarations coexist with ordinary root constraints. */
 static void throw_constraint_check_graph(const FengSymbolGraph *graph) {
     THROW_CHECK(feng_symbol_graph_module_count(graph) == 1U);
     const FengSymbolModuleGraph *module = feng_symbol_graph_module_at(graph, 0U);
-    size_t counts[3] = {0};
+    size_t counts[2] = {0};
     throw_constraint_check_decl(&module->root_decl, counts);
     THROW_CHECK(counts[FENG_CONSTRAINT_NONE] == 1U);
-    THROW_CHECK(counts[FENG_CONSTRAINT_SPEC] == 1U);
-    THROW_CHECK(counts[FENG_CONSTRAINT_THROW] == 7U);
+    THROW_CHECK(counts[FENG_CONSTRAINT_SPEC] == 8U);
 }
 
 /* Decode wire integers independently of host alignment and struct layout. */
@@ -57,7 +56,7 @@ static size_t throw_ft_section(const unsigned char *bytes, uint16_t kind) {
     return 0U;
 }
 
-/* Unknown, conflicting and malformed builtin facts cannot weaken constraints. */
+/* Unknown, conflicting and malformed root facts cannot weaken constraints. */
 static void throw_constraint_corruption(const char *path) {
     FILE *file = fopen(path, "rb");
     THROW_CHECK(file != NULL && fseek(file, 0L, SEEK_END) == 0);
@@ -74,8 +73,7 @@ static void throw_constraint_corruption(const char *path) {
     size_t bound = SIZE_MAX, second = SIZE_MAX;
     for (size_t i = 0U; i < attr_count; ++i) {
         size_t record = attr_base + i * 20U;
-        if (throw_ft_read(original + record + 4U, 2U) != FENG_SYMBOL_ATTR_BUILTIN_CONSTRAINT) continue;
-        if (bound == SIZE_MAX) bound = record;
+        if (throw_ft_read(original + record + 4U, 2U) == FENG_SYMBOL_ATTR_THROWABLE) bound = record;
         else if (second == SIZE_MAX) second = record;
     }
     THROW_CHECK(bound != SIZE_MAX && second != SIZE_MAX);
@@ -83,24 +81,25 @@ static void throw_constraint_corruption(const char *path) {
     size_t sym_count = (size_t)throw_ft_read(original + syms + 4U, 4U);
     size_t sym_base = (size_t)throw_ft_read(original + syms + 8U, 8U);
     uint64_t owner = throw_ft_read(original + bound, 4U);
-    uint64_t spec_param = 0U, spec_type = 0U, other_owner = 0U;
+    uint64_t spec_param = 0U, other_owner = 0U;
     size_t owner_record = SIZE_MAX;
     for (size_t i = 0U; i < sym_count; ++i) {
         size_t record = sym_base + i * 28U;
         uint64_t id = throw_ft_read(original + record, 4U);
         if (id == owner) owner_record = record;
-        if (throw_ft_read(original + record + 12U, 2U) != FENG_SYMBOL_FT_SYM_KIND_TYPE_PARAM) {
+        if (throw_ft_read(original + record + 12U, 2U) != FENG_SYMBOL_FT_SYM_KIND_TYPE_PARAM &&
+            throw_ft_read(original + record + 12U, 2U) != FENG_SYMBOL_FT_SYM_KIND_SPEC) {
             other_owner = id;
-        } else if (throw_ft_read(original + record + 16U, 4U) != 0U) {
+        } else if (throw_ft_read(original + record + 12U, 2U) == FENG_SYMBOL_FT_SYM_KIND_TYPE_PARAM &&
+                   throw_ft_read(original + record + 16U, 4U) != 0U) {
             spec_param = id;
-            spec_type = throw_ft_read(original + record + 16U, 4U);
         }
     }
     THROW_CHECK(owner_record != SIZE_MAX && spec_param != 0U && other_owner != 0U);
-    for (size_t variant = 0U; variant < 12U; ++variant) {
+    for (size_t variant = 0U; variant < 13U; ++variant) {
         memcpy(bytes, original, length);
         switch (variant) {
-            case 0U: throw_ft_write(bytes + bound + 8U, 4U, 0U); break;
+            case 0U: throw_ft_write(bytes + bound + 8U, 4U, 1U); break;
             case 1U: throw_ft_write(bytes + bound + 8U, 4U, UINT32_MAX); break;
             case 2U: throw_ft_write(bytes + bound + 6U, 2U, 1U); break;
             case 3U: throw_ft_write(bytes + bound + 12U, 4U, 1U); break;
@@ -109,9 +108,10 @@ static void throw_constraint_corruption(const char *path) {
             case 6U: throw_ft_write(bytes + bound, 4U, UINT32_MAX); break;
             case 7U: throw_ft_write(bytes + bound, 4U, other_owner); break;
             case 8U: throw_ft_write(bytes + bound, 4U, spec_param); break;
-            case 9U: throw_ft_write(bytes + second, 4U, owner); break;
-            case 10U: throw_ft_write(bytes + owner_record + 16U, 4U, spec_type); break;
+            case 9U: memcpy(bytes + second, bytes + bound, 20U); break;
+            case 10U: throw_ft_write(bytes + owner_record + 12U, 2U, FENG_SYMBOL_FT_SYM_KIND_TYPE_PARAM); break;
             case 11U: break; /* Truncate the genuine file below. */
+            case 12U: throw_ft_write(bytes + bound + 4U, 2U, FENG_SYMBOL_ATTR_RETIRED_THROW_CONSTRAINT); break;
         }
         uint64_t hash = UINT64_C(14695981039346656037);
         for (size_t i = (size_t)throw_ft_read(bytes + 0x20, 8U); i < length; ++i) {
@@ -122,7 +122,7 @@ static void throw_constraint_corruption(const char *path) {
         FengSymbolError error = {0};
         bool ok = feng_symbol_ft_read_bytes(bytes, length - (variant == 11U ? 1U : 0U),
             "invalid-throw.ft", NULL, &loaded, &error);
-        if (ok) fprintf(stderr, "accepted builtin constraint corruption %zu\n", variant);
+        if (ok) fprintf(stderr, "accepted root constraint corruption %zu\n", variant);
         THROW_CHECK(!ok && loaded == NULL && error.message != NULL);
         feng_symbol_error_free(&error);
     }
@@ -134,14 +134,14 @@ static void throw_constraint_corruption(const char *path) {
 void test_throw_constraint_ft(void) {
     const char *source = "open module bound.ft;\n"
         "open spec Named{let code:i32;}"
-        "open func raise<E:throw>(error:E){throw error;}"
-        "open func mixed<A,S:Named,T:throw>(a:A,s:S,t:T){throw t;}"
-        "open type Owner<E:throw>{open let error:E;open func raise(){throw self.error;}"
-        "open func method<U:throw>(value:U){throw value;}"
-        "open static func send<V:throw>(value:V){throw value;}}"
-        "open spec Reader<E:throw>{func read():E;}"
-        "open spec Action<E:throw>(value:E):void;";
-    ThrowConstraintUnit unit = throw_constraint_analyze(source, NULL, NULL);
+        "open func raise<E:Throwable>(error:E){throw error;}"
+        "open func mixed<A,S:Named,T:Throwable>(a:A,s:S,t:T){throw t;}"
+        "open type Owner<E:Throwable>{open let error:E;open func raise(){throw self.error;}"
+        "open func method<U:Throwable>(value:U){throw value;}"
+        "open static func send<V:Throwable>(value:V){throw value;}}"
+        "open spec Reader<E:Throwable>{func read():E;}"
+        "open spec Action<E:Throwable>(value:E):void;";
+    ThrowConstraintUnit unit = throw_constraint_analyze_with_root(source, NULL, NULL, NULL);
     FengSymbolError error = {0};
     FengSymbolGraph *graph = NULL;
     THROW_CHECK(feng_symbol_build_graph(unit.analysis, &graph, &error));
@@ -175,8 +175,8 @@ void test_throw_constraint_ft(void) {
         FengSemanticImportedModuleQuery query = feng_symbol_imported_module_cache_as_query(cache);
         const char *cases[] = {
             "func run(){raise(1);raise<string>(\"message\");let owner=Owner<i32>{error:1};owner.raise();owner.method<string>(\"m\");Owner<string>.send<i32>(1);}",
-            "func forward<T:throw>(x:T){raise<T>(x);let owner=Owner<T>{error:x};owner.raise();}",
-            "spec Child<T:throw>:Reader<T>{}func run(x:Action<string>){}",
+            "func forward<T:Throwable>(x:T){raise<T>(x);let owner=Owner<T>{error:x};owner.raise();}",
+            "spec Child<T:Throwable>:Reader<T>{}func run(x:Action<string>){}",
             "type Item:Named{let code:i32;}func run(x:Item){mixed<i32,Item,string>(1,x,\"m\");}",
             "func bad(xs:i32[]){raise(xs);}",
             "func bad<T>(x:T){raise<T>(x);}",
@@ -187,7 +187,7 @@ void test_throw_constraint_ft(void) {
             "func bad(xs:i32[]){Owner<i32>.send<i32[]>(xs);}",
             "spec Child<T>:Reader<T>{}",
             "func bad(x:Action<i32[]>){}",
-            "func bad<T:throw>(x:T){try raise(x) catch e:T{}}"
+            "func bad<T:Throwable>(x:T){try raise(x) catch e:T{}}"
         };
         const char *codes[] = {NULL, NULL, NULL, NULL, "AE0512", "AE0512", "AE0512",
             "AE0710", "AE0710", "AE0512", "AE0512", "AE0710", "AE0710", "AE0179"};

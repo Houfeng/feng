@@ -9,12 +9,18 @@
 typedef uint32_t (*FengExceptionMethodResolver)(void *user, uint32_t requirement, uint32_t subject,
                                                 const uint32_t *type_args, size_t type_arg_count);
 
+/* A closed spec type denotes a view rather than an exact thrown identity.
+ * This compile-time query runs after symbolic type-argument substitution. */
+typedef bool (*FengExceptionPayloadViewQuery)(void *user, uint32_t type);
+
 typedef struct FengExceptionSolver FengExceptionSolver;
 
 /* One solver owns the instance cache and dependency work queue for an
  * analysis; the graph remains owned by the caller. */
 FengExceptionSolver *feng_exception_solver_create(FengExceptionGraph *graph,
-                                                  FengExceptionMethodResolver resolver, void *user);
+                                                  FengExceptionMethodResolver resolver,
+                                                  FengExceptionPayloadViewQuery payload_view,
+                                                  void *user);
 void feng_exception_solver_free(FengExceptionSolver *solver);
 
 /* Register an immutable instantiation. Empty arguments use declaration-local

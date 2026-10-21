@@ -5946,8 +5946,9 @@ void test_g24_spec_view_ft(void);
 void test_intersection_projection_ft(void);
 /* Owner-domain constraint projections use their own persisted FT records. */
 void test_constraint_projection_ft(void);
-/* Builtin bounds persist beside legacy constraints in both FT profiles. */
+/* Root constraints persist as ordinary spec references in both FT profiles. */
 void test_throw_constraint_ft(void);
+void test_throwable_ft(void);
 
 /* Sibling references retain declaration identities across both FT profiles. */
 void test_generic_sibling_constraint_ft(void);
@@ -5974,6 +5975,7 @@ int main(void) {
     (void)mkdir("temp", 0755);
     test_generic_sibling_constraint_ft();
     test_throw_constraint_ft();
+    test_throwable_ft();
     test_g24_union_projection_ft();
     test_g24_binding_ft();
     test_g24_spec_view_ft();

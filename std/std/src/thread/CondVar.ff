@@ -1,5 +1,7 @@
 open module std.thread;
 
+import std.text;
+
 @cdecl("feng_std_uv", "uv_cond_init")
 extern func uv_cond_init(handle: int): i32;
 

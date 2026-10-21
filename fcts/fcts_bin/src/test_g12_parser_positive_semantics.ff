@@ -1,5 +1,7 @@
 module fcts_bin;
 
+import std.text;
+
 import std.test;
 
 /** Complete target used to prove that each direct else-if result fits independently. */

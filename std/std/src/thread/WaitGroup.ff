@@ -1,5 +1,7 @@
 open module std.thread;
 
+import std.text;
+
 /**
  * A synchronization primitive that allows waiting for a group of threads
  * to complete. The counter is incremented with add() and decremented

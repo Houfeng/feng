@@ -310,7 +310,8 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
     has_mixable_annotation = symbol_decl->is_mixable;
 
     if (!has_calling_conv && !has_abi_annotation && !has_iter_annotation &&
-        !has_mixable_annotation && symbol_decl->friend_type_count == 0U) {
+        !has_mixable_annotation && !symbol_decl->is_throwable &&
+        symbol_decl->friend_type_count == 0U) {
         return true;
     }
 
@@ -328,6 +329,7 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
         total_count++;
     }
     if (symbol_decl->friend_type_count > 0U) total_count++;
+    if (symbol_decl->is_throwable) total_count++;
 
     annotations = (FengAnnotation *)calloc(total_count, sizeof(*annotations));
     if (annotations == NULL) {
@@ -426,7 +428,8 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
     }
 
     if (symbol_decl->friend_type_count > 0U) {
-        FengAnnotation *annotation = &annotations[total_count - 1U];
+        FengAnnotation *annotation = &annotations[total_count - 1U -
+                                                  (symbol_decl->is_throwable ? 1U : 0U)];
         annotation->token = symbol_decl->token;
         annotation->name = (FengSlice){"friend", 6U};
         annotation->builtin_kind = FENG_ANNOTATION_FRIEND;
@@ -444,6 +447,12 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
             }
             ++annotation->arg_count;
         }
+    }
+    if (symbol_decl->is_throwable) {
+        FengAnnotation *annotation = &annotations[total_count - 1U];
+        annotation->token = symbol_decl->token;
+        annotation->name = (FengSlice){"throwable", 9U};
+        annotation->builtin_kind = FENG_ANNOTATION_THROWABLE;
     }
     *out_annotations = annotations;
     *out_count = total_count;
@@ -1271,6 +1280,10 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
 
         case FENG_SYMBOL_DECL_KIND_SPEC:
             synth_decl->decl.kind = FENG_DECL_SPEC;
+            if (!synthesize_decl_annotations_from_symbol(symbol_decl,
+                    &synth_decl->decl.annotations, &synth_decl->decl.annotation_count)) {
+                break;
+            }
             synth_decl->decl.as.spec_decl.name = name;
             synth_decl->decl.as.spec_decl.type_params =
                 synthesize_type_params(symbol_decl, &synth_decl->decl.as.spec_decl.type_param_count);
@@ -1594,6 +1607,32 @@ void feng_symbol_imported_module_cache_free(FengSymbolImportedModuleCache *cache
     free(cache);
 }
 
+/* Enumerate the provider's normalized module index without scanning declarations. */
+static size_t cache_root_candidate_module_count(const void *user) {
+    const FengSymbolImportedModuleCache *cache = user;
+    return feng_symbol_provider_module_count(cache->provider);
+}
+
+/* Restore only modules whose ordinary provider index contains a root fact. */
+static bool cache_get_root_candidate_module(const void *user, size_t index,
+                                            const FengSemanticModule **out_module) {
+    const FengSymbolImportedModuleCache *cache = user;
+    const FengSymbolImportedModule *module =
+        feng_symbol_provider_module_at(cache->provider, index);
+    *out_module = NULL;
+    if (module == NULL) return false;
+    if (!feng_symbol_module_has_exception_root(module)) return true;
+    size_t count = feng_symbol_module_segment_count(module);
+    FengSlice *segments = calloc(count, sizeof(*segments));
+    if (segments == NULL) return false;
+    for (size_t i = 0U; i < count; ++i) {
+        segments[i] = feng_symbol_module_segment_at(module, i);
+    }
+    *out_module = cache_get_module(user, segments, count);
+    free(segments);
+    return *out_module != NULL;
+}
+
 FengSemanticImportedModuleQuery feng_symbol_imported_module_cache_as_query(
     FengSymbolImportedModuleCache *cache) {
     FengSemanticImportedModuleQuery query = {0};
@@ -1601,6 +1640,8 @@ FengSemanticImportedModuleQuery feng_symbol_imported_module_cache_as_query(
     if (cache != NULL) {
         query.user = cache;
         query.get_module = cache_get_module;
+        query.root_candidate_module_count = cache_root_candidate_module_count;
+        query.get_root_candidate_module = cache_get_root_candidate_module;
     }
     return query;
 }

@@ -566,9 +566,7 @@ static void dump_callable(FILE *stream, const FengCallableSignature *callable, i
                 fputs(", ", stream);
             }
             dump_slice(stream, callable->type_params[index].name);
-            if (callable->type_params[index].constraint_kind == FENG_CONSTRAINT_THROW) {
-                fputs(": throw", stream);
-            } else if (callable->type_params[index].constraint != NULL) {
+            if (callable->type_params[index].constraint != NULL) {
                 fputs(": ", stream);
                 dump_type_ref(stream, callable->type_params[index].constraint);
             }
@@ -703,9 +701,7 @@ void feng_program_dump(FILE *stream, const FengProgram *program) {
                             fputs(", ", stream);
                         }
                         dump_slice(stream, decl->as.type_decl.type_params[member_index].name);
-                        if (decl->as.type_decl.type_params[member_index].constraint_kind == FENG_CONSTRAINT_THROW) {
-                            fputs(": throw", stream);
-                        } else if (decl->as.type_decl.type_params[member_index].constraint != NULL) {
+                        if (decl->as.type_decl.type_params[member_index].constraint != NULL) {
                             fputs(": ", stream);
                             dump_type_ref(stream, decl->as.type_decl.type_params[member_index].constraint);
                         }
@@ -777,9 +773,7 @@ void feng_program_dump(FILE *stream, const FengProgram *program) {
                             fputs(", ", stream);
                         }
                         dump_slice(stream, decl->as.spec_decl.type_params[member_index].name);
-                        if (decl->as.spec_decl.type_params[member_index].constraint_kind == FENG_CONSTRAINT_THROW) {
-                            fputs(": throw", stream);
-                        } else if (decl->as.spec_decl.type_params[member_index].constraint != NULL) {
+                        if (decl->as.spec_decl.type_params[member_index].constraint != NULL) {
                             fputs(": ", stream);
                             dump_type_ref(stream, decl->as.spec_decl.type_params[member_index].constraint);
                         }

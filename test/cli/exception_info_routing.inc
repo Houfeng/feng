@@ -116,7 +116,8 @@ static void test_exception_info_routing(void) {
         "func partial(f:Action){try higher(f) catch e:string{}}"
         "func rethrow(f:Action){try higher(f) catch{throw;}}"
         "func translated(f:Action){try higher(f) catch{throw true;}}"
-        "func cleanup(f:Action){defer{try higher(f) catch{}}}";
+        "func cleanup(f:Action){defer{try higher(f) catch{}}}"
+        THROW_TEST_ROOT;
     write_text_file(path, body);
     char *paths[] = {path};
     const char *packages[] = {bundle};
@@ -186,8 +187,9 @@ static void test_exception_info_routing(void) {
         free(source);
     }
     char *standalone = path_join(directory, "standalone.ff");
-    write_text_file(standalone, "module info.standalone;spec Action():void;func relay(f:Action){f();}"
-        "func top(f:Action){relay(f);}func fail(){throw true;}func call(){fail();}");
+    write_text_file(standalone, "open module info.standalone;spec Action():void;func relay(f:Action){f();}"
+        "func top(f:Action){relay(f);}func fail(){throw true;}func call(){fail();}"
+        THROW_TEST_ROOT);
     char *semantic[] = {"tool", "semantic", "--target=lib", standalone};
     char *check[] = {"tool", "check", "--target=lib", standalone};
     exception_info_assert_cli(exception_info_run_cli, 4, semantic, false, false);

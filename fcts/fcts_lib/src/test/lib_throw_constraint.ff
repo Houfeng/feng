@@ -1,31 +1,33 @@
 open module fcts_lib.test;
 
+import std;
+
 /** Shared provider body for every permitted exception payload type. */
-open func libRaiseConstrained<E: throw>(error: E): void {
+open func libRaiseConstrained<E: Throwable>(error: E): void {
   throw error;
 }
 
 /** Forward the same capability under a different parameter identity. */
-open func libForwardConstrained<T: throw>(value: T): void {
+open func libForwardConstrained<T: Throwable>(value: T): void {
   libRaiseConstrained<T>(value);
 }
 
 /** Reference owner obtains E from its existing type descriptor. */
-open type LibThrowOwner<E: throw> {
+open type LibThrowOwner<E: Throwable> {
   open let error: E;
 
   /** Throw the owner field through its shared member body. */
   open func raise(): void { throw self.error; }
 
   /** Mix the owner and method descriptor domains in one shared body. */
-  open func method<U: throw>(value: U): void { libRaiseConstrained<U>(value); }
+  open func method<U: Throwable>(value: U): void { libRaiseConstrained<U>(value); }
 
   /** A static method has the same method-level evidence. */
-  open static func send<U: throw>(value: U): void { throw value; }
+  open static func send<U: Throwable>(value: U): void { throw value; }
 }
 
 /** Value owners obtain E through their aggregate descriptor. */
-@value open type LibThrowValueOwner<E: throw> {
+@value open type LibThrowValueOwner<E: Throwable> {
   open let error: E;
 
   /** Throw a value owner's field without changing its representation. */
@@ -33,7 +35,7 @@ open type LibThrowOwner<E: throw> {
 }
 
 /** Preserve metadata when an open owner is closed by the consumer. */
-open func libRaiseViaOwner<E: throw>(value: E): void {
+open func libRaiseViaOwner<E: Throwable>(value: E): void {
   let owner = LibThrowOwner<E> { error: value };
   owner.raise();
 }
@@ -50,10 +52,10 @@ open enum LibThrowStatus { Failed = 37 }
 /** Mixin source surface used to validate synthesized method bounds. */
 open spec LibThrowSurface {}
 
-/** Generated wrappers must preserve the builtin method constraint. */
+/** Generated wrappers must preserve the ordinary exception-root constraint. */
 open type LibThrowMixin: LibThrowSurface {
   /** Throw through the ordinary mixable static-to-instance wrapper. */
-  @mixable open static func raise<E: throw>(target: LibThrowSurface, error: E): void {
+  @mixable open static func raise<E: Throwable>(target: LibThrowSurface, error: E): void {
     throw error;
   }
 }

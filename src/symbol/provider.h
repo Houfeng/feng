@@ -40,6 +40,12 @@ const FengSymbolImportedModule *feng_symbol_provider_find_module(
 
 size_t feng_symbol_provider_module_count(const FengSymbolProvider *provider);
 
+/* True when ordinary provider indexing found a root definition in this module. */
+bool feng_symbol_module_has_exception_root(const FengSymbolImportedModule *module);
+
+/* Read the root definition marker without exposing the symbol layout. */
+bool feng_symbol_decl_is_throwable(const FengSymbolDeclView *decl);
+
 const FengSymbolImportedModule *feng_symbol_provider_module_at(
     const FengSymbolProvider *provider,
     size_t index);
@@ -156,7 +162,7 @@ bool feng_symbol_decl_is_tuple(const FengSymbolDeclView *decl);
 /* Return whether a symbol declaration is an @value type. */
 bool feng_symbol_decl_is_value_type(const FengSymbolDeclView *decl);
 size_t feng_symbol_decl_type_param_count(const FengSymbolDeclView *decl);
-/* Return the declared bound kind without treating builtin bounds as types. */
+/* Return whether a parameter has an ordinary spec constraint. */
 FengConstraintKind feng_symbol_decl_constraint_kind(const FengSymbolDeclView *decl);
 bool feng_symbol_decl_has_enum_item_value(const FengSymbolDeclView *decl);
 int64_t feng_symbol_decl_enum_item_value(const FengSymbolDeclView *decl);

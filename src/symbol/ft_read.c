@@ -54,11 +54,27 @@ static uint64_t read_u64_le(const unsigned char *data) {
     return value;
 }
 
+/* The flat registry owns every parsed declaration, including nodes not yet
+ * linked when reading fails. Dispose each node once, independently of the
+ * partially assembled hierarchy; the module retains its embedded root. */
 static void read_context_dispose(ReadContext *ctx) {
     size_t index;
 
     if (ctx == NULL) {
         return;
+    }
+    for (index = 0U; index < ctx->decl_count; ++index) {
+        if (ctx->decls[index] != NULL) {
+            ctx->decls[index]->member_count = 0U;
+        }
+    }
+    for (index = 0U; index < ctx->decl_count; ++index) {
+        FengSymbolDeclView *decl = ctx->decls[index];
+        if (decl != NULL &&
+            (ctx->module == NULL || decl != &ctx->module->root_decl)) {
+            feng_symbol_internal_decl_free_members(decl);
+            free(decl);
+        }
     }
     if (ctx->module != NULL) {
         feng_symbol_internal_module_free(ctx->module);
@@ -1333,6 +1349,19 @@ static bool parse_attrs(ReadContext *ctx,
         uint32_t value0 = read_u32_le(record + 0x08);
         uint32_t value1 = read_u32_le(record + 0x0C);
         FengSymbolDeclView *decl = decl_by_symbol_id(ctx, symbol_id);
+        if (kind == FENG_SYMBOL_ATTR_THROWABLE) {
+            if (decl == NULL || decl->kind != FENG_SYMBOL_DECL_KIND_SPEC ||
+                decl->spec_form != FENG_SPEC_FORM_OBJECT || decl->type_param_count != 0U ||
+                decl->visibility != FENG_VISIBILITY_PUBLIC ||
+                ctx->module->visibility != FENG_VISIBILITY_PUBLIC || decl->is_throwable ||
+                value0 != 0U || value1 != 0U ||
+                read_u16_le(record + 0x06) != 0U || read_u32_le(record + 0x10) != 0U) {
+                return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                    "invalid exception root attribute");
+            }
+            decl->is_throwable = true;
+            continue;
+        }
         uint32_t attr_index;
 
         if (kind == FENG_SYMBOL_ATTR_FRIEND_FIT_ACCESS) {
@@ -1436,16 +1465,9 @@ static bool parse_attrs(ReadContext *ctx,
             continue;
         }
 
-        if (kind == FENG_SYMBOL_ATTR_BUILTIN_CONSTRAINT) {
-            if (decl == NULL || decl->kind != FENG_SYMBOL_DECL_KIND_TYPE_PARAM ||
-                decl->constraint_kind != FENG_CONSTRAINT_NONE || decl->value_type != NULL ||
-                value0 != FENG_SYMBOL_FT_BUILTIN_CONSTRAINT_THROW || value1 != 0U ||
-                read_u16_le(record + 0x06) != 0U || read_u32_le(record + 0x10) != 0U) {
-                return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
-                    "invalid builtin generic constraint attribute");
-            }
-            decl->constraint_kind = FENG_CONSTRAINT_THROW;
-            continue;
+        if (kind == FENG_SYMBOL_ATTR_RETIRED_THROW_CONSTRAINT) {
+            return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                "retired throw constraint attribute; rebuild the package");
         }
 
         if (kind == FENG_SYMBOL_ATTR_SPEC_VIEW_COERCION_COUNT) {

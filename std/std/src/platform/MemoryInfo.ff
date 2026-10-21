@@ -1,5 +1,7 @@
 open module std.platform;
 
+import std.text;
+
 @cdecl("feng_std_uv", "uv_get_total_memory")
 extern func uv_get_total_memory(): u64;
 

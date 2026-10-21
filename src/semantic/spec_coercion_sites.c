@@ -245,6 +245,27 @@ static void reset_site_payload(FengSpecCoercionSite *slot) {
     memset(slot, 0, sizeof(*slot));
 }
 
+/* A proven generic throw consumes the same closed formation data as an
+ * ordinary view, but its erased source is consumed only by throw lowering. */
+bool feng_semantic_record_throw_root_preparation(
+    const FengSemanticAnalysis *analysis_const, const FengExpr *expr,
+    const FengTypeRef *source, const FengTypeRef *root) {
+    FengSemanticAnalysis *analysis = (FengSemanticAnalysis *)analysis_const;
+    if (analysis == NULL || expr == NULL || source == NULL || root == NULL) return false;
+    const FengTypeRef *owned_source = feng_semantic_clone_coercion_type_ref(analysis, source);
+    const FengTypeRef *owned_root = feng_semantic_clone_coercion_type_ref(analysis, root);
+    if (owned_source == NULL || owned_root == NULL) return false;
+    FengSpecCoercionSite *site = reserve_site_slot(analysis, expr);
+    if (site == NULL) return false;
+    reset_site_payload(site);
+    site->expr = expr;
+    site->form = FENG_SPEC_COERCION_FORM_THROW_ROOT;
+    site->target_spec_decl = analysis->exception_root;
+    site->target_spec_type_ref = owned_root;
+    site->view_coercion = (FengSpecViewCoercionDep){owned_source, owned_root};
+    return true;
+}
+
 /* Preserve the complete source/target pair independently of resolver scratch
  * storage. The form and proof remain on the original semantic site. */
 bool feng_semantic_record_spec_view_coercion_use(

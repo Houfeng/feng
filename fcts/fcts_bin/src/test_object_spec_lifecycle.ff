@@ -1,5 +1,7 @@
 module fcts_bin;
 
+import std.text;
+
 import std.test;
 
 /** Base view used to verify parent projection ownership. */

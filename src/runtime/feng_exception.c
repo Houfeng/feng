@@ -84,7 +84,8 @@ static void feng_unwind_exception_cleanup(_Unwind_Reason_Code reason,
 /* Initialize the platform record without changing any active catch owner. */
 static void feng_unwind_exception_init(FengUnwindException *exception,
                                        void *value,
-                                       const FengTypeDescriptor *desc) {
+                                       const FengTypeDescriptor *desc,
+                                       const void *witness) {
 #if defined(_WIN32)
     exception->exception_class = FENG_EXCEPTION_CLASS;
 #else
@@ -93,6 +94,7 @@ static void feng_unwind_exception_init(FengUnwindException *exception,
 #endif
     exception->value = value;
     exception->desc = desc;
+    exception->witness = witness;
     exception->matched_clause = -1;
 }
 
@@ -338,9 +340,10 @@ _Unwind_Reason_Code __feng_personality_v0(int version,
 #endif
 
 /* Transfer an owned payload into a new record, leaving active catches intact. */
-void feng_throw(void *value, const FengTypeDescriptor *desc) {
+void feng_throw(void *value, const FengTypeDescriptor *desc, const void *witness) {
 #if defined(_WIN32)
     (void)desc;
+    (void)witness;
     feng_release(value);
     feng_panic("feng_throw: native Windows exception backend is not implemented");
 #else
@@ -358,7 +361,7 @@ void feng_throw(void *value, const FengTypeDescriptor *desc) {
         feng_panic("feng_throw: out of memory");
     }
 
-    feng_unwind_exception_init(exception, value, desc);
+    feng_unwind_exception_init(exception, value, desc, witness);
 
     reason = _Unwind_RaiseException(&exception->unwind);
     feng_cleanup_release_all();
@@ -371,6 +374,12 @@ void feng_throw(void *value, const FengTypeDescriptor *desc) {
 void *feng_caught_value(void) {
     return g_catch_top != NULL && g_catch_top->exception != NULL
                ? g_catch_top->exception->value : NULL;
+}
+
+/* The witness has static storage and follows the active record on rethrow. */
+const void *feng_caught_witness(void) {
+    return g_catch_top != NULL && g_catch_top->exception != NULL
+               ? g_catch_top->exception->witness : NULL;
 }
 
 /* Read the clause selected for the innermost active catch. */

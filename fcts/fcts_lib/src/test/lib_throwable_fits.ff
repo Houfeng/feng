@@ -1,0 +1,21 @@
+open module fcts_lib.test;
+
+import std;
+
+/** Preserve the existing LibExceptionPayloadStatus exception payload and identity. */
+open fit LibExceptionPayloadStatus: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "LibExceptionPayloadStatus"; }
+}
+
+/** Preserve the existing LibThrowStatus exception payload and identity. */
+open fit LibThrowStatus: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "LibThrowStatus"; }
+}
+
+/** Preserve the existing LibThrowValue exception payload and identity. */
+open fit LibThrowValue: std.Throwable {
+  /** Describe the original test payload through the root contract. */
+  func toString(): string { return "LibThrowValue"; }
+}

@@ -11,10 +11,34 @@
     fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #c); exit(1); \
 } } while (0)
 
+/* Ordinary source declarations used to migrate legacy exception fixtures.
+ * Custom payloads opt in through explicit extra fit declarations per case. */
+#define THROW_TEST_ROOT \
+    "\n@throwable open spec Throwable{}" \
+    "open fit bool:Throwable{}open fit i8:Throwable{}open fit i16:Throwable{}" \
+    "open fit i32:Throwable{}open fit i64:Throwable{}open fit u8:Throwable{}" \
+    "open fit u16:Throwable{}open fit u32:Throwable{}open fit u64:Throwable{}" \
+    "open fit f32:Throwable{}open fit f64:Throwable{}open fit string:Throwable{}\n"
+
+/* Append the real root and its explicit fits without moving existing
+ * declarations. Root fixtures require a public module, as production does. */
+static inline char *throw_constraint_source_with_root(const char *source,
+                                                       const char *fits) {
+    const char *prefix = strncmp(source, "module ", 7U) == 0 ? "open " :
+        strncmp(source, "open module ", 12U) == 0 ? "" : "open module throwable_test;";
+    if (fits == NULL) fits = "";
+    size_t length = strlen(prefix) + strlen(source) + strlen(THROW_TEST_ROOT) + strlen(fits) + 1U;
+    char *result = malloc(length);
+    THROW_CHECK(result != NULL);
+    snprintf(result, length, "%s%s%s%s", prefix, source, THROW_TEST_ROOT, fits);
+    return result;
+}
+
 /* Owned source and analysis for one independent compiler test. */
 typedef struct ThrowConstraintUnit {
     FengProgram *program;
     FengSemanticAnalysis *analysis;
+    char *owned_source;
 } ThrowConstraintUnit;
 
 /* Parse real source; failures retain their precise source diagnostic. */
@@ -57,10 +81,20 @@ static inline ThrowConstraintUnit throw_constraint_analyze(const char *source,
     return unit;
 }
 
+/* Analyze a migrated legacy fixture through the unchanged compiler API. */
+static inline ThrowConstraintUnit throw_constraint_analyze_with_root(const char *source,
+    const char *fits, const FengSemanticImportedModuleQuery *query, const char *expected_code) {
+    char *prepared = throw_constraint_source_with_root(source, fits);
+    ThrowConstraintUnit result = throw_constraint_analyze(prepared, query, expected_code);
+    result.owned_source = prepared;
+    return result;
+}
+
 /* Analysis borrows its source tree, so release it before freeing that tree. */
 static inline void throw_constraint_dispose(ThrowConstraintUnit *unit) {
     feng_semantic_analysis_free(unit->analysis);
     feng_program_free(unit->program);
+    free(unit->owned_source);
     memset(unit, 0, sizeof(*unit));
 }
 

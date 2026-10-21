@@ -407,22 +407,18 @@ spec Reader<T: Foo> { ... }
 spec Reader<T: Bar> { ... }
 ```
 
-### 4.3 内建 `throw` 约束
+### 4.3 异常根泛型约束
 
-`E: throw` 表示 E 的实际类型必须满足[异常主规范](./feng-exception.md)的具体载荷准入规则。
-它仅可出现在既有合法泛参声明入口的约束位置，复用 `throw` 关键字；不是类型、用户 spec 或函数异常效果。
-不得用作变量、字段、返回类型、类型实参、spec 组成或 catch 类型，也不引入组合约束语法。
-
-- 显式或推导的闭合实参均在 Semantic 阶段检查，不扩大异常主规范的具体载荷集合。
-- 泛型体仅凭自身声明检查；直接泛参须具有 `throw` 约束才能用于 throw。
-- 开放泛参向要求 `throw` 的位置转传时，必须按泛参身份证明来源具有同一内建约束；无约束或普通 spec 约束均不足以证明。向无约束位置转传继续遵循已有规则。
-- 类型级泛参和函数／方法级泛参遵循同一规则；既有泛型声明位置与名称作用域限制保持不变。
-- 约束不提供成员访问、比较、构造或 C ABI 兼容能力，也不影响声明与重载身份。
-- 泛型 throw 的具体载荷、匹配、生命周期及开放类型限制由异常主规范定义；约束判定仅在编译期进行。
+异常根使用普通 spec 泛型约束，不保留内建 `E: throw` 语法或专属约束事实。
+`E: Throwable` 的约束解析、实参验证、推导、转传及成员调用全部沿用普通 spec 规则；
+`Throwable` 是库中被标记的根名称，不是关键字。类型级和函数／方法级泛参遵循同一规则。
+实际类型可以是满足根契约的具体类型或根本身；共享体保留实际类型的完整值。
+根的声明及组合限制统一见 [spec 规范 §5.1](./feng-spec.md#51-异常根契约)。
+抛出资格、实际载荷身份、catch 限制及生命周期统一见[异常规范](./feng-exception.md)。
 
 ```feng
-func raise<E: throw>(error: E) { throw error; }
-func forward<E: throw>(error: E) { raise<E>(error); }
+func raise<E: Throwable>(error: E) { throw error; }
+func forward<E: Throwable>(error: E) { raise<E>(error); }
 ```
 
 ## 4 语义
@@ -430,10 +426,10 @@ func forward<E: throw>(error: E) { raise<E>(error); }
 - Feng 允许在 `type`、顶层 `func`、object-form `spec`、callable-form `spec` 和成员方法上声明泛型参数。
 - 泛型声明头继续使用普通角括号语法，即 `Name<T>`、`Name<T, U>`。
 - 泛型参数定义位置必须写参数名；具体 `type` 或 `spec` 引用都不能直接写在参数列表中。
-- 类型参数可选择声明泛型约束，语法为 `T: SomeSpec` 或 §4.3 的 `T: throw`；无约束时直接写作 `T`。
+- 类型参数可选择声明泛型约束，语法为 `T: SomeSpec`；无约束时直接写作 `T`。
 - 当前阶段每个类型参数至多声明一个泛型约束。
 - 类型引用形式的泛型约束只能是 `spec`，包括 object-form、callable-form、union-form 和
-  intersection-form；内建约束遵循 §4.3。
+  intersection-form。
 - 同一声明的全部类型参数在解析其约束前共同进入作用域。约束中的类型实参可以引用自身或
   同组其他类型参数，不受声明先后顺序限制；例如 `func first<T, U: Box<T>>(value: U): T`
   与 `func second<T: Box<U>, U>(value: T): U` 都允许，其中 `Box<V>` 必须是泛型 `spec`。
@@ -521,10 +517,10 @@ func forward<E: throw>(error: E) { raise<E>(error); }
 - [必须] 泛型声明在声明名后使用 `<...>` 书写类型参数列表。
 - [必须] 泛型参数定义位置必须写参数名；具体 `type` 或 `spec` 引用都不能直接写在参数列表中。
 - [必须] 同一类型参数列表中的参数名必须唯一；重复名称必须在第二个同名参数处由 Semantic 拒绝。
-- [必须] 约束类型参数使用 `T: SomeSpec` 或 §4.3 的 `T: throw` 语法；无约束类型参数直接写作 `T`。
+- [必须] 约束类型参数使用 `T: SomeSpec`；异常根同样使用普通 spec 约束，见 §4.3。无约束类型参数直接写作 `T`。
 - [必须] 当前阶段每个类型参数至多声明一个泛型约束。
 - [必须] 类型引用形式的泛型约束只能是 `spec`，包括 object-form、callable-form、union-form 和
-  intersection-form；内建约束遵循 §4.3。
+  intersection-form。
 - [必须] 当调用点省略显式类型实参时，编译器必须尝试推导全部类型参数；若不能唯一确定，则编译期报错。
 - [必须] 普通调用的实参推导遵循第 4 节的递归结构匹配规则；候选筛选与选中调用的类型实参记录
   必须使用相同的绑定结果，不得在后置阶段保留首个绑定而忽略后续冲突。
@@ -559,6 +555,9 @@ func forward<E: throw>(error: E) { raise<E>(error); }
   callable-form `spec` 目标下形成函数值；必须先检查类型实参数量和约束，再用闭合来源
   签名执行普通 callable 结构匹配。具体静态方法的泛型 owner 类型实参必须由类型目标
   显式给出。
+- [必须] 具化函数／方法值的唯一目标确定后，Semantic 必须按直接调用的相同规则
+  准备类型实参的约束 witness，包括 owner、fit 和同组泛参替换；不得依赖其他
+  调用或转换偶然准备同一 witness。该准备不改变泛型表示与共享体协议。
 - [必须] object-form `spec` 约束下的泛型值实例方法引用可以在明确 callable-form
   `spec` 目标下形成值；编译器必须保留完整 `T` 类型事实，并按闭合 `T` 的既有复制、
   保留和清理规则绑定 receiver。

@@ -1,5 +1,7 @@
 module fcts_bin;
 
+import std.numeric;
+
 import std.test;
 
 var parameterOwnershipDrops: int = 0;

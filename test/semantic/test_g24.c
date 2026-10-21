@@ -1,3 +1,4 @@
+#include "../throw_constraint_helpers.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -275,8 +276,8 @@ static void g24_projection_facts(void) {
         FengSemanticError *errors = NULL;
         size_t error_count = 0U;
         snprintf(source, sizeof(source),
-            "module g24.projections;\nspec Choice<Element>: Element | bool;\n"
-            "func read<T: Choice<i32>>(v: T): i32 { %s }\n", bodies[form]);
+            "open module g24.projections;\nspec Choice<Element>: Element | bool;\n"
+            "func read<T: Choice<i32>>(v: T): i32 { %s }\n" THROW_TEST_ROOT, bodies[form]);
         CHECK(feng_parse_source(source, strlen(source), "g24_projection.ff", &program, &parse_error));
         const FengProgram *programs[] = {program};
         options.target = FENG_COMPILE_TARGET_LIB;

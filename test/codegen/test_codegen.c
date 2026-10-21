@@ -1,3 +1,4 @@
+#include "../throw_constraint_helpers.h"
 /* Codegen multi-file (P3) regression test.
  *
  * Drives parse -> semantic -> codegen for two source files belonging to two
@@ -728,7 +729,7 @@ static void test_private_generic_representation_same_package_codegen(void) {
         "    return explicit_int.read() == 0 && inferred_string.read() == \"\";\n"
         "}\n";
     static const char *kConsumerSource =
-        "module feng.codegen.private_repr.consumer;\n"
+        "open module feng.codegen.private_repr.consumer;\n"
         "import feng.codegen.private_repr.provider;\n"
         "func main(args: string[]) {\n"
         "    let explicit_int = ExplicitBox<int>();\n"
@@ -741,7 +742,8 @@ static void test_private_generic_representation_same_package_codegen(void) {
         "    if explicit_string.read() != \"\" || inferred_string.read() != \"\" {\n"
         "        throw \"private generic string failure\";\n"
         "    }\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *provider =
         parse_or_die(kProviderSource, "private_repr_provider.ff");
     FengProgram *consumer =
@@ -11260,7 +11262,7 @@ static void test_match_expr_aggregate_result_codegen(void) {
 }
 
 static const char *kG16BranchLocalExpressionResultSrc =
-    "module feng.codegen.g16_branch_local;\n"
+    "open module feng.codegen.g16_branch_local;\n"
     "func fail(): int {\n"
     "    throw \"g16\";\n"
     "    return 0;\n"
@@ -11297,7 +11299,8 @@ static const char *kG16BranchLocalExpressionResultSrc =
     "        }\n"
     "        total\n"
     "    };\n"
-    "}\n";
+    "}\n"
+        THROW_TEST_ROOT;
 
 /* G16 branch results may refer to locals introduced earlier in the same
  * result block. Codegen must consume Semantic's selected result type instead
@@ -12401,7 +12404,7 @@ static void test_callable_field_default_and_explicit_initialization_codegen(void
 
 static void test_void_try_expression_codegen(void) {
     static const char *kSource =
-        "module feng.codegen.tryvoid;\n"
+        "open module feng.codegen.tryvoid;\n"
         "func fail() {\n"
         "    throw \"boom\";\n"
         "}\n"
@@ -12422,7 +12425,8 @@ static void test_void_try_expression_codegen(void) {
         "    try fail() catch ex: string {\n"
         "        noop();\n"
         "    }\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_or_die(kSource, "tests/tryvoid.ff");
     const FengProgram *programs[1] = {program};
     FengSemanticError *errors = NULL;
@@ -12486,7 +12490,7 @@ static void test_void_try_expression_codegen(void) {
 
 static void test_try_catch_return_codegen(void) {
     static const char *kSource =
-        "module feng.codegen.tryreturn;\n"
+        "open module feng.codegen.tryreturn;\n"
         "func fail(): string {\n"
         "    throw \"boom\";\n"
         "    return \"unreachable\";\n"
@@ -12502,7 +12506,8 @@ static void test_try_catch_return_codegen(void) {
         "        \"caught\";\n"
         "    };\n"
         "    return value;\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_or_die(kSource, "tests/tryreturn.ff");
     const FengProgram *programs[1] = {program};
     FengSemanticError *errors = NULL;
@@ -12564,7 +12569,7 @@ static void test_try_catch_return_codegen(void) {
  * escaping throws without writing the expression join slot on those paths. */
 static void test_g17_expression_branch_exit_codegen(void) {
     static const char *kSource =
-        "module feng.codegen.g17branchexit;\n"
+        "open module feng.codegen.g17branchexit;\n"
         "func fail(): string {\n"
         "    throw \"boom\";\n"
         "    return \"unreachable\";\n"
@@ -12598,7 +12603,8 @@ static void test_g17_expression_branch_exit_codegen(void) {
         "        if stop { return \"mixed-return\"; } else { throw \"mixed-throw\"; }\n"
         "    } else { \"mixed-value\"; };\n"
         "    return value;\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_or_die(kSource, "tests/g17branchexit.ff");
     const FengProgram *programs[1] = {program};
     FengSemanticError *errors = NULL;
@@ -12656,7 +12662,7 @@ static void test_g17_expression_branch_exit_codegen(void) {
  * on throw and typed catch paths and emits no exception-only descriptors. */
 static void test_exception_payload_descriptor_alignment_codegen(void) {
     static const char *kSource =
-        "module feng.codegen.exception_alignment;\n"
+        "open module feng.codegen.exception_alignment;\n"
         "enum Status { Ready = 1, Failed = 2 }\n"
         "type Pair(i32, string);\n"
         "type Entity { let code: int; }\n"
@@ -12691,7 +12697,9 @@ static void test_exception_payload_descriptor_alignment_codegen(void) {
         "  try normal() catch ex: AbiEntity {}\n"
         "  try normal() catch ex: AbiValue {}\n"
         "  try normal() catch ex: string {}\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT
+        "fit Status:Throwable{}fit Pair:Throwable{}fit Entity:Throwable{}fit ValueError:Throwable{}fit AggregateError:Throwable{}fit GenericEntity<T>:Throwable{}fit GenericValue<T>:Throwable{}fit AbiEntity:Throwable{}fit AbiValue:Throwable{}";
     FengProgram *program = parse_or_die(
         kSource, "tests/exception_payload_descriptor_alignment.ff");
     const FengProgram *programs[1] = {program};
@@ -12719,7 +12727,8 @@ static void test_exception_payload_descriptor_alignment_codegen(void) {
     ASSERT(strstr(out.c_source,
                   "feng_object_new(&feng_value_box_i32_descriptor)") != NULL);
     ASSERT(strstr(out.c_source,
-                  "feng_throw((void *)") != NULL);
+                  "feng_throw(") != NULL);
+    ASSERT(strstr(out.c_source, ".witness);") != NULL);
     ASSERT(count_substr(out.c_source,
                         "&feng_value_box_i32_descriptor") >= 3U);
     ASSERT(strstr(out.c_source,
@@ -12766,7 +12775,7 @@ static void test_exception_payload_descriptor_alignment_codegen(void) {
  * an exception binding, allocating, or lowering a replacement throw. */
 static void test_anonymous_original_rethrow_codegen(void) {
     static const char *kSource =
-        "module feng.codegen.original_rethrow;\n"
+        "open module feng.codegen.original_rethrow;\n"
         "func throwI32() { throw (i32)42; }\n"
         "func rethrowOnce() {\n"
         "  try throwI32() catch { throw; }\n"
@@ -12776,7 +12785,8 @@ static void test_anonymous_original_rethrow_codegen(void) {
         "}\n"
         "func catches() {\n"
         "  try rethrowTwice() catch ex: i32 {}\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_or_die(
         kSource, "tests/anonymous_original_rethrow.ff");
     const FengProgram *programs[1] = {program};
@@ -12806,7 +12816,7 @@ static void test_anonymous_original_rethrow_codegen(void) {
                         "__llvm_c_eh_typeid((const void *)NULL)") == 2U);
     /* Only the outer concrete i32 catch reads a payload binding. */
     ASSERT(count_substr(out.c_source, "feng_caught_value()") == 1U);
-    ASSERT(count_substr(out.c_source, "feng_throw((void *)") == 1U);
+    ASSERT(count_substr(out.c_source, "feng_throw(") == 1U);
     ASSERT(count_substr(out.c_source,
                         "feng_object_new(&feng_value_box_i32_descriptor)") == 1U);
     compile_generated_c_or_die(out.c_source);
@@ -14239,11 +14249,12 @@ static void test_generic_union_form_spec_codegen(void) {
  * context is released and codegen begins. */
 static void test_generic_union_literal_adaptation_type_lifetime(void) {
     static const char *kSource =
-        "module feng.codegen.uniongenericliteral;\n"
+        "open module feng.codegen.uniongenericliteral;\n"
         "spec Result<T>: string | T;\n"
         "func value(flag: bool): Result<i32> {\n"
         "    return if flag { 42 } else { throw \"error\"; };\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_or_die(
         kSource, "tests/generic_union_literal_adaptation_type_lifetime.ff");
     const FengProgram *programs[1] = {program};
@@ -17477,7 +17488,7 @@ static void test_g23_qualified_generic_function_codegen(void) {
     feng_program_free(user);
 }
 
-/* Additional builtin-constraint coverage; existing cases remain unchanged. */
+/* Migrated generic exception constraints retain their original payload matrix. */
 void test_throw_constraint_codegen(void (*compile_c)(const char *));
 
 /* Independent nested exception scope and capture ownership checks. */
@@ -17485,6 +17496,9 @@ void test_nested_exception_codegen(void (*compile_c)(const char *));
 
 /* Actual native EH and marker elimination across optimized/sanitized builds. */
 void test_native_exception_codegen(void (*compile_c)(const char *));
+void test_throwable_codegen(void (*compile_c)(const char *));
+/* Explicit callable values prepare ordinary bounds without incidental calls. */
+void test_callable_constraint_witness_codegen(void (*compile_c)(const char *));
 
 /* Actual ownership selects cleanup boundaries in ordinary and shared bodies. */
 void test_cleanup_boundary_codegen(void (*compile_c)(const char *));
@@ -17529,6 +17543,8 @@ int main(void) {
     test_defer_generic_context_codegen(compile_generated_c_or_die);
     test_nested_exception_codegen(compile_generated_c_or_die);
     test_native_exception_codegen(compile_generated_c_or_die);
+    test_throwable_codegen(compile_generated_c_or_die);
+    test_callable_constraint_witness_codegen(compile_generated_c_or_die);
     test_cleanup_boundary_codegen(compile_generated_c_or_die);
     test_value_literal_partial_cleanup_codegen(compile_generated_c_or_die);
     test_binary_operand_lifetime_codegen(compile_generated_c_or_die);

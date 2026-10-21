@@ -665,9 +665,10 @@ G24 联合投影阶段将契约提升为 2.0，保留 `FST1` magic、Header 与�
 并新增下述必需转换依赖节。语言尚未公开发布，不提供旧制品兼容或迁移桥接；缺少该必需节
 按格式校验失败处理，继续执行上述完整制品重建要求。
 
-内建泛型约束阶段保持 2.0，使用下节的独立约束属性；更新编译器后重编 provider、
-consumer 的 `.ft`／`.fb` 与缓存，不提供旧编译器消费新约束制品的兼容承诺，也不要求旧 reader
-能识别并拒绝该新属性。此次仅增加编译期约束事实，runtime、私有描述符布局与共享体调用 ABI 均不变。
+异常根迁移保持 2.0，根使用下节的声明属性，泛型约束使用普通 spec 类型引用。
+旧内建 throw 约束属性退役，reader 遇到时拒绝并要求重编。必须完整重建 runtime、
+生成 C／对象／库、provider、consumer、`.ft`／`.fb` 与符号缓存；不得混用旧异常
+协议或旧约束制品，不提供隐式兼容语义。
 
 #### 6.3.5 `ATRS` 扩展属性节
 
@@ -711,9 +712,10 @@ attr key 常量建议如下:
 | `FT_ATTR_ABI_LIBRARY` | `0x0003` | `extern_fn` | ABI 库名字符串；`value0` = `STRS.id` |
 | `FT_ATTR_ENUM_ITEM_VALUE` | `0x0004` | `enum_item` | 归一化后的枚举项底层值；`value0` = 按二补码解释的 `int32` 原始位模式 |
 | `FT_ATTR_STATIC_MEMBER` | `0x0005` | `field` / `method` | `type` 静态成员标记 |
-| `FT_ATTR_BUILTIN_CONSTRAINT` | `0x0010` | `type_param` | 独立内建约束；`value0 = 1` 表示 `throw`，`reserved0`、`value1`、`value2` 为零 |
+| 退役内建约束属性 | `0x0010` | — | 保留编号；reader 拒绝，writer 不再写出 |
 | `FT_ATTR_FRIEND_TYPE` | `0x0011` | `seal field` / `seal method` | 一项 friend 类型表达式；`value0 = TYPS.id`，其余字段为零 |
 | `FT_ATTR_FRIEND_FIT_ACCESS` | `0x0013` | fit 的 `method` | 一项实际 friend fit 访问事实；`value0 = owner 实例 TYPS.id`，`value1 = 被访问成员的模块内符号 id`，`value2 = 被访问成员 module 名 STRS.id` |
+| `FT_ATTR_THROWABLE` | `0x0014` | object-form `spec` | 根定义标记；所有 value 与 reserved 字段为零，同 owner 不重复 |
 
 补充规则:
 
@@ -721,8 +723,15 @@ attr key 常量建议如下:
 - `FT_ATTR_CALL_CONV` 与 `FT_ATTR_ABI_LIBRARY` 仅出现在 `extern_fn` 符号上; 普通函数与方法无需这两个 attr。
 - `FT_ATTR_ENUM_ITEM_VALUE` 只出现在 `enum_item` 子符号上,记录 consumer 恢复 `Enum.Item` 所需的稳定值事实; 不再额外导出“原本是显式赋值还是隐式赋值”的源码细节。
 - `FT_ATTR_STATIC_MEMBER` 只出现在 `type` 的静态字段或静态方法符号上,表示 consumer 恢复成员时必须设置 `static` 语义。
-- 类型参数声明、类型参数引用、泛型类型实参与泛型 callable 骨架通过 `SYMS` / `TYPS` / `TSEQ` 表达。`FT_ATTR_BUILTIN_CONSTRAINT` 仅补充内建约束事实，不创建伪类型或伪 spec。
-- 内建约束属性每个 `type_param` 至多一条，且该符号的 `type_ref` 必须为 `0`；reader 必须拒绝重复属性、未知内建约束值、错误 owner、与 spec 约束并存及非零保留字段。两个 profile 都必须保存并恢复相同约束种类；语言准入及转传语义引用[泛型主规范 §4.3](./feng-generics-draft.md#43-内建-throw-约束)。无约束与既有 spec 约束的编码不变。
+- 类型参数声明、类型参数引用、泛型类型实参与泛型 callable 骨架通过 `SYMS` / `TYPS` / `TSEQ` 表达，异常根约束使用普通 spec 引用。
+- `FT_ATTR_THROWABLE` 只由根定义模块写出；使用者保存普通类型引用与关系，不复制根定义。
+  package-public 与 workspace-cache 均保留标记、父契约及成员，复制、缓存形状比较及
+  跨平台公开事实比较不得丢失标记。无其他引用的公开根仍须导出。
+  reader／导入登记验证根 owner、无泛参、声明及模块公开等[声明条件](./feng-spec.md#51-异常根契约)，
+  非法事实不得忽略或提升可见性。沿既有加载与归一化流程收集根候选，通过中立查询接口交给
+  Semantic；不只检查被直接引用的模块，也不为根发现合成所有依赖的 AST。
+  同根按模块身份与符号身份去重，来源覆盖遵循既有规则；不同根冲突不依赖加载顺序。
+- 退役内建约束属性不再表达任何合法约束；reader 在两个 profile 中均拒绝并要求重编。异常根约束使用普通 spec 类型引用，语义见[泛型主规范 §4.3](./feng-generics-draft.md#43-异常根泛型约束)。无约束与既有 spec 约束的编码不变。
 - friend 属性保留声明级类型表达式及绑定，根为具体 type 引用、泛型 type 实例或
   owner 的类型级参数引用；不能绑定成员自己的方法级泛参。多个属性构成去重集合。
   reader 必须检查成员归属、类型引用、参数作用域及零保留字段，不能将缺失事实视为授权。
@@ -972,7 +981,7 @@ enum item 的 `.ft` 形状在 v1 中固定为“**顶层 `enum` 符号 + 子符�
 针对泛型,`SYMS` 还必须满足以下规则:
 
 - 泛型声明的类型参数必须作为独立符号导出,并使用 `FT_SYM_KIND_TYPE_PARAM`; 其 `owner_id` 指向所属声明符号。合法 owner 仅包括 `type`、`spec`、`top_fn` 与 `method`; `fit` 不定义新的类型参数,因此不得拥有 `type_param` 子符号。
-- `type_param` 符号的 `name_str` 表达参数名,`extra_ref` 固定表达其在声明头中的 0-based 有序位置,`type_ref` 在有 spec 约束时指向约束目标对应的 `TYPS.id`,无约束或内建约束时为 `0`,`doc_ref` 固定为 `0`；内建约束使用 §6.3.5 的独立属性。
+- `type_param` 符号的 `name_str` 表达参数名,`extra_ref` 固定表达其在声明头中的 0-based 有序位置,`type_ref` 在有 spec 约束时指向约束目标对应的 `TYPS.id`,无约束时为 `0`,`doc_ref` 固定为 `0`。
 - `type_param` 是导出辅助符号,用于恢复泛型声明头; consumer 不得把它当作普通可枚举成员方法、字段或顶层声明对外展示。
 - consumer 必须按 `owner_id + extra_ref` 恢复类型参数顺序; 不得按名称重排或重编号。
 - 具名泛型声明在跨包查询时的 identity 仍按“名称 + 泛型参数数量”判断; `.ft` 读取器不得仅因参数名或约束目标不同就把同名同参数数量声明视为不同实体。

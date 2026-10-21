@@ -1,3 +1,4 @@
+#include "../throw_constraint_helpers.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2745,11 +2746,12 @@ static void test_abi_callable_spec_rejects_fieldless_abi_type_value_return(void)
 
 static void test_abi_function_rejects_uncaught_throw(void) {
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "@abi\n"
         "func fail(): int {\n"
         "    throw \"boom\";\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("abi_fn_uncaught_throw_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -2768,7 +2770,7 @@ static void test_abi_function_rejects_uncaught_throw(void) {
 
 static void test_abi_function_allows_locally_caught_throw(void) {
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "func fail(): int {\n"
         "    throw \"boom\";\n"
         "}\n"
@@ -2776,7 +2778,8 @@ static void test_abi_function_allows_locally_caught_throw(void) {
         "func recover(): int {\n"
         "    let value = try fail() catch ex: string { 0; };\n"
         "    return value;\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("abi_fn_caught_throw_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -2794,14 +2797,15 @@ static void test_abi_function_allows_locally_caught_throw(void) {
 
 static void test_abi_function_rejects_call_to_throwing_function(void) {
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "func helper(): int {\n"
         "    throw \"boom\";\n"
         "}\n"
         "@abi\n"
         "func run(): int {\n"
         "    return helper();\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("abi_fn_throwing_call_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -2820,7 +2824,7 @@ static void test_abi_function_rejects_call_to_throwing_function(void) {
 
 static void test_abi_function_allows_call_to_catching_function(void) {
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "func fail(): int {\n"
         "        throw \"boom\";\n"
         "}\n"
@@ -2831,7 +2835,8 @@ static void test_abi_function_allows_call_to_catching_function(void) {
         "@abi\n"
         "func run(): int {\n"
         "    return helper();\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("abi_fn_catching_call_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -2849,13 +2854,14 @@ static void test_abi_function_allows_call_to_catching_function(void) {
 
 static void test_abi_method_rejects_uncaught_throw(void) {
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "type Worker {\n"
         "    @abi\n"
         "    func run() {\n"
         "        throw \"boom\";\n"
         "    }\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("abi_method_uncaught_throw_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -2874,7 +2880,7 @@ static void test_abi_method_rejects_uncaught_throw(void) {
 
 static void test_abi_function_allows_unused_lambda_wrapping_throwing_call(void) {
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "spec Callback(x: int): int;\n"
         "func helper(): int {\n"
         "    throw \"boom\";\n"
@@ -2883,7 +2889,8 @@ static void test_abi_function_allows_unused_lambda_wrapping_throwing_call(void) 
         "func run(): int {\n"
         "    let wrap: Callback = (x: int) -> helper();\n"
         "    return 0;\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("abi_fn_unused_lambda_throwing_call_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -2901,7 +2908,7 @@ static void test_abi_function_allows_unused_lambda_wrapping_throwing_call(void) 
 
 static void test_abi_function_rejects_invoked_lambda_wrapping_throwing_call(void) {
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "spec Callback(x: int): int;\n"
         "func helper(): int {\n"
         "    throw \"boom\";\n"
@@ -2910,7 +2917,8 @@ static void test_abi_function_rejects_invoked_lambda_wrapping_throwing_call(void
         "func run(): int {\n"
         "    let wrap: Callback = (x: int) -> helper();\n"
         "    return wrap(1);\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("abi_fn_invoked_lambda_throwing_call_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -2929,7 +2937,7 @@ static void test_abi_function_rejects_invoked_lambda_wrapping_throwing_call(void
 
 static void test_abi_function_rejects_local_function_value_call_to_throwing_function(void) {
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "spec Callback(x: int): int;\n"
         "func helper(x: int): int {\n"
         "    throw \"boom\";\n"
@@ -2938,7 +2946,8 @@ static void test_abi_function_rejects_local_function_value_call_to_throwing_func
         "func run(): int {\n"
         "    let cb: Callback = helper;\n"
         "    return cb(1);\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("abi_fn_local_function_value_throwing_call_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -2957,7 +2966,7 @@ static void test_abi_function_rejects_local_function_value_call_to_throwing_func
 
 static void test_abi_function_allows_invoked_lambda_wrapping_catching_call(void) {
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "spec Callback(x: int): int;\n"
         "func fail(): int {\n"
         "        throw \"boom\";\n"
@@ -2970,7 +2979,8 @@ static void test_abi_function_allows_invoked_lambda_wrapping_catching_call(void)
         "func run(): int {\n"
         "    let wrap: Callback = (x: int) -> helper();\n"
         "    return wrap(1);\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("abi_fn_invoked_lambda_catching_call_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -2988,12 +2998,13 @@ static void test_abi_function_allows_invoked_lambda_wrapping_catching_call(void)
 
 static void test_throw_rejects_void_expression(void) {
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "func side() {\n"
         "}\n"
         "func run() {\n"
         "    throw side();\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("throw_void_expression_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -3111,12 +3122,13 @@ static void test_defer_with_return_is_rejected(void) {
 
 static void test_defer_with_throw_is_rejected(void) {
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "func run() {\n"
         "    defer {\n"
         "        throw \"boom\";\n"
         "    }\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("defer_throw_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -3806,10 +3818,11 @@ static void test_break_inside_loop_inside_try_expr_catch_block_is_accepted(void)
 
 static void test_throw_rejects_pointer_value(void) {
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "func run(p: int*) {\n"
         "    throw p;\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("throw_pointer_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -3820,8 +3833,8 @@ static void test_throw_rejects_pointer_value(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "throw_pointer_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
-    ASSERT(strstr(errors[0].message, "is not throwable") != NULL);
-    ASSERT(strstr(errors[0].message, "pointer values cannot be thrown") != NULL);
+    ASSERT(strcmp(errors[0].code, "AE0076") == 0);
+    ASSERT(strstr(errors[0].message, "does not satisfy the exception root") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -3832,7 +3845,7 @@ static void test_throw_rejects_abi_type_value(void) {
      * ordinary @abi entity types keep Feng identity and are valid on both
      * sides of the shared exception-payload classifier. */
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "@abi type Handle { let id: int; }\n"
         "func fail(h: Handle): int {\n"
         "    throw h;\n"
@@ -3840,7 +3853,9 @@ static void test_throw_rejects_abi_type_value(void) {
         "}\n"
         "func run(h: Handle) {\n"
         "    try fail(h) catch ex: Handle { ex.id; }\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT
+        "fit Handle:Throwable{}";
     FengProgram *program = parse_program_or_die("throw_abi_payload_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -3860,14 +3875,16 @@ static void test_throw_rejects_abi_type_value(void) {
 
 static void test_throw_accepts_string_and_managed_type(void) {
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "type Err { let message: string; }\n"
         "func run_string() {\n"
         "    throw \"boom\";\n"
         "}\n"
         "func run_managed() {\n"
         "    throw Err { message: \"x\" };\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT
+        "fit Err:Throwable{}";
     FengProgram *program = parse_program_or_die("throw_managed_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -3886,11 +3903,12 @@ static void test_throw_accepts_string_and_managed_type(void) {
 /* An anonymous catch can propagate its original exception without a binding. */
 static void test_anonymous_catch_allows_bare_rethrow(void) {
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "func parse(): int { return 1; }\n"
         "func run() {\n"
         "    try parse() catch { throw; }\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("anonymous_catch_rethrow_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -3971,12 +3989,13 @@ static void test_try_without_catch_is_rejected(void) {
 
 static void test_try_catch_statement_allows_empty_catch(void) {
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "func parse(): i32 { throw 1; return 0; }\n"
         "func run() {\n"
         "    try parse() catch ex: i32 {\n"
         "    }\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("try_catch_statement_empty_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -4023,7 +4042,8 @@ static void test_undeclared_unknown_type_uses_name_resolution(void) {
         "module demo.main;\nfunc run(): unknown { return 1; }\n",
         "module demo.main;\ntype Box { let value: unknown; }\n",
         "module demo.main;\nfunc run() { let value: unknown = 1; }\n",
-        "module demo.main;\nfunc fail(): i32 { throw 1; }\nfunc run() { try fail() catch error: unknown {} }\n"
+        "open module demo.main;\nfunc fail(): i32 { throw 1; }\nfunc run() { try fail() catch error: unknown {} }\n"
+        THROW_TEST_ROOT
     };
 
     for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
@@ -4047,10 +4067,14 @@ static void test_undeclared_unknown_type_uses_name_resolution(void) {
 static void test_throw_rejects_callable_values(void) {
     /* fn values, lambdas, member methods, and callable-form specs are not throwable. */
     static const char *const cases[] = {
-        "module demo.main;\nfunc side() {}\nfunc run() { throw side; }\n",
-        "module demo.main;\nfunc run() { throw () { }; }\n",
-        "module demo.main;\ntype Box { func ping() {} }\nfunc run(box: Box) { throw box.ping; }\n",
-        "module demo.main;\nspec Callback(): void;\nfunc run(cb: Callback) { throw cb; }\n"
+        "open module demo.main;\nfunc side() {}\nfunc run() { throw side; }\n"
+        THROW_TEST_ROOT,
+        "open module demo.main;\nfunc run() { throw () { }; }\n"
+        THROW_TEST_ROOT,
+        "open module demo.main;\ntype Box { func ping() {} }\nfunc run(box: Box) { throw box.ping; }\n"
+        THROW_TEST_ROOT,
+        "open module demo.main;\nspec Callback(): void;\nfunc run(cb: Callback) { throw cb; }\n"
+        THROW_TEST_ROOT
     };
 
     for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
@@ -4063,7 +4087,8 @@ static void test_throw_rejects_callable_values(void) {
         ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
         ASSERT(error_count >= 1U);
         ASSERT(strcmp(errors[0].path, "throw_non_exception_value_error.f") == 0);
-        ASSERT(strstr(errors[0].message, "is not throwable") != NULL);
+        ASSERT(strstr(errors[0].message, index == 3U
+            ? "does not satisfy the exception root" : "is not throwable") != NULL);
 
         feng_semantic_errors_free(errors, error_count);
         feng_program_free(program);
@@ -4074,20 +4099,24 @@ static void test_throw_allows_spec_values(void) {
     /* Legacy function name retained by the approved migration whitelist.
      * Every spec form now follows one shared rejection rule at throw. */
     static const char *const cases[] = {
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "spec Named { func greet(): string; }\n"
-        "func run(v: Named) { throw v; }\n",
-        "module demo.main;\n"
+        "func run(v: Named) { throw v; }\n"
+        THROW_TEST_ROOT,
+        "open module demo.main;\n"
         "spec Choice: int | string;\n"
-        "func run(v: Choice) { throw v; }\n",
-        "module demo.main;\n"
+        "func run(v: Choice) { throw v; }\n"
+        THROW_TEST_ROOT,
+        "open module demo.main;\n"
         "spec Left { func left(): int; }\n"
         "spec Right { func right(): int; }\n"
         "spec Both: Left & Right;\n"
-        "func run(v: Both) { throw v; }\n",
-        "module demo.main;\n"
+        "func run(v: Both) { throw v; }\n"
+        THROW_TEST_ROOT,
+        "open module demo.main;\n"
         "spec Callback(): void;\n"
         "func run(v: Callback) { throw v; }\n"
+        THROW_TEST_ROOT
     };
 
     for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
@@ -4102,9 +4131,8 @@ static void test_throw_allows_spec_values(void) {
                                       &analysis, &errors, &error_count));
         ASSERT(error_count >= 1U);
         ASSERT(strcmp(errors[0].path, "throw_spec_payload_error.f") == 0);
-        ASSERT(strstr(errors[0].message, "is not throwable") != NULL);
-        ASSERT(strstr(errors[0].message,
-                      "spec values have no concrete exception identity") != NULL);
+        ASSERT(strcmp(errors[0].code, "AE0076") == 0);
+        ASSERT(strstr(errors[0].message, "does not satisfy the exception root") != NULL);
 
         feng_semantic_errors_free(errors, error_count);
         feng_program_free(program);
@@ -4113,9 +4141,12 @@ static void test_throw_allows_spec_values(void) {
 
 static void test_catch_rejects_non_exception_types(void) {
     static const char *const cases[] = {
-        "module demo.main;\nspec Named { var name: string; }\nfunc parse(): int { return 1; }\nfunc run() { try parse() catch ex: Named { throw \"x\"; } }\n",
-        "module demo.main;\nspec Callback(): void;\nfunc parse(): int { return 1; }\nfunc run() { try parse() catch ex: Callback { throw \"x\"; } }\n",
-        "module demo.main;\nfunc parse(): int { return 1; }\nfunc run() { try parse() catch ex: int* { throw \"x\"; } }\n"
+        "open module demo.main;\nspec Named { var name: string; }\nfunc parse(): int { return 1; }\nfunc run() { try parse() catch ex: Named { throw \"x\"; } }\n"
+        THROW_TEST_ROOT,
+        "open module demo.main;\nspec Callback(): void;\nfunc parse(): int { return 1; }\nfunc run() { try parse() catch ex: Callback { throw \"x\"; } }\n"
+        THROW_TEST_ROOT,
+        "open module demo.main;\nfunc parse(): int { return 1; }\nfunc run() { try parse() catch ex: int* { throw \"x\"; } }\n"
+        THROW_TEST_ROOT
     };
 
     for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
@@ -4140,11 +4171,14 @@ static void test_catch_without_binding_accepts_anonymous_clause(void) {
     /* catch { } (anonymous) is valid as statement or expression catch-all */
     static const char *const cases[] = {
         /* statement: anonymous catch-all */
-        "module demo.main;\nfunc parse(): i32 { throw 1; return 0; }\nfunc run() { try parse() catch { } }\n",
+        "open module demo.main;\nfunc parse(): i32 { throw 1; return 0; }\nfunc run() { try parse() catch { } }\n"
+        THROW_TEST_ROOT,
         /* statement: anonymous catch-all after specific catch */
-        "module demo.main;\nfunc parse(): i32 { throw 1; return 0; }\nfunc run() { try parse() catch ex: i32 { } catch { } }\n",
+        "open module demo.main;\nfunc parse(): i32 { throw 1; return 0; }\nfunc run() { try parse() catch ex: i32 { } catch { } }\n"
+        THROW_TEST_ROOT,
         /* expression: anonymous catch-all producing value */
-        "module demo.main;\nfunc parse(): i32 { throw 1; return 0; }\nfunc run(): i32 { return try parse() catch { 0 }; }\n"
+        "open module demo.main;\nfunc parse(): i32 { throw 1; return 0; }\nfunc run(): i32 { return try parse() catch { 0 }; }\n"
+        THROW_TEST_ROOT
     };
 
     for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
@@ -4167,9 +4201,10 @@ static void test_catch_without_binding_accepts_anonymous_clause(void) {
 static void test_catch_anonymous_must_be_last_clause(void) {
     /* anonymous catch { } must be the last catch clause */
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "func parse(): i32 { throw 1; return 0; }\n"
-        "func run() { try parse() catch { } catch ex: i32 { } }\n";
+        "func run() { try parse() catch { } catch ex: i32 { } }\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("catch_anon_not_last_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -9260,7 +9295,7 @@ static void test_external_use_module_accepted_via_import_query(void) {
         "func run() {}\n";
     const char *segments[] = {"vendor", "math"};
     ExternalModuleQueryFixture fixture = {segments, 2U, 0U, {0}};
-    FengSemanticImportedModuleQuery query = {&fixture, external_module_query_get_module};
+    FengSemanticImportedModuleQuery query = {.user = &fixture, .get_module = external_module_query_get_module};
     FengSemanticAnalyzeOptions options = {FENG_COMPILE_TARGET_LIB, &query, sizeof(void *)};
     FengProgram *program = parse_program_or_die("known_use_external.f", source);
     const FengProgram *programs[] = {program};
@@ -20998,7 +21033,7 @@ static void assert_g15_semantic_accepts(const char *path,
  * throw operand and a typed catch clause through one semantic analysis. */
 static void test_exception_payload_positive_type_matrix(void) {
     const char *source =
-        "module demo.exception_payload_positive;\n"
+        "open module demo.exception_payload_positive;\n"
         "enum Status { Ready = 1, Failed = 2 }\n"
         "type EntityError { let code: int; }\n"
         "type PairError(i32, string);\n"
@@ -21053,7 +21088,9 @@ static void test_exception_payload_positive_type_matrix(void) {
         "  try normal() catch ex: GenericValueError<string> {}\n"
         "  try normal() catch ex: AbiEntityError {}\n"
         "  try normal() catch ex: AbiValueError {}\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT
+        "fit Status:Throwable{}fit EntityError:Throwable{}fit PairError:Throwable{}fit ValueError:Throwable{}fit AggregateValueError:Throwable{}fit GenericEntityError<T>:Throwable{}fit GenericValueError<T>:Throwable{}fit AbiEntityError:Throwable{}fit AbiValueError:Throwable{}";
 
     assert_single_source_semantic_ok(
         "exception_payload_positive_matrix.ff", source);
@@ -21073,17 +21110,19 @@ typedef struct ExceptionPayloadRejectPair {
 static void test_exception_payload_negative_type_matrix(void) {
     static const ExceptionPayloadRejectPair cases[] = {
         {
-            "module demo.neg_array_throw;\n"
-            "func run(v: int[]) { throw v; }\n",
+            "open module demo.neg_array_throw;\n"
+            "func run(v: int[]) { throw v; }\n"
+        THROW_TEST_ROOT,
             "module demo.neg_array_catch;\n"
             "func value(): int { return 0; }\n"
             "func run() { try value() catch ex: int[] {} }\n",
             "array values have no closed-type exception identity"
         },
         {
-            "module demo.neg_object_spec_throw;\n"
+            "open module demo.neg_object_spec_throw;\n"
             "spec Named { func name(): string; }\n"
-            "func run(v: Named) { throw v; }\n",
+            "func run(v: Named) { throw v; }\n"
+        THROW_TEST_ROOT,
             "module demo.neg_object_spec_catch;\n"
             "spec Named { func name(): string; }\n"
             "func value(): int { return 0; }\n"
@@ -21091,9 +21130,10 @@ static void test_exception_payload_negative_type_matrix(void) {
             "spec values have no concrete exception identity"
         },
         {
-            "module demo.neg_union_spec_throw;\n"
+            "open module demo.neg_union_spec_throw;\n"
             "spec Choice: int | string;\n"
-            "func run(v: Choice) { throw v; }\n",
+            "func run(v: Choice) { throw v; }\n"
+        THROW_TEST_ROOT,
             "module demo.neg_union_spec_catch;\n"
             "spec Choice: int | string;\n"
             "func value(): int { return 0; }\n"
@@ -21101,11 +21141,12 @@ static void test_exception_payload_negative_type_matrix(void) {
             "spec values have no concrete exception identity"
         },
         {
-            "module demo.neg_intersection_spec_throw;\n"
+            "open module demo.neg_intersection_spec_throw;\n"
             "spec Left { func left(): int; }\n"
             "spec Right { func right(): int; }\n"
             "spec Both: Left & Right;\n"
-            "func run(v: Both) { throw v; }\n",
+            "func run(v: Both) { throw v; }\n"
+        THROW_TEST_ROOT,
             "module demo.neg_intersection_spec_catch;\n"
             "spec Left { func left(): int; }\n"
             "spec Right { func right(): int; }\n"
@@ -21115,9 +21156,10 @@ static void test_exception_payload_negative_type_matrix(void) {
             "spec values have no concrete exception identity"
         },
         {
-            "module demo.neg_callable_spec_throw;\n"
+            "open module demo.neg_callable_spec_throw;\n"
             "spec Callback(): void;\n"
-            "func run(v: Callback) { throw v; }\n",
+            "func run(v: Callback) { throw v; }\n"
+        THROW_TEST_ROOT,
             "module demo.neg_callable_spec_catch;\n"
             "spec Callback(): void;\n"
             "func value(): int { return 0; }\n"
@@ -21125,17 +21167,19 @@ static void test_exception_payload_negative_type_matrix(void) {
             "spec values have no concrete exception identity"
         },
         {
-            "module demo.neg_type_param_throw;\n"
-            "func run<T>(v: T) { throw v; }\n",
+            "open module demo.neg_type_param_throw;\n"
+            "func run<T>(v: T) { throw v; }\n"
+        THROW_TEST_ROOT,
             "module demo.neg_type_param_catch;\n"
             "func value(): int { return 0; }\n"
             "func run<T>() { try value() catch ex: T {} }\n",
             "open generic types have no concrete exception identity"
         },
         {
-            "module demo.neg_open_instance_throw;\n"
+            "open module demo.neg_open_instance_throw;\n"
             "type Box<T> { let value: T; }\n"
-            "func run<T>(v: Box<T>) { throw v; }\n",
+            "func run<T>(v: Box<T>) { throw v; }\n"
+        THROW_TEST_ROOT,
             "module demo.neg_open_instance_catch;\n"
             "type Box<T> { let value: T; }\n"
             "func value(): int { return 0; }\n"
@@ -21143,8 +21187,9 @@ static void test_exception_payload_negative_type_matrix(void) {
             "open generic types have no concrete exception identity"
         },
         {
-            "module demo.neg_pointer_throw;\n"
-            "func run(v: int*) { throw v; }\n",
+            "open module demo.neg_pointer_throw;\n"
+            "func run(v: int*) { throw v; }\n"
+        THROW_TEST_ROOT,
             "module demo.neg_pointer_catch;\n"
             "func value(): int { return 0; }\n"
             "func run() { try value() catch ex: int* {} }\n",
@@ -21156,7 +21201,7 @@ static void test_exception_payload_negative_type_matrix(void) {
         assert_single_source_semantic_error_contains(
             "exception_payload_throw_error.ff",
             cases[index].throw_source,
-            cases[index].reason);
+            "does not satisfy the exception root");
         assert_single_source_semantic_error_contains(
             "exception_payload_catch_error.ff",
             cases[index].catch_source,
@@ -22525,14 +22570,15 @@ static void test_if_expr_then_throw_else_value_accepted(void) {
      * the else branch yields a value. The result type is taken from the
      * else branch. */
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "func run() {\n"
         "    let x: i32 = if true {\n"
         "        throw \"error\";\n"
         "    } else {\n"
         "        42\n"
         "    };\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("if_then_throw_else_value_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -22552,14 +22598,15 @@ static void test_if_expr_then_value_else_throw_accepted(void) {
     /* An if-expression where the then branch yields a value and the
      * else branch terminates with throw. */
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "func run() {\n"
         "    let x: i32 = if true {\n"
         "        42\n"
         "    } else {\n"
         "        throw \"error\";\n"
         "    };\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("if_then_value_else_throw_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -22581,14 +22628,15 @@ static void test_if_expr_both_branches_throw_accepted(void) {
      * (not an expression with a value), so it is used without a trailing
      * semicolon expression wrapper. */
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "func run() {\n"
         "    if true {\n"
         "        throw \"a\";\n"
         "    } else {\n"
         "        throw \"b\";\n"
         "    }\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("if_both_throw_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -22609,7 +22657,7 @@ static void test_match_expr_partial_throw_accepted(void) {
      * yield values. The result type is taken from the yielding
      * branches. */
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "func run() {\n"
         "    let v: i32 = 0;\n"
         "    let label: string = match v {\n"
@@ -22617,7 +22665,8 @@ static void test_match_expr_partial_throw_accepted(void) {
         "        1 { throw \"unexpected one\"; }\n"
         "        else { \"other\"; }\n"
         "    };\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("match_partial_throw_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -22638,7 +22687,7 @@ static void test_match_expr_all_branches_throw_accepted(void) {
      * When all branches throw, the match construct is used as a
      * statement (not an expression with a value). */
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "func run() {\n"
         "    let v: i32 = 0;\n"
         "    match v {\n"
@@ -22646,7 +22695,8 @@ static void test_match_expr_all_branches_throw_accepted(void) {
         "        1 { throw \"one\"; }\n"
         "        else { throw \"other\"; }\n"
         "    }\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("match_all_throw_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -22989,7 +23039,7 @@ static void test_try_expr_catch_literal_adapts_to_body_type(void) {
      * adaptation the literal defaults to int (i64 on 64-bit platforms)
      * and the type check fails. */
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "func throw_i32(): i32 {\n"
         "    let v: i32 = 7;\n"
         "    throw v;\n"
@@ -22998,7 +23048,8 @@ static void test_try_expr_catch_literal_adapts_to_body_type(void) {
         "func run(): i32 {\n"
         "    let y = try throw_i32() catch ex: i32 { 10 };\n"
         "    return y;\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("try_expr_adapt_body_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -23043,7 +23094,7 @@ static void test_try_expr_catch_literal_adapts_to_explicit_target(void) {
     /* Explicit target type from binding annotation: catch literal adapts
      * to the target type even when the body is a function call. */
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "func f(): i32 {\n"
         "    throw 1;\n"
         "    return 0;\n"
@@ -23051,7 +23102,8 @@ static void test_try_expr_catch_literal_adapts_to_explicit_target(void) {
         "func run(): i32 {\n"
         "    let x: i32 = try f() catch ex: i32 { 10 };\n"
         "    return x;\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("try_expr_adapt_catch_explicit_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -23071,7 +23123,7 @@ static void test_try_expr_catch_literal_out_of_range_rejected(void) {
     /* 256 does not fit u8, so adaptation fails and the literal keeps its
      * default int (i64) type — the type equality check then rejects it. */
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "func throw_u8(): u8 {\n"
         "    let v: u8 = 7;\n"
         "    throw v;\n"
@@ -23079,7 +23131,8 @@ static void test_try_expr_catch_literal_out_of_range_rejected(void) {
         "}\n"
         "func run() {\n"
         "    let y = try throw_u8() catch ex: u8 { 256 };\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("try_expr_adapt_range_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -23098,7 +23151,7 @@ static void test_try_expr_catch_literal_adapts_to_union_member(void) {
     /* Union target type: literal catch result adapts to a numeric union
      * member; non-literal body is a valid union member. */
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "spec Result: i32 | string;\n"
         "func f(): i32 {\n"
         "    throw 1;\n"
@@ -23107,7 +23160,8 @@ static void test_try_expr_catch_literal_adapts_to_union_member(void) {
         "func run(): Result {\n"
         "    let r: Result = try f() catch ex: i32 { 10 };\n"
         "    return r;\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("try_expr_adapt_union_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -23126,14 +23180,15 @@ static void test_try_expr_catch_literal_adapts_to_union_member(void) {
 static void test_try_expr_catch_literal_return_value_adapts(void) {
     /* Return value provides explicit target type: catch literal adapts. */
     const char *source =
-        "module demo.main;\n"
+        "open module demo.main;\n"
         "func f(): i32 {\n"
         "    throw 1;\n"
         "    return 0;\n"
         "}\n"
         "func run(): i32 {\n"
         "    return try f() catch ex: i32 { 10 };\n"
-        "}\n";
+        "}\n"
+        THROW_TEST_ROOT;
     FengProgram *program = parse_program_or_die("try_expr_adapt_return_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -30305,13 +30360,14 @@ static void test_g13_immutable_binding_assignment_diagnostics(void) {
         "AE0104", 6U, 13U, "item", "assignment target 'item' is not writable");
     assert_g13_semantic_error(
         "g13_catch_binding_assignment.ff",
-        "module g13.catch_binding_assignment;\n"
+        "open module g13.catch_binding_assignment;\n"
         "func fail(): string { throw \"boom\"; return \"\"; }\n"
         "func run(): void {\n"
         "    try fail() catch error: string {\n"
         "        error = \"changed\";\n"
         "    }\n"
-        "}\n",
+        "}\n"
+        THROW_TEST_ROOT,
         "AE0104", 5U, 9U, "error", "assignment target 'error' is not writable");
 }
 
@@ -30355,12 +30411,13 @@ static void test_g13_binding_lifetime_diagnostics(void) {
         "AE0001", 5U, 5U, "item", "undefined identifier 'item'");
     assert_g13_semantic_error(
         "g13_catch_binding_out_of_scope.ff",
-        "module g13.catch_binding_out_of_scope;\n"
+        "open module g13.catch_binding_out_of_scope;\n"
         "func fail(): string { throw \"boom\"; return \"\"; }\n"
         "func run(): void {\n"
         "    try fail() catch error: string {}\n"
         "    error;\n"
-        "}\n",
+        "}\n"
+        THROW_TEST_ROOT,
         "AE0001", 5U, 5U, "error", "undefined identifier 'error'");
     assert_g13_semantic_error(
         "g13_infix_match_binding_out_of_scope.ff",
@@ -30395,13 +30452,14 @@ static void test_g13_binding_lifetime_diagnostics(void) {
         "AE0001", 6U, 18U, "item", "undefined identifier 'item'");
     assert_g13_semantic_error(
         "g13_catch_sibling_binding_isolation.ff",
-        "module g13.catch_sibling_binding_isolation;\n"
+        "open module g13.catch_sibling_binding_isolation;\n"
         "func fail(): void { throw \"boom\"; }\n"
         "func run(): void {\n"
         "    try fail() catch first: string {} catch second: i32 {\n"
         "        first;\n"
         "    }\n"
-        "}\n",
+        "}\n"
+        THROW_TEST_ROOT,
         "AE0001", 5U, 9U, "first", "undefined identifier 'first'");
 }
 
@@ -31160,7 +31218,7 @@ static void test_g15_lambda_target_signature_diagnostics(void) {
         "AE0512", 6U, 5U, "consume", "no overload accepting 1 argument(s)");
     assert_g15_semantic_error(
         "g15_block_lambda_child_local_return_type.ff",
-        "module g15.block_lambda_child_local_return_type;\n"
+        "open module g15.block_lambda_child_local_return_type;\n"
         "spec Picker(flag: bool): i32;\n"
         "func consume(picker: Picker): void {}\n"
         "func run(): void {\n"
@@ -31171,7 +31229,8 @@ static void test_g15_lambda_target_signature_diagnostics(void) {
         "        }\n"
         "        throw \"done\";\n"
         "    });\n"
-        "}\n",
+        "}\n"
+        THROW_TEST_ROOT,
         "AE0512", 5U, 5U, "consume", "no overload accepting 1 argument(s)");
 }
 
@@ -31193,9 +31252,10 @@ static void test_g15_named_callable_fallthrough_diagnostics(void) {
         },
         {
             "g15_throwing_helper_call_fallthrough.ff",
-            "module g15.throwing_helper_call_fallthrough;\n"
+            "open module g15.throwing_helper_call_fallthrough;\n"
             "func fail(): void { throw \"failed\"; }\n"
-            "func value(): i32 { fail(); }\n",
+            "func value(): i32 { fail(); }\n"
+        THROW_TEST_ROOT,
             3U, 6U, "value",
         },
         {
@@ -31303,26 +31363,28 @@ static void test_g15_structured_fallthrough_diagnostics(void) {
         },
         {
             "g15_try_main_path_fallthrough.ff",
-            "module g15.try_main_path_fallthrough;\n"
+            "open module g15.try_main_path_fallthrough;\n"
             "func may_fail(flag: bool): i32 {\n"
             "    if flag { throw \"failed\"; }\n"
             "    return 1;\n"
             "}\n"
             "func choose(flag: bool): i32 {\n"
             "    try may_fail(flag) catch { return 2; }\n"
-            "}\n",
+            "}\n"
+        THROW_TEST_ROOT,
             6U, "choose",
         },
         {
             "g15_try_catch_path_fallthrough.ff",
-            "module g15.try_catch_path_fallthrough;\n"
+            "open module g15.try_catch_path_fallthrough;\n"
             "func may_fail(flag: bool): i32 {\n"
             "    if flag { throw \"failed\"; }\n"
             "    return 1;\n"
             "}\n"
             "func choose(flag: bool): i32 {\n"
             "    try may_fail(flag) catch {}\n"
-            "}\n",
+            "}\n"
+        THROW_TEST_ROOT,
             6U, "choose",
         },
         {
@@ -31435,7 +31497,7 @@ static void test_g15_block_lambda_return_diagnostics(void) {
 static void test_g15_structured_return_acceptance(void) {
     assert_g15_semantic_accepts(
         "g15_structured_return_acceptance.ff",
-        "module g15.structured_return_acceptance;\n"
+        "open module g15.structured_return_acceptance;\n"
         "func if_all(flag: bool): i32 {\n"
         "    if flag { return 1; } else { return 2; }\n"
         "}\n"
@@ -31488,7 +31550,8 @@ static void test_g15_structured_return_acceptance(void) {
         "        return 53;\n"
         "    }\n"
         "}\n"
-        "func void_natural_end(): void {}\n");
+        "func void_natural_end(): void {}\n"
+        THROW_TEST_ROOT);
 }
 
 /* FUNC-D08: target-typed block Lambdas accept complete return branches,
@@ -31496,7 +31559,7 @@ static void test_g15_structured_return_acceptance(void) {
 static void test_g15_block_lambda_return_acceptance(void) {
     assert_g15_semantic_accepts(
         "g15_block_lambda_return_acceptance.ff",
-        "module g15.block_lambda_return_acceptance;\n"
+        "open module g15.block_lambda_return_acceptance;\n"
         "spec Picker(flag: bool): i32;\n"
         "spec Reader(): i32;\n"
         "spec ReaderFactory(): Reader;\n"
@@ -31545,7 +31608,8 @@ static void test_g15_block_lambda_return_acceptance(void) {
         "    complete(true);\n"
         "    throwing;\n"
         "    looping;\n"
-        "}\n");
+        "}\n"
+        THROW_TEST_ROOT);
 }
 
 /* FLOW01/FLOW02: plain blocks do not create loop targets, and callable
@@ -31755,7 +31819,7 @@ static void test_g16_expression_loop_boundary_diagnostics(void) {
         },
         {
             "g16_try_expr_nested_break.ff",
-            "module g16.try_expr_nested_break;\n"
+            "open module g16.try_expr_nested_break;\n"
             "func fail(): i32 { throw \"boom\"; }\n"
             "func run(): void {\n"
             "  while true {\n"
@@ -31766,13 +31830,14 @@ static void test_g16_expression_loop_boundary_diagnostics(void) {
             "      0\n"
             "    };\n"
             "  }\n"
-            "}\n",
+            "}\n"
+        THROW_TEST_ROOT,
             "AE1405", "break", 7U, 9U,
             "cannot appear directly inside a catch block"
         },
         {
             "g16_try_expr_nested_continue.ff",
-            "module g16.try_expr_nested_continue;\n"
+            "open module g16.try_expr_nested_continue;\n"
             "func fail(): i32 { throw \"boom\"; }\n"
             "func run(): void {\n"
             "  while true {\n"
@@ -31783,7 +31848,8 @@ static void test_g16_expression_loop_boundary_diagnostics(void) {
             "      0\n"
             "    };\n"
             "  }\n"
-            "}\n",
+            "}\n"
+        THROW_TEST_ROOT,
             "AE1405", "continue", 7U, 9U,
             "cannot appear directly inside a catch block"
         }
@@ -31917,7 +31983,7 @@ static void test_g16_for_in_diagnostics(void) {
 static void test_g16_control_flow_acceptance(void) {
     assert_g16_semantic_accepts(
         "g16_control_flow_acceptance.ff",
-        "module g16.control_flow_acceptance;\n"
+        "open module g16.control_flow_acceptance;\n"
         "spec Action(): int;\n"
         "type NextResult(bool, i32);\n"
         "type Cursor {\n"
@@ -31986,7 +32052,8 @@ static void test_g16_control_flow_acceptance(void) {
         "  let cursor = Cursor { value: 0 };\n"
         "  for let item in cursor { if item == 1 { continue; } if item == 2 { break; } }\n"
         "  action();\n"
-        "}\n");
+        "}\n"
+        THROW_TEST_ROOT);
 }
 
 /* EXC08/EXC10: anonymous catch-all clauses are terminal and do not bind
@@ -31995,33 +32062,36 @@ static void test_g17_catch_order_and_anonymous_binding_diagnostics(void) {
     assert_stable_semantic_error(
         "G17",
         "g17_anonymous_catch_before_anonymous.ff",
-        "module g17.anonymous_catch_before_anonymous;\n"
+        "open module g17.anonymous_catch_before_anonymous;\n"
         "func fail(): i32 { throw 1; return 0; }\n"
         "func run(): void {\n"
         "  try fail()\n"
         "  catch {}\n"
         "  catch {}\n"
-        "}\n",
+        "}\n"
+        THROW_TEST_ROOT,
         "AE1406", 5U, 3U, "catch", "must be the last catch clause");
     assert_stable_semantic_error(
         "G17",
         "g17_anonymous_catch_not_last.ff",
-        "module g17.anonymous_catch_not_last;\n"
+        "open module g17.anonymous_catch_not_last;\n"
         "func fail(): i32 { throw 1; return 0; }\n"
         "func run(): void {\n"
         "  try fail()\n"
         "  catch {}\n"
         "  catch value: i32 {}\n"
-        "}\n",
+        "}\n"
+        THROW_TEST_ROOT,
         "AE1406", 5U, 3U, "catch", "must be the last catch clause");
     assert_stable_semantic_error(
         "G17",
         "g17_anonymous_catch_has_no_binding.ff",
-        "module g17.anonymous_catch_has_no_binding;\n"
+        "open module g17.anonymous_catch_has_no_binding;\n"
         "func fail(): i32 { throw 1; return 0; }\n"
         "func run(): void {\n"
         "  try fail() catch { error; }\n"
-        "}\n",
+        "}\n"
+        THROW_TEST_ROOT,
         "AE0001", 4U, 22U, "error", "undefined identifier 'error'");
 
     static const struct {
@@ -32075,7 +32145,7 @@ static void test_g17_catch_order_and_anonymous_binding_diagnostics(void) {
         int written = snprintf(
             source,
             sizeof(source),
-            "module g17.anonymous_use;\n"
+            "open module g17.anonymous_use;\n"
             "func fail(): i32 { throw 1; return 0; }\n"
             "func consume(value: string): void {}\n"
             "func identity(value: string): string { return value; }\n"
@@ -32084,7 +32154,8 @@ static void test_g17_catch_order_and_anonymous_binding_diagnostics(void) {
             "%s"
             "  }\n"
             "  return \"done\";\n"
-            "}\n",
+            "}\n"
+        THROW_TEST_ROOT,
             anonymous_use_cases[index].body);
 
         ASSERT(written >= 0);
@@ -32147,7 +32218,7 @@ static void test_g17_try_result_presence_diagnostics(void) {
         int written = snprintf(
             source,
             sizeof(source),
-            "module g17.try_result_presence;\n"
+            "open module g17.try_result_presence;\n"
             "func fail(): i32 { throw \"g17\"; return 0; }\n"
             "func run(): i32 {\n"
             "  var seen = false;\n"
@@ -32155,7 +32226,8 @@ static void test_g17_try_result_presence_diagnostics(void) {
             "%s"
             "  };\n"
             "  return value;\n"
-            "}\n",
+            "}\n"
+        THROW_TEST_ROOT,
             cases[index].body);
 
         ASSERT(written >= 0);
@@ -32177,14 +32249,15 @@ static void test_g17_try_result_presence_diagnostics(void) {
 static void test_g17_rethrow_and_terminal_throw_acceptance(void) {
     assert_single_source_semantic_ok(
         "g17_rethrow_and_terminal_throw_acceptance.ff",
-        "module g17.rethrow_and_terminal_throw_acceptance;\n"
+        "open module g17.rethrow_and_terminal_throw_acceptance;\n"
         "func fail(): i32 { throw \"g17\"; return 0; }\n"
         "func rethrow(): void {\n"
         "  try fail() catch { throw; }\n"
         "}\n"
         "func replace(): i32 {\n"
         "  return try fail() catch { throw 42; };\n"
-        "}\n");
+        "}\n"
+        THROW_TEST_ROOT);
 }
 
 /* Bare rethrow belongs to the nearest anonymous catch in the current
@@ -32221,10 +32294,11 @@ static void test_bare_rethrow_scope_diagnostics(void) {
     for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
         char source[1024];
         int written = snprintf(source, sizeof(source),
-            "module bare.scope;\n"
+            "open module bare.scope;\n"
             "spec Action(): void;\n"
             "func fail(): i32 { throw (i32)42; }\n"
-            "func run(flag: bool): void {\n%s}\n", cases[index].body);
+            "func run(flag: bool): void {\n%s}\n"
+        THROW_TEST_ROOT, cases[index].body);
         ASSERT(written >= 0 && (size_t)written < sizeof(source));
         assert_stable_semantic_error(
             "bare-rethrow", cases[index].path, source, cases[index].code,
@@ -32240,7 +32314,7 @@ static void test_bare_rethrow_scope_diagnostics(void) {
 static void test_bare_rethrow_scopes_and_unknown_identifier_acceptance(void) {
     assert_single_source_semantic_ok(
         "bare_throw_scopes.ff",
-        "module bare.scopes;\n"
+        "open module bare.scopes;\n"
         "spec Action(): void;\n"
         "func fail(): i32 { throw (i32)42; }\n"
         "func blocks(flag: bool): void {\n"
@@ -32259,21 +32333,25 @@ static void test_bare_rethrow_scopes_and_unknown_identifier_acceptance(void) {
         "    throw error;\n"
         "  }\n"
         "}\n"
-        "type Relay { func run(): i32 { return try fail() catch { throw; }; } }\n");
+        "type Relay { func run(): i32 { return try fail() catch { throw; }; } }\n"
+        THROW_TEST_ROOT);
     assert_single_source_semantic_ok(
         "unknown_ordinary_names.ff",
-        "module bare.names;\n"
+        "open module bare.names;\n"
         "type unknown { let code: i32; }\n"
         "func identity(value: unknown): unknown { return value; }\n"
         "func run(): i32 { let unknown: i32 = 42; return unknown; }\n"
         "func typed(): void {\n"
         "  try identity(unknown { code: 42 }) catch value: unknown { throw value; }\n"
-        "}\n");
+        "}\n"
+        THROW_TEST_ROOT
+        "fit unknown:Throwable{}");
     assert_single_source_semantic_error_contains(
         "bare_throw_abi_escape.ff",
-        "module bare.abi;\n"
+        "open module bare.abi;\n"
         "func fail(): i32 { throw (i32)42; }\n"
-        "@abi func run(): i32 { return try fail() catch { throw; }; }\n",
+        "@abi func run(): i32 { return try fail() catch { throw; }; }\n"
+        THROW_TEST_ROOT,
         "uncaught exceptions must not cross the @abi ABI boundary");
 }
 
@@ -32283,7 +32361,7 @@ static void test_bare_rethrow_scopes_and_unknown_identifier_acceptance(void) {
 static void test_g17_expression_return_path_acceptance(void) {
     assert_single_source_semantic_ok(
         "g17_expression_return_path_acceptance.ff",
-        "module g17.expression_return_path_acceptance;\n"
+        "open module g17.expression_return_path_acceptance;\n"
         "func fail(): i32 { throw \"g17\"; return 0; }\n"
         "func directIf(flag: bool): i32 {\n"
         "  let value: i32 = if flag {\n"
@@ -32340,7 +32418,8 @@ static void test_g17_expression_return_path_acceptance(void) {
         "func throwBeforeUnreachableValue(flag: bool): i32 {\n"
         "  let value: i32 = if flag { throw \"stop\"; \"unreachable\"; } else { 80; };\n"
         "  return value;\n"
-        "}\n");
+        "}\n"
+        THROW_TEST_ROOT);
 }
 
 /* EXC14/EXC15: every ordinary nested control-flow form inside a value-form
@@ -32349,7 +32428,7 @@ static void test_g17_expression_return_path_acceptance(void) {
 static void test_g17_try_expression_nested_return_path_acceptance(void) {
     assert_single_source_semantic_ok(
         "g17_try_expression_nested_return_path_acceptance.ff",
-        "module g17.try_expression_nested_return_path_acceptance;\n"
+        "open module g17.try_expression_nested_return_path_acceptance;\n"
         "func fail(): i32 { throw \"g17\"; return 0; }\n"
         "func nestedBlock(): i32 {\n"
         "  let value: i32 = try fail() catch {\n"
@@ -32383,7 +32462,8 @@ static void test_g17_try_expression_nested_return_path_acceptance(void) {
         "  let fallback: i32 = 141;\n"
         "  let value = if stop { return (i32)140; } else { fallback; };\n"
         "  return value;\n"
-        "}\n");
+        "}\n"
+        THROW_TEST_ROOT);
 }
 
 /* EXC20/EXC21: a branch without a reachable final value is valid only when
@@ -32417,7 +32497,7 @@ static void test_g17_expression_result_path_diagnostics(void) {
     assert_stable_semantic_error(
         "G17",
         "g17_try_partial_return_without_result.ff",
-        "module g17.try_partial_return_without_result;\n"
+        "open module g17.try_partial_return_without_result;\n"
         "func fail(): i32 { throw \"g17\"; return 0; }\n"
         "func run(stop: bool): i32 {\n"
         "  let value: i32 = try fail() catch {\n"
@@ -32425,7 +32505,8 @@ static void test_g17_expression_result_path_diagnostics(void) {
         "    let marker = 0;\n"
         "  };\n"
         "  return value;\n"
-        "}\n",
+        "}\n"
+        THROW_TEST_ROOT,
         "AE1401", 4U, 31U, "catch", "must produce a final result expression");
     assert_stable_semantic_error(
         "G17",
@@ -32451,7 +32532,7 @@ static void test_g17_expression_result_path_diagnostics(void) {
     assert_stable_semantic_error(
         "G17",
         "g17_if_handled_throw_without_result.ff",
-        "module g17.if_handled_throw_without_result;\n"
+        "open module g17.if_handled_throw_without_result;\n"
         "func fail(): i32 { throw \"g17\"; return 0; }\n"
         "func run(flag: bool): i32 {\n"
         "  let value: i32 = if flag {\n"
@@ -32459,7 +32540,8 @@ static void test_g17_expression_result_path_diagnostics(void) {
         "    let marker = 0;\n"
         "  } else { 2; };\n"
         "  return value;\n"
-        "}\n",
+        "}\n"
+        THROW_TEST_ROOT,
         "AE1101", 4U, 20U, "if", "branch block must end with an expression statement");
 }
 
@@ -32484,7 +32566,7 @@ static void test_g17_expression_branch_return_type_diagnostic(void) {
 static void test_g17_expression_return_boundary_acceptance(void) {
     assert_single_source_semantic_ok(
         "g17_expression_return_boundary_acceptance.ff",
-        "module g17.expression_return_boundary_acceptance;\n"
+        "open module g17.expression_return_boundary_acceptance;\n"
         "spec Reader(): i32;\n"
         "func fail(): i32 { throw \"g17\"; return 0; }\n"
         "func statement_if(flag: bool): i32 {\n"
@@ -32524,7 +32606,8 @@ static void test_g17_expression_return_boundary_acceptance(void) {
         "    reader();\n"
         "  };\n"
         "  return value;\n"
-        "}\n");
+        "}\n"
+        THROW_TEST_ROOT);
 }
 
 /* TYPE01/TYPE02: every ordinary binding-storage path applies the same exact
@@ -32985,10 +33068,11 @@ static void test_g18_default_zero_semantic_acceptance(void) {
         "func defaults(): Node { let node: Node; return node; }\n");
     assert_single_source_semantic_ok(
         "g18_field_declaration_initializer_avoids_construction_default.ff",
-        "module g18.field_declaration_initializer_avoids_construction_default;\n"
+        "open module g18.field_declaration_initializer_avoids_construction_default;\n"
         "func unavailable(): Node { throw \"unavailable\"; }\n"
         "type Node { open var next: Node = unavailable(); }\n"
-        "func build(): Node { return Node(); }\n");
+        "func build(): Node { return Node(); }\n"
+        THROW_TEST_ROOT);
     assert_single_source_semantic_ok(
         "g18_recursive_union_explicit_initializers.ff",
         "module g18.recursive_union_explicit_initializers;\n"
@@ -33065,7 +33149,8 @@ static void test_g18_imported_default_zero_semantics(void) {
         static const char *provider_source =
             "open module vendor.g18_bound_cycle;\n"
             "open func unavailable(): Node { throw \"unavailable\"; }\n"
-            "open type Node { open var next: Node = unavailable(); }\n";
+            "open type Node { open var next: Node = unavailable(); }\n"
+        THROW_TEST_ROOT;
         static const char *consumer_source =
             "module app.g18_bound_cycle;\n"
             "import vendor.g18_bound_cycle as vendor;\n"
@@ -34622,7 +34707,7 @@ static void test_g21_array_literal_rank_mismatch_diagnostics(void) {
 static void test_g21_branch_non_result_array_target_isolation(void) {
     assert_g21_semantic_ok(
         "g21_branch_non_result_array_target.ff",
-        "module g21.branch_non_result_array_target;\n"
+        "open module g21.branch_non_result_array_target;\n"
         "func fail(): int { throw \"failed\"; }\n"
         "func sum(): int {\n"
         "  return try fail() catch {\n"
@@ -34632,7 +34717,8 @@ static void test_g21_branch_non_result_array_target_isolation(void) {
         "    }\n"
         "    total\n"
         "  };\n"
-        "}\n");
+        "}\n"
+        THROW_TEST_ROOT);
 }
 
 /* ARRAY-D15: existing array values are invariant in their leaf type, rank,
@@ -35421,8 +35507,9 @@ void test_generic_container_static_semantics(void);
 /* Both array owner forms stop invalid static access at Semantic. */
 void test_array_static_parity_semantics(void);
 
-/* Additional builtin-constraint coverage; existing cases remain unchanged. */
+/* Root-constrained generic throws retain the original payload coverage. */
 void test_throw_constraint_semantics(void);
+void test_throwable_semantics(void);
 
 /* Sibling bounds use complete declaration scopes and exact actual types. */
 void test_generic_sibling_constraint_semantics(void);
@@ -35439,6 +35526,7 @@ int main(void) {
     test_defer_exception_effects_semantics();
     test_exception_effects_semantics();
     test_throw_constraint_semantics();
+    test_throwable_semantics();
     test_generic_container_static_semantics();
     test_array_static_parity_semantics();
     test_g25_generic_diagnostics();

@@ -1,7 +1,7 @@
 /* A source breakpoint belongs to evaluation, not generated EH scaffolding. */
 static void test_dap_try_breakpoints_once_per_evaluation(void) {
     const char *source =
-        "module try_breakpoints;\n"
+        "open module try_breakpoints;\n"
         "@cdecl(\"libc\",\"exit\") extern func quit(code:i32):void;\n"
         "var seen:int=0;var sum:int=0;\n"
         "func identity<T>(value:T):T{return value;}\n"
@@ -47,7 +47,8 @@ static void test_dap_try_breakpoints_once_per_evaluation(void) {
         "  if chosen!=i || selected!=i{quit(16);}\n"
         "}}\n"
         "func main(args:string[]):void{plain();result();cleanup();caught();multiline();"
-        "if sum!=1 || seen!=2{quit(13);}}\n";
+        "if sum!=1 || seen!=2{quit(13);}}\n"
+        THROW_TEST_ROOT;
     const char *markers[] = {"plain", "result", "cleanup", "caught", "handler",
         "if_entry", "if_then", "if_else", "match_entry", "match_zero", "match_other",
         "match_unreached"};

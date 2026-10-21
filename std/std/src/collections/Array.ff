@@ -1,5 +1,7 @@
 open module std.collections;
 
+import std.text;
+
 @runtime
 extern func feng_array_get_length<T>(value: T[]): int;
 

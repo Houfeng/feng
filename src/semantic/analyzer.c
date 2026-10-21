@@ -3643,6 +3643,10 @@ static bool validate_supported_member_annotations(ResolveContext *context,
     for (annotation_index = 0U; annotation_index < member->annotation_count; ++annotation_index) {
         const FengAnnotation *annotation = &member->annotations[annotation_index];
 
+        if (annotation->builtin_kind == FENG_ANNOTATION_THROWABLE) {
+            return resolver_append_error(context, annotation->token, "AE1408",
+                format_message("@throwable requires a non-generic open object-form spec in an open module and no arguments"));
+        }
         if (annotation->builtin_kind == FENG_ANNOTATION_MIXABLE) {
             if (annotation->arg_count != 0U) {
                 return resolver_append_error(
@@ -15922,9 +15926,6 @@ static bool validate_loop_control_stmt(ResolveContext *context,
                        keyword));
 }
 
-static bool inferred_expr_type_is_exception_payload(const ResolveContext *context,
-                                                    InferredExprType type,
-                                                    const char **out_reason);
 static InferredExprType resolve_expr_owner_type(ResolveContext *context,
                                                 const FengExpr *expr,
                                                 const FengDecl **out_type_decl,
@@ -16069,10 +16070,9 @@ static bool type_ref_contains_open_type_param(
     return false;
 }
 
-/* Classify the finite set of concrete exception payload types shared by
- * throw expressions and typed catch clauses. Reasons are deliberately
- * context-neutral so both sites report the same classification decision. */
-static bool type_ref_is_exception_payload(const ResolveContext *context,
+/* Classify a declaration subject independently of whether its named generic
+ * arguments are closed. Catch adds its separate closed-reference requirement. */
+static bool type_ref_has_exception_payload_category(const ResolveContext *context,
                                           const FengTypeRef *type_ref,
                                           const char **out_reason) {
     const FengDecl *decl;
@@ -16100,9 +16100,12 @@ static bool type_ref_is_exception_payload(const ResolveContext *context,
                 }
                 return false;
             }
-            if (type_ref_contains_open_type_param(context, type_ref)) {
+            if (type_ref->resolution_decl == NULL &&
+                type_ref->as.named.segment_count == 1U &&
+                type_ref->as.named.type_arg_count == 0U &&
+                find_type_param(context, type_ref->as.named.segments[0]) != NULL) {
                 if (out_reason != NULL) {
-                    *out_reason = "open generic types have no concrete exception identity";
+                    *out_reason = "a type parameter is not a concrete payload declaration";
                 }
                 return false;
             }
@@ -16132,73 +16135,51 @@ static bool type_ref_is_exception_payload(const ResolveContext *context,
     return false;
 }
 
-/* Prove a direct parameter from its declaration; closed values use the same
- * concrete classifier as catch. Composite open types gain no extra ability. */
-static bool type_ref_satisfies_throw_constraint(const ResolveContext *context,
-                                               const FengTypeRef *type_ref,
-                                               const char **out_reason) {
-    if (type_ref != NULL && type_ref->kind == FENG_TYPE_REF_NAMED &&
-        type_ref->as.named.segment_count == 1U &&
-        type_ref->as.named.type_arg_count == 0U) {
-        const TypeParamEntry *entry = find_type_param(context, type_ref->as.named.segments[0]);
-        if (entry != NULL) {
-            if (entry->type_param != NULL &&
-                entry->type_param->constraint_kind == FENG_CONSTRAINT_THROW) {
-                return true;
-            }
-            if (out_reason != NULL) {
-                *out_reason = "open generic types have no concrete exception identity; type parameter requires a throw constraint";
-            }
-            return false;
-        }
+/* Concrete catch references must be closed even when their declaration was
+ * accepted as a generic payload subject. */
+static bool type_ref_is_exception_payload(const ResolveContext *context,
+                                          const FengTypeRef *type_ref,
+                                          const char **out_reason) {
+    if (type_ref_contains_open_type_param(context, type_ref)) {
+        if (out_reason != NULL) *out_reason = "open generic types have no concrete exception identity";
+        return false;
     }
-    return type_ref_is_exception_payload(context, type_ref, out_reason);
+    return type_ref_has_exception_payload_category(context, type_ref, out_reason);
 }
 
-/* Classify a throw operand, including declaration-proven direct parameters.
- * Typed catch deliberately continues to use the concrete classifier. */
-static bool inferred_expr_type_is_exception_payload(const ResolveContext *context,
-                                                    InferredExprType type,
-                                                    const char **out_reason) {
-    switch (type.kind) {
-        case FENG_INFERRED_EXPR_TYPE_UNKNOWN:
-            /* Unknown types are reported through other diagnostics; do not
-             * pile on a second throwability error here. */
-            return true;
-
-        case FENG_INFERRED_EXPR_TYPE_BUILTIN:
-            return true;
-
-        case FENG_INFERRED_EXPR_TYPE_LAMBDA:
-            if (out_reason != NULL) {
-                *out_reason = "function values cannot be thrown as exceptions";
-            }
-            return false;
-
-        case FENG_INFERRED_EXPR_TYPE_TYPE_REF:
-            return type_ref_satisfies_throw_constraint(context, type.type_ref, out_reason);
-
-        case FENG_INFERRED_EXPR_TYPE_DECL:
-            if (type.type_decl != NULL && type.type_decl->kind == FENG_DECL_SPEC) {
-                if (out_reason != NULL) {
-                    *out_reason = "spec values have no concrete exception identity";
-                }
-                return false;
-            }
-            if (type.type_decl != NULL && type.type_decl->kind == FENG_DECL_TYPE &&
-                type.type_decl->as.type_decl.type_param_count > 0U) {
-                if (out_reason != NULL) {
-                    *out_reason = "open generic types have no concrete exception identity";
-                }
-                return false;
-            }
-            return type.type_decl != NULL &&
-                   (type.type_decl->kind == FENG_DECL_TYPE ||
-                    type.type_decl->kind == FENG_DECL_ENUM);
+/* Apply the same payload gate at every nominal relation entry, before ordinary
+ * contract satisfaction. Source declarations keep their identity while their
+ * generic arguments are open; a fit supplies its full target reference. */
+static bool validate_exception_root_relation(ResolveContext *context,
+                                             const FengDecl *subject,
+                                             const FengTypeRef *subject_ref,
+                                             const FengDecl *target,
+                                             FengToken token) {
+    if (target == NULL || target != context->analysis->exception_root) return true;
+    FengSlice name = subject != NULL ? decl_typeish_name(subject) : (FengSlice){0};
+    FengTypeRef reference = {0};
+    if (subject_ref == NULL) {
+        reference.kind = FENG_TYPE_REF_NAMED;
+        reference.token = token;
+        reference.resolution_decl = subject;
+        reference.as.named.segments = &name;
+        reference.as.named.segment_count = 1U;
+        subject_ref = &reference;
     }
-
-    return true;
+    const char *reason = NULL;
+    if (type_ref_has_exception_payload_category(context, subject_ref, &reason)) return true;
+    char *subject_name = format_type_ref_name(subject_ref);
+    (void)resolver_append_error(context, token, "AE1411",
+        format_message("type '%s' cannot satisfy the exception root: %s",
+            subject_name != NULL ? subject_name : "<unknown>",
+            reason != NULL ? reason : "invalid payload category"));
+    free(subject_name);
+    return false;
 }
+
+/* Validate root evidence after ordinary expression resolution. */
+static bool validate_throw_root(ResolveContext *context, const FengExpr *expr,
+                                InferredExprType type, FengToken token);
 
 /* Validate a concrete throw payload or the lexical scope of a bare rethrow. */
 static bool validate_throw_stmt(ResolveContext *context, const FengStmt *stmt) {
@@ -16235,18 +16216,7 @@ static bool validate_throw_stmt(ResolveContext *context, const FengStmt *stmt) {
             "AE1402", format_message("throw statement requires a non-void expression"));
     }
 
-    if (!inferred_expr_type_is_exception_payload(context, throw_type, &reason)) {
-        char *type_name = format_inferred_expr_type_name(throw_type, context->pointer_size);
-        char *message = format_message(
-            "throw expression of type '%s' is not throwable: %s",
-            type_name != NULL ? type_name : "<unknown>",
-            reason != NULL ? reason : "value is not a Feng-managed value");
-
-        free(type_name);
-        return resolver_append_error(context, stmt->token, "AE0076", message);
-    }
-
-    return true;
+    return validate_throw_root(context, stmt->as.throw_value, throw_type, stmt->token);
 }
 
 
@@ -24400,6 +24370,48 @@ static bool generic_type_ref_satisfies_constraint(ResolveContext *context,
     return generic_spec_constraint_satisfied(context, actual, constraint);
 }
 
+/* Consume ordinary spec constraint evidence; payload categories were checked
+ * when the nominal root relation was declared. Preserve coercion metadata for
+ * the existing subject/witness preparation path without changing expression types. */
+static bool validate_throw_root(ResolveContext *context, const FengExpr *expr,
+                                InferredExprType type, FengToken token) {
+    if (!inferred_expr_type_is_known(type)) return true;
+    const FengTypeRef *root = context->analysis->exception_root_type;
+    if (root == NULL) {
+        return resolver_append_error(context, token, "AE1410",
+            format_message("throw requires a registered exception root"));
+    }
+    FengTypeRef *actual = create_type_ref_from_inferred_type(&type, token);
+    bool proven = actual != NULL && generic_type_ref_satisfies_constraint(context, actual, root);
+    if (!proven) {
+        char *name = format_inferred_expr_type_name(type, context->pointer_size);
+        bool ok = resolver_append_error(context, token, "AE0076",
+            format_message("throw expression of type '%s' does not satisfy the exception root",
+                           name != NULL ? name : "<unknown>"));
+        free(name);
+        free_synthetic_type_ref(actual);
+        return ok;
+    }
+    if (actual->kind == FENG_TYPE_REF_NAMED &&
+        actual->as.named.segment_count == 1U &&
+        actual->as.named.type_arg_count == 0U &&
+        find_type_param(context, actual->as.named.segments[0]) != NULL) {
+        FengTypeRef *target = clone_type_ref_for_inference(root);
+        bool recorded = target != NULL &&
+            canonicalize_reified_type_ref(context, actual) &&
+            canonicalize_reified_type_ref(context, target) &&
+            feng_semantic_record_throw_root_preparation(context->analysis, expr, actual, target);
+        free_synthetic_type_ref(target);
+        free_synthetic_type_ref(actual);
+        return recorded || resolver_append_error(context, token, "IE0001",
+            format_message("cannot preserve generic exception root preparation"));
+    }
+    record_object_spec_coercion_site_if_applicable(context, expr, root,
+        FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER);
+    free_synthetic_type_ref(actual);
+    return true;
+}
+
 /* Determine whether the inferred type argument at `type_param_index` satisfies
  * the declared constraint of that type parameter. Used during overload
  * candidate filtering: a generic candidate whose type argument fails its
@@ -24429,10 +24441,6 @@ static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
     }
 
     type_param = &callable->type_params[type_param_index];
-    if (type_param->constraint_kind == FENG_CONSTRAINT_THROW) {
-        return type_args[type_param_index] == NULL ||
-               type_ref_satisfies_throw_constraint(context, type_args[type_param_index], NULL);
-    }
     if (type_param->constraint == NULL) {
         return true;
     }
@@ -24765,13 +24773,11 @@ static void materialize_named_type_param_constraint_witnesses(
             }
         }
 
-        bool satisfies = type_params[i].constraint_kind == FENG_CONSTRAINT_THROW
-            ? type_ref_satisfies_throw_constraint(context, type_args[i], NULL)
-            : generic_type_ref_satisfies_constraint(context, type_args[i], instantiated_constraint);
+        bool satisfies = generic_type_ref_satisfies_constraint(
+            context, type_args[i], instantiated_constraint);
         if (!satisfies) {
             char *actual_name = format_type_ref_name(type_args[i]);
-            char *constraint_name = type_params[i].constraint_kind == FENG_CONSTRAINT_THROW
-                ? duplicate_cstr("throw") : format_type_ref_name(instantiated_constraint);
+            char *constraint_name = format_type_ref_name(instantiated_constraint);
             (void)resolver_append_error(context, type_args[i]->token, "AE0710",
                 format_message("type argument '%s' does not satisfy constraint '%s' of type parameter '%.*s'",
                     actual_name != NULL ? actual_name : "<type>",
@@ -24790,9 +24796,12 @@ static void materialize_named_type_param_constraint_witnesses(
     }
 }
 
+/* Prepare ordinary constraint witnesses only after a call or callable value
+ * selects one target. Explicit callable values borrow their AST arguments;
+ * direct calls retain the existing explicit/inferred argument collection. */
 static void materialize_callable_type_param_constraint_witnesses(
     ResolveContext *context,
-    const FengExpr *call_expr,
+    const FengExpr *source_expr,
     const FengCallableSignature *callable,
     const FengDecl *owner_type_decl,
     const FengDecl *fit_decl,
@@ -24801,29 +24810,39 @@ static void materialize_callable_type_param_constraint_witnesses(
     FengTypeRef **type_args = NULL;
     bool *owned_type_args = NULL;
 
-    if (context == NULL || call_expr == NULL || callable == NULL) {
+    if (context == NULL || source_expr == NULL || callable == NULL) {
         return;
     }
     if (callable->type_param_count == 0U) {
         return;
     }
 
-    type_args = calloc(callable->type_param_count, sizeof *type_args);
-    owned_type_args = calloc(callable->type_param_count, sizeof *owned_type_args);
-    if (type_args == NULL || owned_type_args == NULL) {
-        free(type_args);
-        free(owned_type_args);
+    if (source_expr->kind == FENG_EXPR_GENERIC_TARGET) {
+        if (source_expr->as.generic_target.type_arg_count !=
+            callable->type_param_count) {
+            return;
+        }
+        type_args = source_expr->as.generic_target.type_args;
+    } else if (source_expr->kind == FENG_EXPR_CALL) {
+        type_args = calloc(callable->type_param_count, sizeof *type_args);
+        owned_type_args = calloc(callable->type_param_count, sizeof *owned_type_args);
+        if (type_args == NULL || owned_type_args == NULL) {
+            free(type_args);
+            free(owned_type_args);
+            return;
+        }
+        if (!callable_collect_call_type_args(context,
+                                             source_expr,
+                                             callable,
+                                             owner_type_decl,
+                                             fit_decl,
+                                             owner_type,
+                                             type_args,
+                                             owned_type_args)) {
+            goto cleanup;
+        }
+    } else {
         return;
-    }
-    if (!callable_collect_call_type_args(context,
-                                         call_expr,
-                                         callable,
-                                         owner_type_decl,
-                                         fit_decl,
-                                         owner_type,
-                                         type_args,
-                                         owned_type_args)) {
-        goto cleanup;
     }
 
     for (i = 0U; i < callable->type_param_count; ++i) {
@@ -24866,17 +24885,19 @@ static void materialize_callable_type_param_constraint_witnesses(
                                                                  actual_type_ref,
                                                                  actual_type_decl,
                                                                  instantiated_constraint,
-                                                                 call_expr->token);
+                                                                 source_expr->token);
     }
 
 cleanup:
-    for (size_t k = 0U; k < callable->type_param_count; ++k) {
-        if (owned_type_args[k]) {
-            free_synthetic_type_ref(type_args[k]);
+    if (owned_type_args != NULL) {
+        for (size_t k = 0U; k < callable->type_param_count; ++k) {
+            if (owned_type_args[k]) {
+                free_synthetic_type_ref(type_args[k]);
+            }
         }
+        free(type_args);
+        free(owned_type_args);
     }
-    free(type_args);
-    free(owned_type_args);
 }
 
 static FengSpecCoercionCallableSource classify_callable_source(
@@ -25074,6 +25095,16 @@ static void record_callable_spec_coercion_site(ResolveContext *context,
             }
         }
     }
+    materialize_callable_type_param_constraint_witnesses(
+        context,
+        expr,
+        resolution.callable,
+        resolution.callable_owner_type_decl,
+        resolution.callable_fit_decl,
+        inferred_expr_type_from_type_ref(
+            resolution.callable_owner_instance_type_ref != NULL
+                ? resolution.callable_owner_instance_type_ref
+                : receiver_type_ref));
     (void)feng_semantic_record_callable_spec_coercion_site(
         context->analysis,
         expr,
@@ -32087,13 +32118,15 @@ static bool resolve_try_expr(ResolveContext *context,
         if (!resolve_type_ref(context, clause->type, false)) {
             return false;
         }
-        if (is_anonymous && clause_index + 1U < expr->as.try_expr.clause_count) {
+        bool is_root = clause->type != NULL && context->analysis->exception_root != NULL &&
+            resolve_type_ref_decl(context, clause->type) == context->analysis->exception_root;
+        if ((is_anonymous || is_root) && clause_index + 1U < expr->as.try_expr.clause_count) {
             return resolver_append_error(
                 context,
                 clause->token,
                 "AE1406", format_message("catch clause matching any exception must be the last catch clause"));
         }
-        if (!is_anonymous &&
+        if (!is_anonymous && !is_root &&
             !type_ref_is_exception_payload(context, clause->type, &catch_reason)) {
             char *type_name = format_type_ref_name(clause->type);
             char *message = format_message(
@@ -33162,6 +33195,9 @@ static bool validate_spec_parent_spec_list(ResolveContext *context, const FengDe
                 context,
                 r->token,
                 "AE0613", format_message("object-form spec parent list can only contain object-form specs"));
+        }
+        if (!validate_exception_root_relation(context, spec_decl, NULL, resolved, r->token)) {
+            return false;
         }
         for (j = 0U; j < i; ++j) {
             if (resolver_type_ref_failed(context, spec_decl->as.spec_decl.parent_specs[j])) {
@@ -35981,6 +36017,9 @@ static bool validate_type_declared_specs_and_satisfaction(ResolveContext *contex
                                (int)type_decl->as.type_decl.name.length,
                                type_decl->as.type_decl.name.data));
         }
+        if (!validate_exception_root_relation(context, type_decl, NULL, resolved, r->token)) {
+            return false;
+        }
         for (j = 0U; j < i; ++j) {
             if (resolver_type_ref_failed(context, type_decl->as.type_decl.declared_specs[j])) {
                 continue;
@@ -36185,6 +36224,10 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
                 r->token,
                 "AE0809", format_message("fit specs list can only contain object-form specs"));
         }
+        if (!target_ref_failed &&
+            !validate_exception_root_relation(context, target, target_ref, resolved, r->token)) {
+            return false;
+        }
         for (j = 0U; j < i; ++j) {
             if (resolver_type_ref_failed(context, fit_decl->as.fit_decl.specs[j])) {
                 continue;
@@ -36298,8 +36341,7 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
     return ok;
 }
 
-/* Validate type-reference bounds as specs; builtin bounds have no type name
- * to resolve and are checked when their actual arguments are selected. */
+/* Resolve every declared generic bound as an ordinary spec reference. */
 static bool validate_type_param_constraints(ResolveContext *context,
                                             const FengTypeParam *type_params,
                                             size_t type_param_count) {
@@ -36468,6 +36510,11 @@ static bool resolve_intersection_spec_form(ResolveContext *context, const FengDe
                     decl->as.spec_decl.name.data));
             break;
         }
+        if (member_decl == context->analysis->exception_root) {
+            ok = resolver_append_error(context, member_ref->token, "AE1412",
+                duplicate_cstr("exception root cannot be an intersection spec member"));
+            break;
+        }
         if (member_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
             const FengIntersectionSpecInfo *inner_info =
                 feng_semantic_lookup_intersection_spec_info(context->analysis, member_decl);
@@ -36477,6 +36524,11 @@ static bool resolve_intersection_spec_form(ResolveContext *context, const FengDe
             }
             for (size_t inner_idx = 0U; inner_idx < inner_info->flattened_member_count; ++inner_idx) {
                 const FengDecl *leaf = inner_info->flattened_members[inner_idx];
+                if (leaf == context->analysis->exception_root) {
+                    ok = resolver_append_error(context, member_ref->token, "AE1412",
+                        duplicate_cstr("exception root cannot be an intersection spec member"));
+                    break;
+                }
                 bool duplicate = false;
                 for (size_t dup_idx = 0U; dup_idx < flattened_count; ++dup_idx) {
                     if (flattened[dup_idx] == leaf) {
@@ -42365,6 +42417,88 @@ static void feng_program_normalize_builtin_aliases(FengProgram *program, size_t 
 
 #include "detail/friend_validation.c"
 
+/* Register source and restored roots before any nominal relation or body uses
+ * them. Imported modules have already been normalized by the provider, so a
+ * declaration is visited once regardless of import aliases or diamond paths. */
+static bool register_exception_roots(FengSemanticAnalysis *analysis,
+                                    const FengProgram *consumer,
+                                    FengSemanticError **errors, size_t *error_count,
+                                    size_t *error_capacity) {
+    for (size_t mi = 0U; mi < analysis->module_count; ++mi) {
+        const FengSemanticModule *module = &analysis->modules[mi];
+        for (size_t pi = 0U; pi < module->program_count; ++pi) {
+            const FengProgram *program = module->programs[pi];
+            for (size_t di = 0U; di < program->declaration_count; ++di) {
+                const FengDecl *decl = program->declarations[di];
+                size_t count = 0U;
+                for (size_t ai = 0U; ai < decl->annotation_count; ++ai) {
+                    const FengAnnotation *annotation = &decl->annotations[ai];
+                    if (annotation->builtin_kind != FENG_ANNOTATION_THROWABLE) continue;
+                    ++count;
+                    if (count > 1U || decl->kind != FENG_DECL_SPEC ||
+                        decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT ||
+                        decl->as.spec_decl.type_param_count != 0U ||
+                        decl->visibility != FENG_VISIBILITY_PUBLIC ||
+                        module->visibility != FENG_VISIBILITY_PUBLIC ||
+                        annotation->argument_kind != FENG_ANNOTATION_ARGUMENT_NONE) {
+                        return append_error(errors, error_count, error_capacity,
+                            program->path, annotation->token, "AE1408",
+                            format_message("%s", count > 1U
+                                ? "duplicate @throwable annotation"
+                                : "@throwable requires a non-generic open object-form spec in an open module and no arguments"));
+                    }
+                }
+                if (count == 0U || analysis->exception_root == decl) continue;
+                if (analysis->exception_root != NULL) {
+                    char *previous = format_type_ref_name(analysis->exception_root_type);
+                    char *module_name = format_module_name(program->module_segments,
+                                                           program->module_segment_count);
+                    char *message = format_message(
+                        "conflicting exception roots '%s' (%s) and '%s.%.*s' (%s)",
+                        previous != NULL ? previous : "<unknown>",
+                        analysis->exception_root_program->path,
+                        module_name != NULL ? module_name : "<unknown>",
+                        (int)decl->as.spec_decl.name.length, decl->as.spec_decl.name.data,
+                        program->path);
+                    free(previous);
+                    free(module_name);
+                    /* Public metadata need not carry a source span. Prefer the
+                     * source root when the dependency candidate has no span. */
+                    const FengProgram *blame_program = decl->token.line != 0U
+                        ? program : analysis->exception_root_program;
+                    FengToken blame = decl->token.line != 0U
+                        ? decl->token : analysis->exception_root->token;
+                    if (blame.line == 0U && consumer != NULL) {
+                        blame_program = consumer;
+                        blame = consumer->module_token;
+                    }
+                    return append_error(errors, error_count, error_capacity,
+                        blame_program->path, blame, "AE1409", message);
+                }
+                size_t segments_count = program->module_segment_count + 1U;
+                FengSlice *segments = calloc(segments_count, sizeof(*segments));
+                if (segments == NULL) return false;
+                memcpy(segments, program->module_segments,
+                       program->module_segment_count * sizeof(*segments));
+                segments[segments_count - 1U] = decl->as.spec_decl.name;
+                FengTypeRef *root = create_named_type_ref_for_inference(
+                    decl->token, segments, segments_count);
+                if (root == NULL) { free(segments); return false; }
+                root->resolution_decl = decl;
+                root->resolution_program = program;
+                if (!analysis_track_synthetic_type_ref(analysis, root)) {
+                    free_synthetic_type_ref(root);
+                    return false;
+                }
+                analysis->exception_root = decl;
+                analysis->exception_root_program = program;
+                analysis->exception_root_type = root;
+            }
+        }
+    }
+    return true;
+}
+
 bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
                                         size_t program_count,
                                         const FengSemanticAnalyzeOptions *options,
@@ -42442,6 +42576,20 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
      * like any local module, so check_symbol_conflicts and build_program_aliases
      * need no special-case logic for external modules. */
     if (ok && imported_query != NULL && imported_query->get_module != NULL) {
+        if (imported_query->root_candidate_module_count != NULL &&
+            imported_query->get_root_candidate_module != NULL) {
+            size_t count = imported_query->root_candidate_module_count(imported_query->user);
+            for (size_t i = 0U; i < count && ok; ++i) {
+                const FengSemanticModule *candidate = NULL;
+                ok = imported_query->get_root_candidate_module(
+                    imported_query->user, i, &candidate);
+                if (ok && candidate != NULL &&
+                    find_module_index_by_path(analysis, candidate->segments,
+                                              candidate->segment_count) == analysis->module_count) {
+                    ok = add_external_module(analysis, candidate);
+                }
+            }
+        }
         for (program_index = 0U; program_index < program_count && ok; ++program_index) {
             const FengProgram *prog = programs[program_index];
             size_t use_index;
@@ -42500,6 +42648,11 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
                 scan_from = scan_end;
             }
         }
+    }
+
+    if (ok && error_count == 0U) {
+        ok = register_exception_roots(analysis, program_count > 0U ? programs[0] : NULL,
+                                      &errors, &error_count, &error_capacity);
     }
 
     /* Phase M1/M2: resolve every raw member-mix source in its declaring
@@ -42579,7 +42732,7 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
 
     /* Phase S3-pre: pre-compute spec witnesses for builtin-subject spec
      * relations that the on-demand resolution pass would miss (e.g. imported
-     * generic type instances whose type params have builtin constraints). */
+     * generic type instances with constrained builtin actual arguments). */
     if (ok && error_count == 0U) {
         precompute_imported_builtin_spec_witnesses(analysis);
     }

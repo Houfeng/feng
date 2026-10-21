@@ -1,4 +1,4 @@
-module feng.smoke;
+open module feng.smoke;
 
 @cdecl("libc")
 extern func puts(msg: string*): int;
@@ -29,3 +29,7 @@ func main(args: string[]) {
     let second = normal_value();
     puts(&second);
 }
+
+/** Exception declarations for this standalone regression fixture. */
+@throwable open spec Throwable {}
+open fit string:Throwable {}

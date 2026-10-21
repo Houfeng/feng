@@ -1,5 +1,7 @@
 open module fcts_lib.test.constraint_projection;
 
+import std.text;
+
 /** Generic fields and methods exercise an address-form witness ABI. */
 open spec CPLeft<A> { var item: A; func left(): i32; func echo(value: A): A; }
 /** The second requirement must never dispatch through the first slot. */

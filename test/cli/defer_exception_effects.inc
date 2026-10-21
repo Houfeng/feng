@@ -41,7 +41,8 @@ static void test_defer_exception_cli(void) {
     char *out_option = make_out_option(out);
     for (size_t i = 0U; i < sizeof(bodies) / sizeof(*bodies); ++i) {
         bool rejected = i >= 2U;
-        char *source = dup_printf("open module cleanup.cli;spec Action():void;func fail(){throw \"x\";}%s", bodies[i]);
+        char *source = dup_printf("open module cleanup.cli;spec Action():void;func fail(){throw \"x\";}%s"
+        THROW_TEST_ROOT, bodies[i]);
         write_text_file(path, source);
         char *paths[] = {path};
         FengCliFrontendInput input = {.path_count = 1U, .paths = paths, .target = FENG_COMPILE_TARGET_LIB};
@@ -134,11 +135,16 @@ static void defer_lsp_apply_edits(FILE *input, int output_fd, void *user) {
 static void test_defer_exception_lsp(void) {
     const char *initial = "module cleanup.lsp;func work(){}func run(){defer{work();}}func main(args:string[]){}";
     const char *sources[] = {
-        "module cleanup.lsp;func work(){throw \"x\";}func run(){defer{work();}}func main(args:string[]){}",
-        "module cleanup.lsp;func work(){throw \"x\";}func run(){defer{try work() catch e:string{}}}func main(args:string[]){}",
-        "module cleanup.lsp;func work(){throw true;}func run(){defer{try work() catch e:string{}}}func main(args:string[]){}",
-        "module cleanup.lsp;func work(){throw true;}func run(){defer{try work() catch{}}}func main(args:string[]){}",
-        "module cleanup.lsp;func work(){throw true;}func run(){let x=try (if true{defer{work();}0;}else{0;}) catch{0;};}func main(args:string[]){}",
+        "open module cleanup.lsp;func work(){throw \"x\";}func run(){defer{work();}}func main(args:string[]){}"
+        THROW_TEST_ROOT,
+        "open module cleanup.lsp;func work(){throw \"x\";}func run(){defer{try work() catch e:string{}}}func main(args:string[]){}"
+        THROW_TEST_ROOT,
+        "open module cleanup.lsp;func work(){throw true;}func run(){defer{try work() catch e:string{}}}func main(args:string[]){}"
+        THROW_TEST_ROOT,
+        "open module cleanup.lsp;func work(){throw true;}func run(){defer{try work() catch{}}}func main(args:string[]){}"
+        THROW_TEST_ROOT,
+        "open module cleanup.lsp;func work(){throw true;}func run(){let x=try (if true{defer{work();}0;}else{0;}) catch{0;};}func main(args:string[]){}"
+        THROW_TEST_ROOT,
         "module cleanup.lsp;spec Action():void;func run(f:Action){defer{f();}}func main(args:string[]){}",
         "module cleanup.lsp;spec Action():void;func run(f:Action){defer{try f() catch{}}}func main(args:string[]){}"};
     const char *types[] = {"string", NULL, "bool", NULL, "bool", "unknown", NULL};
@@ -169,18 +175,19 @@ static void test_defer_exception_lsp_packages(void) {
     char directory[] = "temp/defer-lsp-packages-XXXXXX";
     ASSERT(mkdtemp(directory) != NULL);
     char *provider = effects_lsp_pack(directory, "defer_provider",
-        "open module cleanup.provider;open func raise<T:throw>(x:T){throw x;}", NULL);
+        "open module cleanup.provider;open func raise<T:Throwable>(x:T){throw x;}"
+        THROW_TEST_ROOT, NULL);
     char *middle = effects_lsp_pack(directory, "defer_middle",
-        "open module cleanup.middle;import cleanup.provider;open func relay<T:throw>(x:T){raise(x);}", provider);
+        "open module cleanup.middle;import cleanup.provider;open func relay<T:Throwable>(x:T){raise(x);}", provider);
     char *consumer = path_join(directory, "consumer"), *src = path_join(consumer, "src");
     char *path = path_join(src, "main.ff"), *manifest = path_join(consumer, "feng.fm");
     mkdir_p(src);
     char *config = dup_printf("[package]\nname: \"defer_consumer\"\nversion: \"0.1.0\"\ntarget: \"lib\"\nsrc: \"src/\"\n[dependencies]\ndefer_provider: \"%s\"\ndefer_middle: \"%s\"\n", provider, middle);
     write_text_file(manifest, config);
-    const char *initial = "module cleanup.consumer;import cleanup.middle;func run(){defer{try relay(\"x\") catch e:string{}}}";
+    const char *initial = "module cleanup.consumer;import cleanup.middle;import cleanup.provider;func run(){defer{try relay(\"x\") catch e:string{}}}";
     const char *sources[] = {
-        "module cleanup.consumer;import cleanup.middle;func run(){defer{try relay(true) catch e:string{}}}",
-        "module cleanup.consumer;import cleanup.middle;func run(){defer{try relay(true) catch e:bool{}}}"};
+        "module cleanup.consumer;import cleanup.middle;import cleanup.provider;func run(){defer{try relay(true) catch e:string{}}}",
+        "module cleanup.consumer;import cleanup.middle;import cleanup.provider;func run(){defer{try relay(true) catch e:bool{}}}"};
     const char *types[] = {"bool", NULL};
     write_text_file(path, initial);
     char *uri = file_uri_from_path(path), *escaped = json_escape_text(initial);

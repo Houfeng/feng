@@ -260,6 +260,16 @@ static const FengDecl *ee_named_decl(FengExceptionAnalysis *data, const char *na
     return NULL;
 }
 
+/* Resolve view identity after generic effect substitution. The graph keeps
+ * ordinary spec type identities for dispatch; only THROW consumes this query. */
+static bool ee_payload_is_view(void *user, uint32_t type) {
+    FengExceptionAnalysis *data = user;
+    const FengExceptionNode *node = &data->graph->nodes[type];
+    if (node->kind != FENG_EXCEPTION_NAMED_TYPE) return false;
+    const FengDecl *decl = ee_named_decl(data, node->name, node->arg_count);
+    return decl != NULL && decl->kind == FENG_DECL_SPEC;
+}
+
 /* Convert canonical type syntax once to declaration/slot terms. */
 static uint32_t ee_type_canonical(ExceptionBuilder *b, const FengTypeRef *type) {
     FengExceptionGraph *g = b->data->graph;
@@ -684,7 +694,9 @@ static ExceptionExpression ee_try(ExceptionBuilder *b, const FengExpr *expr) {
     for (size_t i = 0U; i < expr->as.try_expr.clause_count; ++i) {
         const FengTryCatchClause *clause = &expr->as.try_expr.clauses[i];
         uint32_t caught = remainder, type = clause->type != NULL ? ee_type(b, clause->type) : 0U;
-        if (type != 0U) {
+        bool root_catch = type != 0U && b->data->analysis->exception_root_type != NULL &&
+                          type == ee_type(b, b->data->analysis->exception_root_type);
+        if (type != 0U && !root_catch) {
             caught = feng_exception_node(g, FENG_EXCEPTION_SELECT, remainder, type, 0, NULL, NULL, 0);
             remainder = feng_exception_node(g, FENG_EXCEPTION_EXCLUDE, remainder, type, 0, NULL, NULL, 0);
         } else
@@ -1097,6 +1109,8 @@ static uint32_t ee_stmt(ExceptionBuilder *b, const FengStmt *stmt) {
             return b->caught;
         ExceptionExpression value = ee_expr(b, stmt->as.throw_value);
         uint32_t type = ee_site_type(b, stmt->as.throw_value);
+        /* Preserve known and symbolic views alike until the solver has
+         * substituted actual arguments and can classify the payload. */
         uint32_t thrown = type != 0U ? feng_exception_node(g, FENG_EXCEPTION_THROW, type, 0, 0, NULL, NULL, 0)
                                      : feng_exception_unknown(g);
         return feng_exception_union(g, value.effects, thrown);
@@ -1435,7 +1449,8 @@ bool feng_semantic_collect_exception_effects(FengSemanticAnalysis *analysis) {
         ee_build_source(data, data->sources[i]);
     if (data->graph->failed)
         return false;
-    FengExceptionSolver *solver = feng_exception_solver_create(data->graph, ee_method, data);
+    FengExceptionSolver *solver = feng_exception_solver_create(
+        data->graph, ee_method, ee_payload_is_view, data);
     if (solver == NULL)
         return false;
     for (size_t i = 0U; i < data->source_count; ++i)

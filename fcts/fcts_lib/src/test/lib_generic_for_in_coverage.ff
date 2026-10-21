@@ -1,5 +1,7 @@
 open module fcts_lib.test;
 
+import std.text;
+
 import std.collections;
 
 /** Named tuple returned by every generic iterator step. */

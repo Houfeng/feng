@@ -1,5 +1,7 @@
 module fcts_bin;
 
+import std.text;
+
 import std.test;
 
 /** Callable used to prove that a lambda establishes its own loop targets. */

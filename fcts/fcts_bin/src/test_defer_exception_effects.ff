@@ -1,4 +1,8 @@
 module fcts_bin;
+import std.numeric;
+import std.text;
+
+import std;
 
 import std.test;
 import fcts_lib.test;
@@ -94,20 +98,20 @@ func unwindCallbackDeferBoundary(action: DeferBoundaryAction): void {
 }
 
 /** Open payload types can be handled without a concrete catch type. */
-func genericDeferBoundary<T: throw>(value: T): void {
+func genericDeferBoundary<T: Throwable>(value: T): void {
   defer {
     try raiseDeferBoundaryValue(value) catch { deferBoundarySeen += 1; }
   }
 }
 
 /** Keep generic throwing outside the direct-throw-forbidden cleanup block. */
-func raiseDeferBoundaryValue<T: throw>(value: T): void { throw value; }
+func raiseDeferBoundaryValue<T: Throwable>(value: T): void { throw value; }
 
 /** Exercise owner and method type parameters in the same cleanup. */
-type DeferBoundaryBox<T: throw> {
+type DeferBoundaryBox<T: Throwable> {
   let value: T;
   /** Each generic domain is caught before this cleanup exits. */
-  func finish<U: throw>(other: U): void {
+  func finish<U: Throwable>(other: U): void {
     defer {
       try raiseDeferBoundaryValue(self.value) catch { deferBoundarySeen += 1; }
       try raiseDeferBoundaryValue(other) catch { deferBoundarySeen += 1; }

@@ -9,7 +9,7 @@ static void test_imported_cycle_lifetime(void) {
         "open type Plain{open let value:int;open var edges:Plain[]= []; }"
         "open type Acyclic<T>{open let value:T;}";
     static const char consumer[] =
-        "module cycle_lifetime;import cycle_fixture;"
+        "open module cycle_lifetime;import cycle_fixture;"
         "var made=0;var dropped=0;"
         "func require(ok:bool):void{if !ok{throw 99;}}"
         "type Ref{let n:int;func ~Ref(){if self.n!=0{dropped+=1;}}}"
@@ -22,7 +22,8 @@ static void test_imported_cycle_lifetime(void) {
         "func main(args:string[]):void{mutual();require(made==dropped);"
         "selfCycle<Ref>(make(5));require(made==dropped);"
         "selfCycle<string>(\"x\"+\"y\");selfCycle<int>(6);plain();"
-        "acyclic();require(made==dropped);}";
+        "acyclic();require(made==dropped);}"
+        THROW_TEST_ROOT;
     char workspace[] = "temp/imported-cycle-lifetime-XXXXXX";
     ASSERT(mkdtemp(workspace) != NULL);
     char *provider_path = path_join(workspace, "provider.ff");

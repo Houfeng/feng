@@ -1,5 +1,7 @@
 open module fcts_lib.test;
 
+import std.numeric;
+
 var arcForeignDrops: int = 0;
 
 /** A binary-only producer keeps its descriptor/lifecycle authority private. */

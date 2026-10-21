@@ -80,8 +80,8 @@ static const char *defer_context_provider =
     "open type Maker:Factory{open static func work():void{}}"
     "open func witness<T:Factory>():void{defer{try T.work() catch{}}}"
     "open type Pair<T>(T,string);"
-    "open func handled<T:throw>(value:T):void{defer{try raise(value) catch{}}}"
-    "func raise<T:throw>(value:T):void{throw value;}";
+    "open func handled<T:Throwable>(value:T):void{defer{try raise(value) catch{}}}"
+    "func raise<T:Throwable>(value:T):void{throw value;}";
 
 /* Closed clients exercise scalar, managed and descriptor-sized representations. */
 static const char *defer_context_calls =
@@ -103,12 +103,12 @@ void test_defer_generic_context_codegen(void (*compile_c)(const char *)) {
     char *source = malloc(capacity);
     THROW_CHECK(source != NULL);
     snprintf(source, capacity, "%s%s", defer_context_provider, defer_context_calls);
-    ThrowConstraintUnit local = throw_constraint_analyze(source, NULL, NULL);
+    ThrowConstraintUnit local = throw_constraint_analyze_with_root(source, NULL, NULL, NULL);
     defer_context_emit(&local, compile_c);
     throw_constraint_dispose(&local);
     free(source);
 
-    ThrowConstraintUnit producer = throw_constraint_analyze(defer_context_provider, NULL, NULL);
+    ThrowConstraintUnit producer = throw_constraint_analyze_with_root(defer_context_provider, NULL, NULL, NULL);
     defer_context_emit(&producer, compile_c);
     char directory[] = "temp/defer-context-ft-XXXXXX";
     THROW_CHECK(mkdtemp(directory) != NULL);

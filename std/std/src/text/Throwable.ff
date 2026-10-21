@@ -1,0 +1,6 @@
+open module std.text;
+
+import std;
+
+/** 字符串异常沿用本模块的 Display 实现。 */
+open fit string: std.Throwable {}

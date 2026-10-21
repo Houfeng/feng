@@ -161,7 +161,9 @@ generated=$(find "$work/feng-bin" -name '*.c' -type f)
 [[ -n $generated ]]
 # Real throw/catch requires native EH even when a genuinely empty body does not.
 cat > "$work/throwing.ff" <<'EOF'
-module main;
+open module main;
+@throwable open spec Throwable {}
+fit int:Throwable {}
 func fail():int { throw 1; }
 func main(args:string[]) {
     let value = try fail() catch error:int { error; };

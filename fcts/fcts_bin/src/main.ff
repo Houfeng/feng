@@ -89,6 +89,7 @@ func main(args: string[]) {
       test_exception();
       test_exception_payload();
       test_throw_constraint();
+      test_throwable();
       test_callable_exception_effects();
       test_defer_exception_effects();
       test_g17_exception_semantics();

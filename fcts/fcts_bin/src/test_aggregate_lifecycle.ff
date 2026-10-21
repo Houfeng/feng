@@ -1,5 +1,7 @@
 module fcts_bin;
 
+import std.numeric;
+
 import std.test;
 import fcts_lib.test.aggregate_lifecycle;
 

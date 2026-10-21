@@ -1,4 +1,7 @@
 module fcts_bin;
+import std.text;
+
+import std;
 
 import std.numeric;
 import std.test;
@@ -50,7 +53,7 @@ func raiseNestedExceptionResource(code: int): void {
 }
 
 /** Keep the existing generic throw path in this independent bugfix's coverage. */
-func raiseNestedExceptionGeneric<E: throw>(value: E): void { throw value; }
+func raiseNestedExceptionGeneric<E: Throwable>(value: E): void { throw value; }
 
 /** Handle one inner exception while a caller's catch remains active. */
 func handleNestedExceptionResource(code: int): void {
@@ -64,7 +67,7 @@ type NestedExceptionHandler {
   /** Handle an exception through a method invocation. */
   func handle(): void { handleNestedExceptionResource(2); }
   /** Handle a direct generic throw, then leave the method's catch. */
-  func generic<T: throw>(value: T): void {
+  func generic<T: Throwable>(value: T): void {
     try raiseNestedExceptionGeneric<T>(value) catch {}
   }
 }
@@ -353,7 +356,7 @@ func nestedExceptionCatchDefer(): void {
 }
 
 /** Preserve generic/value/string exception identities across an inner catch. */
-func relayNestedExceptionGeneric<E: throw>(value: E): void {
+func relayNestedExceptionGeneric<E: Throwable>(value: E): void {
   try raiseNestedExceptionGeneric<E>(value) catch {
     handleNestedExceptionResource(0);
     throw;

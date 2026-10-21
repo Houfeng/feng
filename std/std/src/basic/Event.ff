@@ -1,5 +1,7 @@
 open module std;
 
+import std.text;
+
 import std.collections;
 
 /** Default maximum number of listeners for an Event. */
