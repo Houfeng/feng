@@ -12082,14 +12082,26 @@ static void assert_lsp_test_response_contains(const char *output,
     ASSERT(next_response == NULL || match < next_response);
 }
 
-/* Failing response assertions retain their checks, report only the requested
- * response, and release the temporary ID before normal exit runs sanitizers. */
-static void test_lsp_response_assertion_failure_diagnostics(void) {
+/* Runs one intentional assertion failure after exec has isolated process state. */
+static void run_lsp_response_assertion_failure(const char *id_text,
+                                               const char *expected) {
     static const char *kOutput =
         "Content-Length: 44\r\n\r\n"
         "{\"jsonrpc\":\"2.0\",\"id\":11,\"result\":\"unready\"}"
         "Content-Length: 42\r\n\r\n"
         "{\"jsonrpc\":\"2.0\",\"id\":12,\"result\":\"later\"}";
+    char *end;
+    unsigned long id;
+
+    errno = 0;
+    id = strtoul(id_text, &end, 10);
+    ASSERT(errno == 0 && end != id_text && *end == '\0' && id <= UINT_MAX);
+    assert_lsp_test_response_contains(kOutput, (unsigned int)id, expected);
+}
+
+/* Failing response assertions retain their checks, report only the requested
+ * response, and release the temporary ID before normal exit runs sanitizers. */
+static void test_lsp_response_assertion_failure_diagnostics(const char *program) {
     /* Each case reaches a different original assertion failure. */
     static const struct {
         unsigned int id;
@@ -12107,6 +12119,7 @@ static void test_lsp_response_assertion_failure_diagnostics(void) {
 
     for (size_t index = 0U; index < sizeof(kCases) / sizeof(kCases[0]); ++index) {
         FILE *errors = temp_file();
+        char id_text[32];
         pid_t child;
         int status;
         char *output;
@@ -12114,19 +12127,25 @@ static void test_lsp_response_assertion_failure_diagnostics(void) {
         const char *actual;
 
         ASSERT(errors != NULL);
+        (void)snprintf(id_text, sizeof(id_text), "%u", kCases[index].id);
         ASSERT(fflush(NULL) == 0);
         child = fork();
         ASSERT(child >= 0);
         if (child == 0) {
             ASSERT(dup2(fileno(errors), STDERR_FILENO) >= 0);
             fclose(errors);
-            assert_lsp_test_response_contains(kOutput, kCases[index].id,
-                                              kCases[index].expected);
-            _exit(0);
+            execl(program, program, "--lsp-response-assertion-failure",
+                  id_text, kCases[index].expected, (char *)NULL);
+            _exit(127);
         }
         ASSERT(waitpid(child, &status, 0) == child);
         output = read_text_stream(errors);
         fclose(errors);
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 1 ||
+            strstr(output, "LeakSanitizer") != NULL) {
+            fprintf(stderr, "lsp response failure probe: id=%u, wait status=%d\n"
+                    "captured stderr:\n%s\n", kCases[index].id, status, output);
+        }
         ASSERT(WIFEXITED(status) && WEXITSTATUS(status) == 1);
         ASSERT(strstr(output, kCases[index].id_diagnostic) != NULL);
         expected = strstr(output, "\nexpected:\n");
@@ -33258,7 +33277,13 @@ void test_lsp_fit_completion(void);
 /* Package FT failure diagnostics exercise the real driver in both test phases. */
 void test_bundle_ft_diagnostic_lifetime(void);
 
-int main(void) {
+/* Dispatch isolated assertion failures before initializing the full suite. */
+int main(int argc, char **argv) {
+    if (argc > 1 && strcmp(argv[1], "--lsp-response-assertion-failure") == 0) {
+        ASSERT(argc == 4);
+        run_lsp_response_assertion_failure(argv[2], argv[3]);
+        return 0;
+    }
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
 
@@ -33360,7 +33385,7 @@ int main(void) {
     test_lsp_help_writes_stdout_not_stderr();
     test_lsp_rejects_unknown_option();
     test_lsp_unknown_option_stays_on_stderr();
-    test_lsp_response_assertion_failure_diagnostics();
+    test_lsp_response_assertion_failure_diagnostics(argv[0]);
     test_lsp_request_wait_reads_complete_long_response();
     test_lsp_response_reader_handles_fragmentation();
     test_lsp_response_reader_preserves_message_boundaries();
