@@ -15597,8 +15597,8 @@ static bool find_object_field_syntax_hit_block(const FengBlock *block,
                                                const FengExpr **out_construction,
                                                FengSlice *out_name);
 
-/* Find an object-literal field token and return its ordinary construction
- * target. Resolution is deliberately separate so AST and persistent-symbol
+/* Find an object-literal field token and return its containing construction
+ * expression. Resolution is deliberately separate so AST and persistent-symbol
  * providers can consume the same source shape without mixin-specific rules. */
 static bool find_object_field_syntax_hit_expr(const FengExpr *expr,
                                               size_t offset,
@@ -15653,7 +15653,7 @@ static bool find_object_field_syntax_hit_expr(const FengExpr *expr,
                 const FengObjectFieldInit *field = &expr->as.object_literal.fields[index];
 
                 if (offset_in_token(field->token, offset)) {
-                    *out_construction = expr->as.object_literal.target;
+                    *out_construction = expr;
                     *out_name = field->name;
                     return true;
                 }
@@ -16061,7 +16061,7 @@ static bool resolve_object_field_target_decl(const FengLspAnalysisSession *sessi
     }
     owner = resolve_owner_decl_from_object_expr(session,
                                                  program,
-                                                 construction,
+                                                 construction->as.object_literal.target,
                                                  locals);
     if (owner == NULL) {
         return false;
@@ -19138,7 +19138,7 @@ static bool resolve_symbol_object_field_target_decl(
                                            &name)) {
         return false;
     }
-    owner = resolve_symbol_type_constructor_expr(context, construction);
+    owner = resolve_symbol_type_constructor_expr(context, construction->as.object_literal.target);
     if (owner == NULL) {
         return false;
     }
@@ -26193,6 +26193,146 @@ static bool build_repaired_completion_json(FengLspService *service,
     return ok;
 }
 
+/* Complete only a possible field-name slot. The parser, rather than a brace
+ * heuristic, subsequently decides whether it belongs to an object literal. */
+static char *object_field_completion_text(const char *text, size_t offset,
+                                          size_t *start, FengSlice *prefix) {
+    size_t length = strlen(text);
+    if (offset > length) return NULL;
+    *start = offset;
+    while (*start > 0U && completion_identifier_continue(text[*start - 1U])) --*start;
+    *prefix = (FengSlice){text + *start, offset - *start};
+    FengLexer lexer;
+    FengToken previous = {0}, token;
+    feng_lexer_init(&lexer, text, length, NULL);
+    for (;;) {
+        token = feng_lexer_next(&lexer);
+        if (token.kind == FENG_TOKEN_ERROR) return NULL;
+        if (token.kind == FENG_TOKEN_EOF || token.offset >= *start) break;
+        if (token.offset + token.length > *start) return NULL;
+        previous = token;
+    }
+    if (previous.kind != FENG_TOKEN_LBRACE && previous.kind != FENG_TOKEN_COMMA) return NULL;
+    size_t end = *start;
+    if (token.offset == *start && token.kind == FENG_TOKEN_IDENTIFIER) {
+        end += token.length;
+        token = feng_lexer_next(&lexer);
+    } else if (prefix->length != 0U) return NULL;
+    FengLspString repaired = {0};
+    bool ok = string_append_bytes(&repaired, text, end) &&
+        (end != *start || string_append_cstr(&repaired, "__feng_completion_field__")) &&
+        (token.kind == FENG_TOKEN_COLON || string_append_cstr(&repaired, ": 0")) &&
+        (token.kind != FENG_TOKEN_IDENTIFIER || string_append_cstr(&repaired, ",")) &&
+        string_append_cstr(&repaired, text + end);
+    if (!ok) {
+        string_dispose(&repaired);
+        return NULL;
+    }
+    return close_recovery_blocks(repaired.data);
+}
+
+/* Parse recovered syntax with a bounded number of parser-directed terminators.
+ * All insertions follow the query, so an unfinished later statement cannot
+ * invalidate the field position or require changes to the editor document. */
+static bool parse_object_field_completion_source(char **text, const char *path,
+                                                  size_t offset, FengProgram **program) {
+    for (size_t attempt = 0U; attempt < 4U; ++attempt) {
+        FengParseError error = {0};
+        if (feng_parse_source(*text, strlen(*text), path, program, &error)) return true;
+        if (attempt == 3U || error.code == NULL || strcmp(error.code, "SE0001") != 0 ||
+            error.token.offset <= offset) return false;
+        size_t length = strlen(*text), insertion = error.token.offset;
+        if (insertion > length || length > SIZE_MAX - 2U) return false;
+        char *next = realloc(*text, length + 2U);
+        if (next == NULL) return false;
+        memmove(next + insertion + 1U, next + insertion, length - insertion + 1U);
+        next[insertion] = ';';
+        *text = next;
+    }
+    return false;
+}
+
+/* Source and package fields share the ordinary member resolver, visibility,
+ * generic substitution and presentation. Only the candidate domain differs. */
+static bool build_object_field_completion_json(FengLspService *service,
+    FengLspDocument *document, size_t offset, FengLspString *json,
+    const FengLspRequestContext *request, bool *handled) {
+    size_t start = 0U;
+    FengSlice prefix = {0};
+    char *text = object_field_completion_text(document->text, offset, &start, &prefix);
+    if (text == NULL) return false;
+    FengProgram *program = NULL;
+    const FengTypeMember *enclosing_member = NULL;
+    FengLspLocalList locals = {0};
+    FengLspAnalysisSession session = {0};
+    FengLspCacheQueryContext cache = {0};
+    bool ok = false, first = true;
+    if (!parse_object_field_completion_source(&text, document->path, offset, &program)) goto cleanup;
+    const FengDecl *enclosing_decl = find_enclosing_decl_for_completion(text, program, start, &enclosing_member);
+    const FengExpr *literal = NULL;
+    FengSlice field_name = {0};
+    if (!find_object_field_syntax_hit_decl(enclosing_decl, start, &literal, &field_name)) goto cleanup;
+    *handled = true;
+    if (!collect_visible_locals_for_completion(text, enclosing_decl, enclosing_member, start, &locals)) goto cleanup;
+    wait_for_program_import_indexes(service, program);
+    pthread_mutex_lock(&service->analysis_mutex);
+    session.source_module_index = module_index_matches_path(service, document->path) ? &service->module_index : NULL;
+    if (!build_current_source_view(service, program, text, session.source_module_index,
+                                   &session.sources, &session.source_count)) {
+        pthread_mutex_unlock(&service->analysis_mutex);
+        goto cleanup;
+    }
+    cache.program = program;
+    cache.source_text = text;
+    cache.source_module_index = session.source_module_index;
+    cache.current_sources = session.sources;
+    cache.current_source_count = session.source_count;
+    if (symbol_index_matches_path(service, document->path)) {
+        cache.provider = service->symbol_index;
+        cache.current_module = feng_symbol_provider_find_module(cache.provider,
+            program->module_segments, program->module_segment_count);
+    }
+    FengLspMemberQuery query = {.session = &session, .cache = cache.provider != NULL ? &cache : NULL,
+        .program = program, .locals = &locals, .enclosing_decl = enclosing_decl,
+        .enclosing_member = enclosing_member, .types.nominal_equal = member_nominal_equal};
+    /* Wrap the construction as an ordinary receiver so scope handling remains shared. */
+    FengExpr access = {.kind = FENG_EXPR_MEMBER};
+    access.as.member.object = literal->as.object_literal.target;
+    FengLspString receiver_text = {0};
+    FengProgram *receiver_program = NULL;
+    FengLspMemberFilter filter = FENG_LSP_MEMBER_FILTER_INSTANCE;
+    FengLspCompletionType *type = member_resolve_receiver(&query, &access, (FengSlice){0},
+        &receiver_text, &receiver_program, &filter);
+    FengLspMemberCandidate *items = NULL;
+    ok = member_collect(&query, type, FENG_LSP_MEMBER_FILTER_INSTANCE, &items);
+    for (FengLspMemberCandidate **slot = &items; ok && *slot != NULL;) {
+        FengLspMemberCandidate *item = *slot;
+        FengSlice name = member_candidate_name(item);
+        bool keep = (item->member != NULL ? item->member->kind == FENG_TYPE_MEMBER_FIELD
+            : feng_symbol_decl_kind(item->symbol) == FENG_SYMBOL_DECL_KIND_FIELD) &&
+            name.length >= prefix.length && memcmp(name.data, prefix.data, prefix.length) == 0;
+        for (size_t i = 0U; keep && i < literal->as.object_literal.field_count; ++i) {
+            const FengObjectFieldInit *field = &literal->as.object_literal.fields[i];
+            if (field->token.offset != start && slice_equals(field->name, name)) keep = false;
+        }
+        if (!keep) *slot = item->next;
+        else slot = &item->next;
+    }
+    ok = ok && string_append_cstr(json, "[") &&
+        member_append_candidates(&query, json, &first, items, offset, request) &&
+        string_append_cstr(json, "]") && !query.types.failed;
+    feng_lsp_completion_types_dispose(&query.types);
+    feng_program_free(receiver_program);
+    string_dispose(&receiver_text);
+    pthread_mutex_unlock(&service->analysis_mutex);
+cleanup:
+    free(session.sources);
+    local_list_dispose(&locals);
+    feng_program_free(program);
+    free(text);
+    return ok;
+}
+
 static bool handle_completion_request(FengLspService *service,
                                       FILE *output,
                                       FengLspJsonValue id,
@@ -26262,6 +26402,20 @@ static bool handle_completion_request(FengLspService *service,
             free(uri);
             return send_json_response(output, id, "[]");
         }
+    }
+    request.uri = uri;
+    request.service = service;
+    request.document = document;
+    {
+        bool handled = false;
+        bool built = build_object_field_completion_json(service, document, offset, &json, &request, &handled);
+        if (handled) {
+            ok = send_json_response(output, id, built ? json.data : "[]");
+            string_dispose(&json);
+            free(uri);
+            return ok;
+        }
+        string_dispose(&json);
     }
     is_member_completion = completion_context_is_member_access(document->text, offset);
     {

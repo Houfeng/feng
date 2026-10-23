@@ -17112,6 +17112,192 @@ static void test_lsp_member_completion_infers_constructor_call_overloads(void) {
     free(output);
 }
 
+/* One initialized editor session exercises source and package field queries. */
+typedef struct LspObjectFieldFixture {
+    const char *uri;
+    const char *initial_source;
+} LspObjectFieldFixture;
+
+/* Query immediately after each range edit, without waiting for semantic recovery. */
+static void run_lsp_object_field_edits(FILE *input, int output_fd, void *user) {
+    const LspObjectFieldFixture *fixture = user;
+    static const struct {
+        const char *body;
+        const char *present;
+        const char *absent;
+    } kCases[] = {
+        {"models.User<int> { /*cursor*/ }", "name", "method"},
+        {"models.User<int> { n/*cursor*/ }", "name", "age"},
+        {"models.User<int> { na/*cursor*/ }", "name", "age"},
+        {"models.User<int> { name: \"x\", /*cursor*/ }", "age", "name"},
+        {"models.User<int> { name: \"x\", a/*cursor*/ }", "age", "name"},
+        {"models.User<string>() { age/*cursor*/: \"x\" }", "age", "name"},
+        {"field_types.User<int> { na/*cursor*/ }", "name", "age"},
+        {"models.User<int> { z/*cursor*/ }", NULL, "name"},
+        {"models.User<int> { /*cursor*/ }", "age", "method"},
+        {"Local { f/*cursor*/ }", "fresh", "stale"},
+        {"Local { /*cursor*/ }", "fresh", "stale"}
+    };
+    char *previous = dup_cstr(fixture->initial_source);
+    for (size_t i = 0U; i < sizeof(kCases) / sizeof(kCases[0]); ++i) {
+        char *source = dup_printf("module field_consumer;\nimport field_types as models;\n"
+            "type Local { let fresh: int; }\nfunc probe() { let u = %s; }\n", kCases[i].body);
+        char *cursor = strstr(source, "/*cursor*/");
+        size_t offset = (size_t)(cursor - source);
+        memmove(cursor, cursor + strlen("/*cursor*/"), strlen(cursor + strlen("/*cursor*/")) + 1U);
+        unsigned int id = 6000U + (unsigned int)i * 2U;
+        char *request = build_lsp_test_position_request("textDocument/completion", id,
+            fixture->uri, source, source, offset);
+        char *barrier = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":%u,"
+            "\"method\":\"feng/testReadinessBarrier\",\"params\":null}", id + 1U);
+        write_lsp_ascii_incremental_change(input, fixture->uri, (unsigned int)i + 2U, previous, source);
+        write_lsp_message(input, request);
+        char *output = send_lsp_test_request_and_wait(input, output_fd, barrier, id + 1U);
+        if (kCases[i].present != NULL) {
+            char *label = dup_printf("{\"label\":\"%s\"", kCases[i].present);
+            ASSERT(count_lsp_test_response_occurrences(output, id, label) == 1U);
+            free(label);
+        }
+        char *absent = dup_printf("\"label\":\"%s\"", kCases[i].absent);
+        assert_lsp_test_response_not_contains(output, id, absent);
+        assert_lsp_test_response_not_contains(output, id, "\"label\":\"secret\"");
+        assert_lsp_test_response_not_contains(output, id, "\"label\":\"total\"");
+        assert_lsp_test_response_not_contains(output, id, "\"label\":\"let\"");
+        if (i == 5U) assert_lsp_test_response_contains(output, id, "let age: string");
+        free(absent);
+        free(output);
+        free(barrier);
+        free(request);
+        free(previous);
+        previous = source;
+    }
+    free(previous);
+}
+
+/* Publish either source or FT dependencies before exercising dirty field positions. */
+static void assert_lsp_object_field_dependency_edits(bool packaged) {
+    static const char *kInitialize = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}";
+    static const char *kShutdown = "{\"jsonrpc\":\"2.0\",\"id\":9000,\"method\":\"shutdown\",\"params\":null}";
+    static const char *kSource = "module field_consumer;\nimport field_types as models;\n"
+        "type Local { let stale: int; }\nfunc probe() { let u = models.User<int> { name: \"x\", age: 1 }; }\n";
+    char template_path[] = "temp/feng_lsp_object_fields_XXXXXX";
+    char *workspace = mkdtemp(template_path);
+    ASSERT(workspace != NULL);
+    char *library = path_join(workspace, "library");
+    char *library_src = path_join(library, "src");
+    char *library_manifest = path_join(library, "feng.fm");
+    char *library_source = path_join(library_src, "lib.ff");
+    char *consumer = path_join(workspace, "consumer");
+    char *consumer_src = path_join(consumer, "src");
+    char *consumer_manifest = path_join(consumer, "feng.fm");
+    char *source_path = path_join(consumer_src, "main.ff");
+    mkdir_p(library_src);
+    mkdir_p(consumer_src);
+    write_text_file(library_manifest, "[package]\nname: \"field_types\"\nversion: \"0.1.0\"\ntarget: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n");
+    write_text_file(library_source, "open module field_types;\nopen type User<T> {\n"
+        "open let name: string; open let age: T; seal var secret: int;\n"
+        "open static var total: int = 0; open func method() {}\n}\n");
+    if (packaged) {
+        char *argv[] = {library};
+        ASSERT(feng_cli_project_pack_main("feng", 1, argv) == 0);
+    }
+    char *manifest = dup_printf("[package]\nname: \"field_consumer\"\nversion: \"0.1.0\"\ntarget: \"lib\"\n"
+        "src: \"src/\"\nout: \"build/\"\n[dependencies]\nfield_types: \"%s\"\n",
+        packaged ? "../library/build/pkg/field_types-0.1.0.fb" : "../library");
+    write_text_file(consumer_manifest, manifest);
+    write_text_file(source_path, kSource);
+    char *uri = file_uri_from_path(source_path);
+    char *escaped = json_escape_text(kSource);
+    char *did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{"
+        "\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}", uri, escaped);
+    unsigned int line, character;
+    find_line_character(kSource, "name: \"x\"", 1U, &line, &character);
+    LspObjectFieldFixture fixture = {uri, kSource};
+    const char *requests[] = {kShutdown};
+    char *output = run_lsp_server_capture_after_position_ready_action(kInitialize, did_open, NULL,
+        "textDocument/completion", uri, line, character, "\"label\":\"name\"",
+        run_lsp_object_field_edits, &fixture, requests, 1U, NULL);
+    free(output);
+    free(did_open);
+    free(escaped);
+    free(uri);
+    free(manifest);
+    free(source_path);
+    free(consumer_manifest);
+    free(consumer_src);
+    free(consumer);
+    free(library_source);
+    free(library_manifest);
+    free(library_src);
+    free(library);
+    char *remove_error = NULL;
+    ASSERT(feng_cli_project_remove_tree(workspace, &remove_error));
+    free(remove_error);
+}
+
+/* Field-name completion follows object syntax, including incomplete editor buffers. */
+static void test_lsp_object_literal_field_completion(void) {
+    static const char *kDeclarations =
+        "module test.lsp.objectfields;\n"
+        "type User { let name: string; let age: int; static var total: int = 0; func method() {} }\n"
+        "type Box<T> { let value: T; let user: User; }\n";
+    static const struct {
+        const char *body;
+        const char *present;
+        const char *absent;
+        const char *detail;
+    } kCases[] = {
+        {"let u = User { /*cursor*/ };", "name", "method", "let name: string"},
+        {"let u = User { n/*cursor*/ };", "name", "age", "let name: string"},
+        {"let u = User { na/*cursor*/ };", "name", "age", NULL},
+        {"let u = User { na/*cursor*/", "name", "age", NULL},
+        {"let u = User { na/*cursor*/ }; probe()", "name", "age", NULL},
+        {"let u = User { na/*cursor*/me: \"x\", age: 1 };", "name", "age", NULL},
+        {"let u = User { name/*cursor*/: \"x\", age: 1 };", "name", "age", NULL},
+        {"let u = User { name: \"x\", /*cursor*/ };", "age", "name", "let age: int"},
+        {"let u = User { name: \"x\", a/*cursor*/ };", "age", "name", NULL},
+        {"let u = User { /*cursor*/\n age: 1 };", "name", "age", NULL},
+        {"let u = User { na/*cursor*/\n age: 1 };", "name", "age", NULL},
+        {"let u = User { /*cursor*/age: 1 };", "name", "total", NULL},
+        {"let u = User() { na/*cursor*/ };", "name", "method", NULL},
+        {"let u = Box<string> { va/*cursor*/ };", "value", "user", "let value: string"},
+        {"let u = Box<string>() { va/*cursor*/ };", "value", "user", "let value: string"},
+        {"let u = Box<string> { user: User { na/*cursor*/ } };", "name", "value", NULL},
+        {"let u = User { name: \"{,}\", /*cursor*/ };", "age", "name", NULL},
+        {"let u = User { /* completed comment */ na/*cursor*/ };", "name", "age", NULL},
+        {"let u = User { z/*cursor*/ };", NULL, "name", NULL},
+        {"let u = Unknown { na/*cursor*/ };", NULL, "name", NULL},
+        {"let u = User { name: lo/*cursor*/ };", "localValue", "age", NULL},
+        {"let u = User { name: \"na/*cursor*/\" };", NULL, "age", NULL},
+        {"let u = User { // na/*cursor*/\n name: \"x\" };", NULL, "age", NULL},
+        {"let u = User { /* na/*cursor*/ name: \"x\" };", NULL, "age", NULL},
+        {"if true { na/*cursor*/ }", NULL, "name", NULL}
+    };
+    for (size_t i = 0U; i < sizeof(kCases) / sizeof(kCases[0]); ++i) {
+        char *source = dup_printf("%sfunc probe() { let localValue = 1; for var i = 0; i < 2; i = i + 1 { %s } }\n",
+            kDeclarations, kCases[i].body);
+        char *cursor = strstr(source, "/*cursor*/");
+        size_t offset = (size_t)(cursor - source);
+        memmove(cursor, cursor + strlen("/*cursor*/"), strlen(cursor + strlen("/*cursor*/")) + 1U);
+        char *output = capture_lsp_completion_response(source, source, offset);
+        if (kCases[i].present != NULL) {
+            char *label = dup_printf("{\"label\":\"%s\"", kCases[i].present);
+            if (count_lsp_test_response_occurrences(output, 2U, label) != 1U)
+                fprintf(stderr, "object field completion case %zu: %s\n", i, output);
+            ASSERT(count_lsp_test_response_occurrences(output, 2U, label) == 1U);
+            free(label);
+        }
+        char *absent = dup_printf("\"label\":\"%s\"", kCases[i].absent);
+        assert_lsp_test_response_not_contains(output, 2U, absent);
+        if (kCases[i].detail != NULL) assert_lsp_test_response_contains(output, 2U, kCases[i].detail);
+        free(absent);
+        free(output);
+        free(source);
+    }
+    assert_lsp_object_field_dependency_edits(false);
+    assert_lsp_object_field_dependency_edits(true);
+}
+
 static void test_lsp_member_references_and_rename_from_object_literal_field(void) {
     static const char *kSource =
         "module test.lsp.rename;\n"
@@ -33487,6 +33673,7 @@ int main(int argc, char **argv) {
     test_lsp_enum_member_completion_survives_incomplete_member_access();
     test_lsp_completion_uses_source_scoped_edit_context();
     test_lsp_member_completion_infers_constructor_call_overloads();
+    test_lsp_object_literal_field_completion();
     test_lsp_member_references_and_rename_from_object_literal_field();
     test_lsp_function_decl_site_definition_references_and_rename();
     test_lsp_type_references_cover_all_ast_positions();
