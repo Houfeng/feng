@@ -1,14 +1,14 @@
 # Feng void 类型开发方案
 
-> **状态**：待 Review，未实施，不覆盖正式规范。§2 记录已确认的目标语义；方案最终采用及实施安排独立 Review。
+> **状态**：暂停，暂不实施，不覆盖正式规范。本文保留暂停前的设计与验收设想，恢复前须另行 Review；其中 void 值化及 std None／none 替代迁移均不进入本轮实施。
 >
-> **更新**：2026-10-22。本文集中定义 void 类型增量，可独立实施、验收和交付，不依赖 async/await。
+> **更新**：2026-10-27。async/await 已采用独立的无结果与有结果 Future 形态，不再依赖本文，规则统一见 [async/await 草案](feng-async-future-draft-4.md)。
 
 ## 1 目标与边界
 
 将 void 从仅表示无返回值的类型扩展为可按普通类型规则使用的内建单值类型，不要求调用方构造 Unit 或零元素 tuple。
 
-交付范围为类型语义、泛型、代码生成、FT、语言服务及 std 的 None／none 替代迁移，不包含 Future、状态机、调度器或 async 私有 runtime API。[async/await 草案](feng-async-future-draft-4.md)以本文为前置依赖，不能反向成为本文的验收条件。
+原拟交付范围为类型语义、泛型、代码生成、FT、语言服务及 std 的 None／none 替代迁移，不包含 Future、状态机、调度器或 async 私有 runtime API。以下内容作为暂停方案保留，不是 async/await 的实施或验收条件。
 
 ## 2 目标语义
 
@@ -79,7 +79,7 @@ JSON 的 null 由 void 联合分支表示；原 `fit None` 的序列化方法迁
 
 ## 4 实施与规范收敛
 
-1. Review 本文；将语义增量归入[类型规范](../specifications/feng-type.md)、[绑定规范](../specifications/feng-binding.md)、[函数规范](../specifications/feng-function.md)及[泛型规范](../specifications/feng-generics-draft.md)对应章节；本文改为引用，避免重复定义。
+1. 恢复方案后先 Review 本文；批准实施后，将语义增量归入[类型规范](../specifications/feng-type.md)、[绑定规范](../specifications/feng-binding.md)、[函数规范](../specifications/feng-function.md)及[泛型规范](../specifications/feng-generics-draft.md)对应章节；本文改为引用，避免重复定义。
 2. 按 §3 完成编译器支持及 std 迁移。通用类型机制不得依赖 Future、Option 名称或 async 标记。
 3. 新增编译器测试与 FCTS，完成 §5 验收后单独交付。
 
@@ -98,4 +98,4 @@ JSON 的 null 由 void 联合分支表示；原 `fit None` 的序列化方法迁
 
 `test/` 检查诊断、AST 与生成代码，`fcts/` 检查语言行为。实现交付前在沙箱外执行 `make test`，二进制仅在 build/ 或 temp/ 中运行；记录实际验证平台及未运行项。本文自身的文档变更不要求运行回归。
 
-本文可先于 async/await 独立交付。若最终采用本方案，async/await 在此前置能力交付后按自己的两阶段计划实施；若未采用，须重新 Review 其无结果协议，不能把替代方案默认为已批准。
+本文当前暂停实施和验收。后续若恢复，应独立 Review、实施和交付；async/await 按其草案的两阶段计划推进，不等待本文。
