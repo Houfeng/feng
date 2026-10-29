@@ -18619,6 +18619,7 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
                                            const FengTypeRef *source_type_ref,
                                            const FengDecl *spec_decl,
                                            const FengTypeRef *spec_type_ref,
+                                           const char *err_path,
                                            FengToken err_token);
 
 static bool report_existing_array_rejected_for_variadic_call(ResolveContext *context,
@@ -24101,6 +24102,7 @@ static void record_object_spec_coercion_site_if_applicable(
                                        : NULL,
                                    target_decl,
                                    expected_type_ref,
+                                   context->program->path,
                                    expr->token);
 }
 
@@ -24556,6 +24558,7 @@ static void materialize_non_decl_object_spec_witness_if_satisfied(
                                    actual_type_ref,
                                    spec_decl,
                                    spec_type_ref,
+                                   context->program->path,
                                    err_token);
 }
 
@@ -24636,6 +24639,7 @@ static void materialize_intersection_constraint_member_witnesses(
                                                    actual_type_ref,
                                                    member_decl,
                                                    substituted_member_ref,
+                                                   context->program->path,
                                                    err_token);
                 }
             } else {
@@ -24735,6 +24739,7 @@ static void materialize_object_spec_constraint_witness_if_applicable(
                                                actual_type_ref,
                                                member_decl,
                                                NULL,
+                                               context->program->path,
                                                err_token);
             } else {
                 materialize_non_decl_object_spec_witness_if_satisfied(
@@ -24766,6 +24771,7 @@ static void materialize_object_spec_constraint_witness_if_applicable(
                                        actual_type_ref,
                                        constraint_decl,
                                        instantiated_constraint,
+                                       context->program->path,
                                        err_token);
         return;
     }
@@ -30362,7 +30368,8 @@ bool feng_semantic_query_union_entry_conversion(
                                 source_decl, actual_type_ref, &out_conversion->src_subject_key, leaf);
                             ok = out_conversion->relation != NULL;
                             if (ok) compute_spec_witness_if_absent(&context, source_decl, actual,
-                                actual_type_ref, target, leaf, actual_type_ref->token);
+                                actual_type_ref, target, leaf,
+                                program != NULL ? program->path : NULL, actual_type_ref->token);
                         }
                         if (ok && out_conversion->src_subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_ARRAY) {
                             ok = feng_semantic_subject_key_from_array_instance(analysis,
@@ -34669,12 +34676,15 @@ static bool init_spec_witness_subject_key(const FengDecl *type_decl,
                                                               source_type_ref);
 }
 
+/* Materialize a cached witness, keeping its diagnostic origin independent of
+ * the lexical context used to resolve types and select visible fits. */
 static void compute_spec_witness_if_absent(ResolveContext *context,
                                            const FengDecl *type_decl,
                                            InferredExprType source_type,
                                            const FengTypeRef *source_type_ref,
                                            const FengDecl *spec_decl,
                                            const FengTypeRef *spec_type_ref,
+                                           const char *err_path,
                                            FengToken err_token) {
     ObjectSpecRequirementSet requirements;
     FengSpecWitness *witness;
@@ -34765,6 +34775,7 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
                                        source_type_ref,
                                        parent_decl,
                                        parent_ref,
+                                       err_path,
                                        err_token);
     }
 
@@ -34909,8 +34920,11 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
                      * same (name, params, return). Report once, at the
                      * triggering coercion site. */
                     if (type_decl != NULL) {
-                        (void)resolver_append_error(
-                            context,
+                        (void)append_error(
+                            context->errors,
+                            context->error_count,
+                            context->error_capacity,
+                            err_path,
                             err_token,
                             "AE0804", format_message(
                                 "type '%.*s' has multiple visible implementations of method '%.*s' required by spec '%.*s' (one or more fits and/or the type itself)",
@@ -34921,8 +34935,11 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
                                 (int)spec_decl->as.spec_decl.name.length,
                                 spec_decl->as.spec_decl.name.data));
                     } else {
-                        (void)resolver_append_error(
-                            context,
+                        (void)append_error(
+                            context->errors,
+                            context->error_count,
+                            context->error_capacity,
+                            err_path,
                             err_token,
                             "AE0804", format_message(
                                 "fit target has multiple visible implementations of method '%.*s' required by spec '%.*s'",
@@ -41868,7 +41885,10 @@ static void precompute_union_spec_infos(FengSemanticAnalysis *analysis) {
  * never computed.  The codegen still needs them when emitting generic
  * type instance method wrappers that reference constrained type params. */
 static void precompute_imported_builtin_spec_witnesses(
-        FengSemanticAnalysis *analysis) {
+        FengSemanticAnalysis *analysis,
+        FengSemanticError **errors,
+        size_t *error_count,
+        size_t *error_capacity) {
     size_t ri;
     size_t mi;
     bool has_imported = false;
@@ -41947,16 +41967,18 @@ static void precompute_imported_builtin_spec_witnesses(
         return;
     }
 
-    /* Build a minimal ResolveContext with visibility info from all local
-     * modules. The witness computation for builtin subjects only needs
-     * analysis (for storage), module/imported_modules (for fit visibility),
-     * and synthetic_type_refs (for type-param substitution tracking). */
+    /* Preserve the aggregate visibility context and attach the analysis error
+     * sink. Diagnostic paths are supplied separately for each source fit, so
+     * reporting a conflict does not change lexical type resolution. */
     memset(&ctx, 0, sizeof(ctx));
     ctx.analysis = analysis;
     ctx.module = first_local_module;
     ctx.pointer_size = analysis->pointer_size;
     ctx.imported_modules = imported_modules;
     ctx.imported_module_count = imported_module_count;
+    ctx.errors = errors;
+    ctx.error_count = error_count;
+    ctx.error_capacity = error_capacity;
 
     for (ri = 0U; ri < analysis->spec_relation_count; ++ri) {
         const FengSpecRelation *rel = &analysis->spec_relations[ri];
@@ -41982,6 +42004,7 @@ static void precompute_imported_builtin_spec_witnesses(
             const FengDecl *fit_decl = source->via_fit_decl;
             const FengTypeRef *source_type_ref;
             const FengTypeRef *spec_type_ref;
+            const FengProgram *source_program;
             InferredExprType source_type;
 
             if (source->kind != FENG_SPEC_RELATION_SOURCE_FIT_HEAD ||
@@ -41995,12 +42018,14 @@ static void precompute_imported_builtin_spec_witnesses(
                 continue;
             }
             source_type = inferred_expr_type_from_type_ref(source_type_ref);
+            source_program = find_decl_provider_program(analysis, fit_decl);
             compute_spec_witness_if_absent(&ctx,
                                            NULL,
                                            source_type,
                                            source_type_ref,
                                            spec_decl,
                                            spec_type_ref,
+                                           source_program != NULL ? source_program->path : NULL,
                                            fit_decl->token);
         }
     }
@@ -42773,7 +42798,10 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
      * relations that the on-demand resolution pass would miss (e.g. imported
      * generic type instances with constrained builtin actual arguments). */
     if (ok && error_count == 0U) {
-        precompute_imported_builtin_spec_witnesses(analysis);
+        precompute_imported_builtin_spec_witnesses(analysis,
+                                                  &errors,
+                                                  &error_count,
+                                                  &error_capacity);
     }
 
     /* Module binding types must be available independently of file order.

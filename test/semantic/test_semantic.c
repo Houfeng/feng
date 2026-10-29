@@ -35483,6 +35483,9 @@ void test_g22_module_diagnostics(void);
 /* G23 declaration/implementation matrices live in their own translation unit. */
 void test_g23_spec_fit_diagnostics(void);
 
+/* Imported builtin/array witness conflicts retain their diagnostic context. */
+void test_spec_witness_precompute_diagnostics(void);
+
 /* Independent G24 composite-type conformance coverage. */
 void test_g24_composite_diagnostics(void);
 void test_g24_binding_diagnostics(void);
@@ -35546,6 +35549,7 @@ int main(void) {
     test_g24_composite_graphs();
     test_g22_module_diagnostics();
     test_g23_spec_fit_diagnostics();
+    test_spec_witness_precompute_diagnostics();
     test_g21_array_leaf_type_diagnostics();
     test_g21_array_new_length_semantics();
     test_g21_nested_empty_array_literal_semantics();
