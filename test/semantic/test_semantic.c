@@ -20823,6 +20823,8 @@ static void test_value_receiver_lambda_self_diagnostics(void) {
         const char *declarations;
         const char *diagnostic;
     } cases[] = {
+        {"value_self_return.ff",
+         "@value type Box { func reader(): Read<Box> { return () -> self; } }", copy_hint},
         {"value_self_argument.ff",
          "func take(v: Box): int { return 1; } "
          "@value type Box { func reader(): Read<int> { return () -> take(self); } }", copy_hint},
@@ -20838,6 +20840,14 @@ static void test_value_receiver_lambda_self_diagnostics(void) {
         {"value_self_nested.ff",
          "@value type Box { func run() { let f: Act = () { "
          "let g: Act = () { let it = self; }; }; } }", copy_hint},
+        {"value_self_fit_local.ff",
+         "@value type Box { var n: int; } fit Box { func run() { "
+         "let f: Act = () { let it = self; }; f(); } }", copy_hint},
+        {"value_self_concrete_constructor.ff",
+         "@value type Box { var n: int; func Box(n: int) { let f: Read<int> = () -> self.n; } }",
+         copy_hint},
+        {"value_self_concrete_field.ff",
+         "@value type Box { var n: int; let f: Read<int> = () -> self.n; }", copy_hint},
         {"value_self_generic_method.ff",
          "@value type Box<T> { var n: T; func reader(): Read<T> { return () -> self.n; } }",
          copy_hint},
@@ -20857,6 +20867,10 @@ static void test_value_receiver_lambda_self_diagnostics(void) {
          copy_hint},
         {"scalar_self_fit.ff",
          "fit int { func reader(): Read<int> { return () -> self; } }", no_self},
+        {"float_self_fit.ff",
+         "fit f64 { func reader(): Read<f64> { return () -> self; } }", no_self},
+        {"bool_self_fit.ff",
+         "fit bool { func reader(): Read<bool> { return () -> self; } }", no_self},
         {"enum_self_fit.ff",
          "enum Tone { Low, High } fit Tone { func reader(): Read<Tone> { return () -> self; } }",
          no_self},
@@ -34338,6 +34352,31 @@ static void test_g20_imported_tuple_construction_diagnostics(void) {
     imported_source_fixture_dispose(&fixture);
 }
 
+/* A consumer fit must recognize both value receivers from imported symbols. */
+static void test_imported_value_receiver_lambda_self_diagnostics(void) {
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    const char *message = "cannot capture value-type 'self' in a lambda. "
+                          "Copy 'self' to a local binding outside the lambda";
+
+    imported_source_fixture_init(&fixture, "snapshot_types.ff",
+        "open module vendor.snapshots;\n"
+        "@value open type Box<T> { open var value: T; }\n"
+        "open type Pair<T>(T, int);\n");
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    assert_g20_imported_semantic_error(&query, "imported_value_self.ff",
+        "module demo.main; import vendor.snapshots; spec Read<T>(): T;\n"
+        "fit Box<T> { func reader(): Read<T> {\n"
+        "    return () -> self.value;\n"
+        "} }\n", "AE0003", 3U, 18U, "self", message);
+    assert_g20_imported_semantic_error(&query, "imported_tuple_self.ff",
+        "module demo.main; import vendor.snapshots; spec Read<T>(): T;\n"
+        "fit Pair<T> { func reader(): Read<T> {\n"
+        "    return () -> self.item1;\n"
+        "} }\n", "AE0003", 3U, 18U, "self", message);
+    imported_source_fixture_dispose(&fixture);
+}
+
 /* Assert one exact Semantic diagnostic for the G21 array matrix. */
 static void assert_g21_semantic_error(const char *path,
                                       const char *source,
@@ -36396,6 +36435,7 @@ int main(void) {
     test_lambda_block_body_records_local_capture();
     test_lambda_in_method_records_self_capture();
     test_value_receiver_lambda_self_diagnostics();
+    test_imported_value_receiver_lambda_self_diagnostics();
     test_lambda_in_finalizer_records_self_and_local_capture();
     test_field_init_lambda_captures_self_when_callable_spec();
     test_field_init_bare_self_is_invalid();

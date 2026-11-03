@@ -84,9 +84,10 @@ type Counter {
 
 | 层次 | 必须覆盖 |
 |---|---|
-| Semantic | 覆盖第 2 节所列上下文及其泛型形式。Lambda 读取 `self`、通过它修改字段或调用成员、在 Lambda 内复制 `self` 均报错。包含嵌套捕获及元组只读 `self.item1` 的编译失败用例 |
+| Semantic | 对第 2 节所列非法捕获，断言 `AE0003`、`self` 的源码位置和诊断提示。覆盖嵌套 Lambda、泛型、导入类型的 `fit`，以及标量和枚举的既有诊断 |
 | Codegen | 合法显式复制只为被捕获的 `it` 建立捕获存储；外层 `self` 保持原接收者绑定 |
-| FCTS | 显式复制前后原接收者与快照独立；多个闭包共享同一 `it`；释放其中一个不影响其他闭包，最终持有释放后资源恰好清理一次 |
+| [FCTS 合法写法](../../fcts/fcts_bin/src/test_value_self_capture.ff) | 运行泛型实例方法和构造函数中的显式复制、无捕获的字段初始化 Lambda、导入值类型与具名元组的 `fit`、标量和枚举的局部快照，以及在 Lambda 外绑定 `self.method`。嵌套闭包须能读到 `var` 重新绑定后的值 |
+| [FCTS 共享与释放](../../fcts/fcts_bin/src/test_lambda.ff) | 检查原接收者与副本独立、多个闭包共享同一绑定。释放一个闭包后另一个仍可读，最后一次释放只清理一次资源 |
 | 回归 | 标量和枚举的 `fit` 保留现有捕获行为与诊断。普通局部绑定、引用类型 `self` 和值类型方法值继续按既有规则验收。实现交付运行完整 `make test` |
 
 既有用例仅迁移了[元组 FCTS](../../fcts/fcts_bin/src/test_tuple.ff) 的 `tget_sum_lambda`。Lambda 捕获外层的 `let it = self;` 局部绑定，直接调用和经 `spec` 调用仍分别断言 `10` 和 `13`。

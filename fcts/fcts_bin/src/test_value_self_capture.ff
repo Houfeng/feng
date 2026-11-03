@@ -1,0 +1,126 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test;
+
+/** Reads a snapshot after the method or constructor that made it returns. */
+spec ValueSelfReader<T>(): T;
+
+/** Generic receiver with closures initialized at different points in its lifetime. */
+@value
+type ValueSelfBox<T> {
+  var value: T;
+  let fromConstructor: ValueSelfReader<T>;
+  let constant: ValueSelfReader<int> = () -> 7;
+
+  /** Snapshot the initialized value before storing its reader. */
+  func ValueSelfBox(value: T) {
+    self.value = value;
+    let it = self;
+    self.fromConstructor = () -> it.value;
+  }
+
+  /** Snapshot the receiver at method entry. */
+  func snapshot(): ValueSelfReader<T> {
+    let it = self;
+    return () -> it.value;
+  }
+
+  /** Read the current receiver. */
+  func current(): T { return self.value; }
+
+  /** Form a method value outside a source lambda. */
+  func bound(): ValueSelfReader<T> { return self.current; }
+}
+
+fit LibAdvancedComposite<T> {
+  /** Rebind the local after both levels of closure have been created. */
+  func reboundReader(next: LibAdvancedComposite<T>): ValueSelfReader<T> {
+    var it = self;
+    let outer: ValueSelfReader<ValueSelfReader<T>> = () {
+      let inner: ValueSelfReader<T> = () -> it.value;
+      return inner;
+    };
+    let read = outer();
+    it = next;
+    return read;
+  }
+}
+
+fit LibCallableTuple<T> {
+  /** Capture the imported tuple before the caller rebinds it. */
+  func firstSnapshot(): ValueSelfReader<T> {
+    let it = self;
+    return () -> it.item1;
+  }
+}
+
+/** Enum receiver for the scalar-like fit capture rule. */
+enum ValueSelfMode { Low, High }
+
+fit int {
+  /** Capture an integer local. */
+  func snapshotReader(): ValueSelfReader<int> { let it = self; return () -> it; }
+}
+
+fit f64 {
+  /** Capture a floating-point local. */
+  func snapshotReader(): ValueSelfReader<f64> { let it = self; return () -> it; }
+}
+
+fit bool {
+  /** Capture a boolean local. */
+  func snapshotReader(): ValueSelfReader<bool> { let it = self; return () -> it; }
+}
+
+fit ValueSelfMode {
+  /** Capture an enum local. */
+  func snapshotReader(): ValueSelfReader<ValueSelfMode> { let it = self; return () -> it; }
+}
+
+/** Exercise the allowed source forms for value receivers. */
+open func test_value_self_capture() {
+  describe("value receiver snapshots", () {
+    test("generic constructor, field initializer, method and bound receiver", () {
+      let box = ValueSelfBox<int>(11);
+      box.value = 23;
+      let snapshot = box.snapshot();
+      let bound = box.bound();
+      box.value = 31;
+      assert(box.fromConstructor() == 11 && box.constant() == 7, "field readers after construction");
+      assert(snapshot() == 23 && bound() == 23 && box.current() == 31, "method-time copies");
+    });
+
+    test("nested closures observe rebinding in an imported generic value fit", () {
+      let source = LibAdvancedComposite<string>("source", "a", 1);
+      let next = LibAdvancedComposite<string>("replacement", "b", 2);
+      let read = source.reboundReader(next);
+      next.value = "later";
+      assert(read() == "replacement" && source.value == "source", "only the local was rebound");
+    });
+
+    test("imported generic tuple fit preserves the captured tuple", () {
+      var pair: LibCallableTuple<string> = ("first", "a");
+      let read = pair.firstSnapshot();
+      pair = ("second", "b");
+      assert(read() == "first" && pair.item1 == "second", "snapshot survives reassignment");
+    });
+
+    test("scalar and enum fits capture explicit local copies", () {
+      var integer: int = 3;
+      var decimal: f64 = 1.5;
+      var flag = true;
+      var mode = ValueSelfMode.Low;
+      let readInteger = integer.snapshotReader();
+      let readDecimal = decimal.snapshotReader();
+      let readFlag = flag.snapshotReader();
+      let readMode = mode.snapshotReader();
+      integer = 4;
+      decimal = 2.5;
+      flag = false;
+      mode = ValueSelfMode.High;
+      assert(readInteger() == 3 && readDecimal() == 1.5, "numeric copies");
+      assert(readFlag() && readMode() == ValueSelfMode.Low, "boolean and enum copies");
+    });
+  });
+}

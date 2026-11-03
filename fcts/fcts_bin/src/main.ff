@@ -31,6 +31,7 @@ func main(args: string[]) {
       test_callable_result_immediate_invocation();
       test_extern();
       test_lambda();
+      test_value_self_capture();
       test_type();
       test_ordinary_type_semantics();
       test_object_construction_order();
