@@ -49,7 +49,7 @@ C# 的元组语法不能声明实例方法。Feng 的具名元组通过 `fit` �
 1. Lambda 读取上述接收者、通过它修改字段或调用成员，均在编译期报错。嵌套 Lambda 同样检查，无论它是否逃逸或被调用。
 2. 本次只对 `@value type` 和具名元组新增检查。`@value type` 覆盖 `type` / `fit` 实例方法、构造函数和字段初始化 Lambda。具名元组覆盖 `fit` 实例方法。两者均包含泛型形式。
 3. 在闭包外执行 `let it = self;` 或 `var it = self;`，按普通值赋值规则复制一次。随后捕获 `it` 使用现有局部绑定捕获规则；多个闭包捕获同一 `it` 时共享该绑定，不分别复制。
-4. 在 Lambda 内执行 `let it = self;` 仍然捕获了外层 `self`，必须报错。本次新增的诊断应提示在闭包外建立局部绑定。
+4. 在 Lambda 内执行 `let it = self;` 仍然捕获了外层 `self`，必须报错。对 `@value type` 和具名元组复用标量、枚举已用的 `AE0003`，提示在闭包外先建立局部绑定。[错误码归类原则](../specifications/feng-error-codes-ae.md#归类原则)
 5. 普通局部绑定、引用类型 `self` 的捕获，以及 `obj.method` 方法值的既有规则保持不变。
 
 允许的替代写法：
@@ -90,7 +90,7 @@ type Counter {
 | FCTS | 显式复制前后原接收者与快照独立；多个闭包共享同一 `it`；释放其中一个不影响其他闭包，最终持有释放后资源恰好清理一次 |
 | 回归 | 标量和枚举的 `fit` 保留现有捕获行为与诊断。普通局部绑定、引用类型 `self` 和值类型方法值继续按既有规则验收。实现交付运行完整 `make test` |
 
-[现有元组 FCTS](../../fcts/fcts_bin/src/test_tuple.ff) 的 `tget_sum_lambda` 直接捕获了 `self`。实施时经授权改为捕获显式副本 `it`，保留直接调用和经 `spec` 调用的两组结果断言。
+已授权的迁移仅限因直接捕获值类型 `self` 而与新规则冲突的既有用例。[元组 FCTS](../../fcts/fcts_bin/src/test_tuple.ff) 的 `tget_sum_lambda` 应在 Lambda 外执行 `let it = self;` 并改为捕获 `it`，保留直接调用和经 `spec` 调用的两组结果断言。
 
 ## 5. 与 async/await 的关系
 
