@@ -37,7 +37,7 @@ spec TCopyable {
   func tlet_self(): TFitTuple;
 }
 
-// callable spec for lambda self capture test
+// callable spec for the tuple snapshot test
 spec TIntProducer(): int;
 
 type TFitTuple(int, int);
@@ -51,9 +51,10 @@ fit TFitTuple: TCopyable {
     return self.item1 + self.item2;
   }
 
-  // lambda 捕获 self（§9.15 tuple self 指针化回归）
+  // Lambda 捕获局部元组快照
   func tget_sum_lambda(): int {
-    let fn: TIntProducer = () -> self.item1 + self.item2;
+    let it = self;
+    let fn: TIntProducer = () -> it.item1 + it.item2;
     return fn();
   }
 
@@ -179,15 +180,15 @@ open func test_tuple() {
 
     // --- Tuple self 指针化回归测试 (§9.15) ---
 
-    test("tuple fit self lambda capture", () {
+    test("tuple fit lambda captures receiver snapshot", () {
       let t: TFitTuple = (3, 7);
-      assert(t.tget_sum_lambda() == 10, "tuple fit lambda capture self reads fields correctly");
+      assert(t.tget_sum_lambda() == 10, "tuple fit lambda reads snapshot fields");
     });
 
-    test("tuple fit self lambda capture via spec", () {
+    test("tuple fit lambda captures receiver snapshot via spec", () {
       let t: TFitTuple = (5, 8);
       let s: TCopyable = t;
-      assert(s.tget_sum_lambda() == 13, "tuple fit lambda capture self via spec");
+      assert(s.tget_sum_lambda() == 13, "tuple fit lambda reads snapshot fields via spec");
     });
 
     test("tuple fit self let binding escape", () {

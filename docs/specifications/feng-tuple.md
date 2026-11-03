@@ -269,7 +269,7 @@ let (y, z) = inner;
 
 ## 9 fit 扩展
 
-具名元组类型与其他 `type` 一样，支持通过 `fit` 显式建立与 `spec` 的满足关系，也支持通过 `fit` 为元组补充方法。`fit` 块中的方法通过 `self` 访问元素，元素仍然只读。
+具名元组类型与其他 `type` 一样，支持通过 `fit` 显式建立与 `spec` 的满足关系，也支持通过 `fit` 为元组补充方法。`fit` 块中的方法通过 `self` 访问元素，元素仍然只读。方法内 Lambda 对 `self` 的捕获遵循[函数规范 §4.1](./feng-function.md#41-通用语义)。
 
 ```feng
 spec Describable {

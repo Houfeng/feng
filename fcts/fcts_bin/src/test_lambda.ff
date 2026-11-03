@@ -2,6 +2,7 @@ module fcts_bin;
 
 import std.io;
 import std.test;
+import fcts_lib.test;
 
 // 可调用形状
 spec IntMapper(x: int): int;
@@ -24,6 +25,28 @@ type SelfCapBox {
 type FieldLambdaBox {
   var n: int;
   let read: IntProducer = () -> self.n;
+}
+
+/** Two independently owned closures over one local binding. */
+type SnapshotReaders {
+  var advance: IntProducer;
+  var read: IntProducer;
+}
+
+/** Value receiver whose captured copy contains a managed reference. */
+@value
+type SnapshotCounter {
+  var n: int;
+  var leaf: LibAdvancedLifetimeLeaf;
+
+  /** Capture the copy and then update the caller's receiver. */
+  func readers(): SnapshotReaders {
+    let it = self;
+    let advance: IntProducer = () { it.n += 1; return it.n; };
+    let read: IntProducer = () -> it.n;
+    self.n += 10;
+    return SnapshotReaders { advance: advance, read: read };
+  }
 }
 
 /** Lambda 与闭包测试 */
@@ -86,6 +109,26 @@ open func test_lambda() {
       let screader: IntProducer = scbox.make_reader();
       scbox.n = 8;
       assert(screader() == 8, "lambda captures self in method (reference)");
+    });
+
+    test("closures share an explicit value receiver snapshot", () {
+      let before = LibAdvancedLifetimeLeaf.finalizedCount();
+      var advance: IntProducer = () -> 0;
+      var read: IntProducer = () -> 0;
+      {
+        let counter = SnapshotCounter { n: 1, leaf: LibAdvancedLifetimeLeaf("snapshot") };
+        let readers = counter.readers();
+        advance = readers.advance;
+        read = readers.read;
+        assert(counter.n == 11 && read() == 1, "method updates the original receiver");
+        assert(advance() == 2 && read() == 2 && counter.n == 11, "both closures use the same copy");
+      }
+      advance = () -> 0;
+      assert(read() == 2 && LibAdvancedLifetimeLeaf.finalizedCount() == before,
+             "one closure keeps the snapshot alive");
+      read = () -> 0;
+      assert(LibAdvancedLifetimeLeaf.finalizedCount() == before + 1,
+             "last closure releases the managed field once");
     });
 
     test("type field callable lambda default", () {

@@ -10618,6 +10618,38 @@ static void test_callable_spec_lambda_self_capture_codegen(void) {
     feng_program_free(program);
 }
 
+/* Only the local snapshot needs a capture cell. Writes after closure creation
+ * must still target the method's incoming value receiver. */
+static void test_value_receiver_snapshot_capture_codegen(void) {
+    const char *source =
+        "module demo.snapshot;\n"
+        "spec Reader(): int;\n"
+        "@value type Box { var n: int; func reader(): Reader {\n"
+        "    let it = self; let f: Reader = () -> it.n; self.n = 0; return f;\n"
+        "} }\n";
+    FengProgram *program = parse_or_die(source, "value_receiver_snapshot.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB, NULL, &out, &cgerr));
+    ASSERT(count_substr(out.c_source, "feng_object_new(&FengCaptureCellDesc__") == 1U);
+    ASSERT(strstr(out.c_source, "->value = (struct Feng__demo__snapshot__Box)((*self))") != NULL);
+    ASSERT(strstr(out.c_source, "((*self)).n =") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* Concrete finalizers use the same callable capture preparation as methods
  * and constructors. Cover self, ordinary local, and nested-lambda capture in
  * the concrete body, plus the already-shared generic finalizer path. */
@@ -17728,6 +17760,7 @@ int main(void) {
     test_lambda_tuple_body_uses_callable_return_target_codegen();
     test_generic_call_adopts_owned_aggregate_argument_codegen();
     test_callable_spec_lambda_self_capture_codegen();
+    test_value_receiver_snapshot_capture_codegen();
     test_finalizer_lambda_capture_codegen();
     test_callable_spec_lambda_argument_codegen();
     test_callable_spec_other_coercion_codegen();

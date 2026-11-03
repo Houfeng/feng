@@ -524,9 +524,8 @@ typedef struct ResolveContext {
      * Reset to 0 across callable / lambda boundaries because a defer block
      * never escapes its enclosing function scope. */
     size_t defer_depth;
-    /* When true, a lambda body resolved in this context may capture `self`
-     * from the enclosing type. Set inside type method/constructor bodies and
-     * inside callable-spec field initializers. */
+    /* The enclosing instance callable or callable-spec field initializer
+     * provides a lexical self. Its receiver type determines capture legality. */
     bool self_capturable;
     /* Stack of lambda capture frames, pushed by resolve_lambda_expr while a
      * lambda body is being resolved. Used to record captured outer locals and
@@ -31063,6 +31062,9 @@ static bool resolve_module_member_expr(ResolveContext *context,
 }
 
 static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
+    const FengDecl *receiver_decl = context->current_type_decl;
+    bool has_value_receiver = receiver_decl != NULL && receiver_decl->kind == FENG_DECL_TYPE &&
+        (receiver_decl->as.type_decl.is_value || receiver_decl->as.type_decl.is_tuple);
     size_t param_index;
     size_t errors_before;
     bool effective_allow_self;
@@ -31100,10 +31102,9 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
         return false;
     }
 
-    /* Inside the lambda body, `self` is available iff the enclosing context
-     * could provide it (i.e. self_capturable was true). Nested lambdas keep
-     * the same capability so they can also capture self. */
-    effective_allow_self = context->self_capturable;
+    /* Nested source lambdas inherit the lexical receiver. A named value
+     * receiver must be copied to a local before crossing this boundary. */
+    effective_allow_self = context->self_capturable && !has_value_receiver;
 
     /* A lambda is a new callable body. Keep the lexical member identity for
      * type-implementation authorization, but do not inherit constructor or
@@ -31374,6 +31375,12 @@ static bool resolve_expr_impl(ResolveContext *context, const FengExpr *expr, boo
                 return true;
             }
 
+            if (context->self_capturable && context->lambda_frame_count > 0U) {
+                return resolver_append_error(
+                    context, expr->token, "AE0003",
+                    format_message("cannot capture value-type 'self' in a lambda. "
+                                   "Copy 'self' to a local binding outside the lambda"));
+            }
             return resolver_append_error(context,
                                          expr->token,
                                          "AE0003", format_message("'self' is only available inside type methods and constructors"));
@@ -32976,7 +32983,7 @@ static bool resolve_callable(ResolveContext *context,
     context->loop_depth = 0U;
     context->expression_branch_boundary = EXPRESSION_BRANCH_BOUNDARY_NONE;
     context->defer_depth = 0U;
-    /* Inside a member method or constructor body, lambdas may capture self. */
+    /* Instance callables provide the lexical receiver checked at lambda entry. */
     if (allow_self && context->current_type_decl != NULL) {
         context->self_capturable = true;
     }
@@ -36960,12 +36967,9 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                      * members. This does not make direct self capture legal. */
                     context->current_type_decl = decl;
                     context->current_type_implementation_owner = decl;
-                    /* Per docs/specifications/feng-function.md: a callable-spec field whose
-                     * initializer is a lambda may capture the enclosing
-                     * type's `self`, because the lambda runs only when the
-                     * callable is invoked, after the object is constructed.
-                     * Direct `self` references in the initializer expression
-                     * itself remain disallowed. */
+                    /* Only a callable-spec field's lambda gets the lexical
+                     * receiver. Its body follows the same capture rules as
+                     * a lambda in an instance method. */
                     if (!member->is_static &&
                         init_is_lambda &&
                         resolve_function_type_decl(context, member->as.field.type) != NULL) {

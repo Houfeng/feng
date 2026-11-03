@@ -20813,6 +20813,67 @@ static void assert_stable_semantic_error(const char *group,
     feng_program_free(program);
 }
 
+/* A source lambda diagnoses the lexical self token, including through member
+ * access and nested lambdas. Scalar and enum fits retain their original text. */
+static void test_value_receiver_lambda_self_diagnostics(void) {
+    static const char copy_hint[] = "Copy 'self' to a local binding outside the lambda";
+    static const char no_self[] = "'self' is only available inside type methods and constructors";
+    const struct {
+        const char *path;
+        const char *declarations;
+        const char *diagnostic;
+    } cases[] = {
+        {"value_self_argument.ff",
+         "func take(v: Box): int { return 1; } "
+         "@value type Box { func reader(): Read<int> { return () -> take(self); } }", copy_hint},
+        {"value_self_write.ff",
+         "@value type Box { var n: int; func run() { "
+         "let f: Act = () { self.n = 2; }; f(); } }", copy_hint},
+        {"value_self_call.ff",
+         "@value type Box { func n(): int { return 1; } "
+         "func reader(): Read<int> { return () -> self.n(); } }", copy_hint},
+        {"value_self_method_value.ff",
+         "@value type Box { func n(): int { return 1; } "
+         "func run() { let f: Act = () { let g: Read<int> = self.n; }; } }", copy_hint},
+        {"value_self_nested.ff",
+         "@value type Box { func run() { let f: Act = () { "
+         "let g: Act = () { let it = self; }; }; } }", copy_hint},
+        {"value_self_generic_method.ff",
+         "@value type Box<T> { var n: T; func reader(): Read<T> { return () -> self.n; } }",
+         copy_hint},
+        {"value_self_generic_fit.ff",
+         "@value type Box<T> { var n: T; } "
+         "fit Box<T> { func reader(): Read<T> { return () -> self.n; } }", copy_hint},
+        {"value_self_constructor.ff",
+         "@value type Box<T> { var n: T; func Box(n: T) { let f: Read<T> = () -> self.n; } }",
+         copy_hint},
+        {"value_self_field.ff",
+         "@value type Box<T> { var n: T; let f: Read<T> = () -> self.n; }", copy_hint},
+        {"tuple_self_fit.ff",
+         "type Pair(int, int); fit Pair { func reader(): Read<int> { return () -> self.item1; } }",
+         copy_hint},
+        {"tuple_self_generic_fit.ff",
+         "type Pair<T>(T, int); fit Pair<T> { func reader(): Read<T> { return () -> self.item1; } }",
+         copy_hint},
+        {"scalar_self_fit.ff",
+         "fit int { func reader(): Read<int> { return () -> self; } }", no_self},
+        {"enum_self_fit.ff",
+         "enum Tone { Low, High } fit Tone { func reader(): Read<Tone> { return () -> self; } }",
+         no_self},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        char source[512];
+        const char *line = cases[i].declarations;
+        const char *self_token = strstr(line, "self");
+        int length = snprintf(source, sizeof(source),
+                              "module demo.main; spec Read<T>(): T; spec Act(): void;\n%s\n", line);
+        ASSERT(self_token != NULL && length > 0 && (size_t)length < sizeof(source));
+        assert_stable_semantic_error("self capture", cases[i].path, source, "AE0003",
+                                     2U, (unsigned int)(self_token - line) + 1U,
+                                     "self", cases[i].diagnostic);
+    }
+}
+
 /* Assert one exact diagnostic for the G13 name-binding matrix. */
 static void assert_g13_semantic_error(const char *path,
                                       const char *source,
@@ -36334,6 +36395,7 @@ int main(void) {
     test_lambda_block_body_returns_value();
     test_lambda_block_body_records_local_capture();
     test_lambda_in_method_records_self_capture();
+    test_value_receiver_lambda_self_diagnostics();
     test_lambda_in_finalizer_records_self_and_local_capture();
     test_field_init_lambda_captures_self_when_callable_spec();
     test_field_init_bare_self_is_invalid();

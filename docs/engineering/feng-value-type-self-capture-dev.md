@@ -1,13 +1,12 @@
 # Feng 值类型接收者 `self` 的闭包捕获约束优化方案
 
-> **状态**：目标规则已确定，待实施。更新日期：2026-11-03。
+> **状态**：已实施。2026-11-03 在 macOS arm64 上通过完整 `make test`，含 ASan、UBSan 和常规回归。
 >
-> 本文是独立开发方案。本轮仅记录方案，不修改正式规范、编译器、runtime 或测试；可与 async/await 分别交付。
+> 本项与 async/await 分别交付。语言规则见[函数规范 §4.1](../specifications/feng-function.md#41-通用语义)。
 
 ## 1. 现状与问题
 
-现行 [函数规范](../specifications/feng-function.md)允许 Lambda 捕获值类型 `self`，按值复制；
-[类型规范](../specifications/feng-type.md)同时规定普通实例方法直接操作原接收者存储。
+变更前，Lambda 可按值捕获值类型 `self`，而普通实例方法直接操作原接收者存储。
 
 以下行为已在 `@value type` 实例方法中复现。
 
@@ -32,7 +31,7 @@ type Counter {
 }
 ```
 
-原变量初值为 `1` 时，当前调用 `makeReader()` 后原变量仍为 `1`，返回的闭包读到 `2`。
+原变量初值为 `1` 时，旧实现调用 `makeReader()` 后原变量仍为 `1`，返回的闭包读到 `2`。
 外层 `self.value += 1` 没有修改原接收者，与普通实例方法语义不一致。
 
 实现定位：`src/codegen/codegen.c` 中的 `cg_bind_concrete_callable_self`、
@@ -90,7 +89,7 @@ type Counter {
 | FCTS | 显式复制前后原接收者与快照独立；多个闭包共享同一 `it`；释放其中一个不影响其他闭包，最终持有释放后资源恰好清理一次 |
 | 回归 | 标量和枚举的 `fit` 保留现有捕获行为与诊断。普通局部绑定、引用类型 `self` 和值类型方法值继续按既有规则验收。实现交付运行完整 `make test` |
 
-已授权的迁移仅限因直接捕获值类型 `self` 而与新规则冲突的既有用例。[元组 FCTS](../../fcts/fcts_bin/src/test_tuple.ff) 的 `tget_sum_lambda` 应在 Lambda 外执行 `let it = self;` 并改为捕获 `it`，保留直接调用和经 `spec` 调用的两组结果断言。
+既有用例仅迁移了[元组 FCTS](../../fcts/fcts_bin/src/test_tuple.ff) 的 `tget_sum_lambda`。Lambda 捕获外层的 `let it = self;` 局部绑定，直接调用和经 `spec` 调用仍分别断言 `10` 和 `13`。
 
 ## 5. 与 async/await 的关系
 
